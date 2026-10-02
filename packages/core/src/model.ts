@@ -44,7 +44,8 @@ export interface PathData {
 /** Where a path comes from: drawn by hand, or derived from venue regions (resolved through bindings). */
 export type PathSource =
   | { readonly kind: "path"; readonly path: AnimProp<PathValue> }
-  | { readonly kind: "region"; readonly ref: RegionRef };
+  /** `outline`: only the areas' outer outlines (holes and cut-outs not taken out), e.g. to clip to a whole facade. */
+  | { readonly kind: "region"; readonly ref: RegionRef; readonly outline?: boolean };
 
 /** Animatable path values are stored as flat number arrays: [closed, n, x0,y0,inx,iny,outx,outy, ...]. */
 export type PathValue = readonly number[];

@@ -1,8 +1,10 @@
 /** Agent methods for automatic house setup and reshaping areas (split, join). */
+import { ASSUMED_DEPTH, type Object3D, type PartMotion, type PartTiming } from "@be/core";
 import { z } from "zod";
 import { mergeAreas, splitArea } from "../space/areaEdit.ts";
 import { acceptProposals, addProposals, cancelDetection, discardProposals, proposedAreas, runDetection, useHouseSetup } from "../space/houseSetup.ts";
-import { activeVenue, useStudio } from "../studio/store.ts";
+import { animatePart, partFor, partsLayer, removePart, wallColorAround } from "../studio/parts.ts";
+import { activeVenue, currentComp, useStudio } from "../studio/store.ts";
 import { AgentError, method } from "./core.ts";
 import { areaIds, areaInfo } from "./methods-show.ts";
 
@@ -127,5 +129,90 @@ method({
     const id = ctx.edit(() => mergeAreas(ids));
     if (!id) throw new AgentError("rejected", "Those areas can't be joined (they must be closed outlines).");
     return { area: areaInfo(venue().regions[id]!, false) };
+  },
+});
+
+// ---- moving parts (3D) ------------------------------------------------------------------------
+
+const motionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("swing"), hinge: z.enum(["left", "right"]).default("left"), direction: z.enum(["in", "out"]).default("in"), angle: z.number().min(5).max(180).default(95) }),
+  z.object({ kind: z.literal("raise"), style: z.enum(["slide", "tilt"]).default("slide") }),
+  z.object({ kind: z.literal("push"), distance: z.number().min(-3).max(3).default(-0.25) }),
+  z.object({ kind: z.literal("slide"), direction: z.enum(["left", "right", "up", "down"]).default("left") }),
+  z.object({ kind: z.literal("turn"), axis: z.enum(["vertical", "horizontal"]).default("vertical"), turns: z.number().min(0.25).max(10).default(1) }),
+  z.object({ kind: z.literal("fall") }),
+]);
+const timingSchema = z.object({ start: z.number().min(0), move: z.number().min(0.1).max(60), hold: z.number().min(0).max(600), back: z.boolean() }).partial();
+const backingSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("recess") }),
+  z.object({ kind: z.literal("room"), color: z.tuple([z.number(), z.number(), z.number(), z.number()]).default([1, 0.78, 0.45, 1]) }),
+  z.object({ kind: z.literal("image"), asset: z.string() }),
+  z.object({ kind: z.literal("wall") }),
+]);
+
+const backingFrom = async (b: z.infer<typeof backingSchema> | undefined, regionId: string) => {
+  if (!b) return undefined;
+  if (b.kind === "image") {
+    const p = useStudio.getState().project!;
+    const a = Object.values(p.assets).find((x) => x.id === b.asset || x.name.toLowerCase() === b.asset.toLowerCase());
+    if (!a || a.kind !== "image") throw new AgentError("not_found", `No picture "${b.asset}" in this show (import it with assets.import).`);
+    return { kind: "image" as const, assetId: a.id };
+  }
+  if (b.kind === "wall") return { kind: "wall" as const, color: await wallColorAround(regionId) };
+  return b;
+};
+
+const partInfoOut = (o: Object3D, layerId: string) => ({
+  id: o.id,
+  name: o.name,
+  area: venue().regions[o.part!.regionId]?.name ?? o.part!.regionId,
+  motion: o.part!.motion,
+  timing: o.part!.timing,
+  backing: o.part!.backing,
+  layer: layerId,
+  assumedDepthMetres: { facade: ASSUMED_DEPTH.facade, part: o.geometry?.kind === "area" ? o.geometry.depth : null },
+});
+
+method({
+  name: "parts.animate",
+  summary:
+    "Make an area move in 3D in the current scene — a door swings on a hinge, a garage door raises, a window pushes in, or a part slides, turns or falls — with the photo of it moving and a backing (dark recess, lit room, a picture, or the wall colour) showing behind its opening. The first time, adds the scene's 'House parts (3D)' layer (facade with openings cut out). Timing is seconds into the scene. The traced area never moves. Calling it again for the same area changes how it moves.",
+  params: z.object({ area: z.string(), motion: motionSchema.optional(), timing: timingSchema.optional(), backing: backingSchema.optional() }),
+  mutates: true,
+  example: { area: "Front door", motion: { kind: "swing", hinge: "left", direction: "in", angle: 95 }, timing: { start: 1, move: 1.5, hold: 2, back: true }, backing: { kind: "recess" } },
+  run: async (p, ctx) => {
+    const [id] = areaIds([p.area]);
+    const backing = await backingFrom(p.backing, id!);
+    const partId = ctx.edit(() => animatePart(id!, { ...(p.motion ? { motion: p.motion as PartMotion } : {}), ...(p.timing ? { timing: p.timing as Partial<PartTiming> } : {}), ...(backing ? { backing } : {}) }));
+    if (!partId) throw new AgentError("rejected", "That area can't be made to move (it must be a closed outline).");
+    const found = partsLayer(currentComp(useStudio.getState()))!;
+    return { part: partInfoOut(found.scene.objects[partId]!, found.layer.id) };
+  },
+});
+
+method({
+  name: "parts.list",
+  summary: "The moving parts in the current scene (with motion, timing, backing and assumed depths), and the openings that stay still.",
+  params: z.object({}),
+  run: () => {
+    const found = partsLayer(currentComp(useStudio.getState()));
+    if (!found) return { parts: [], layer: null };
+    const objs = found.scene.objectOrder.map((id) => found.scene.objects[id]!);
+    return { layer: found.layer.id, parts: objs.filter((o) => o.part).map((o) => partInfoOut(o, found.layer.id)), still: objs.filter((o) => o.name.endsWith("(still)")).map((o) => o.name.replace(/ \(still\)$/, "")) };
+  },
+});
+
+method({
+  name: "parts.remove",
+  summary: "Stop an area moving in the current scene (its opening shows the still photo again).",
+  params: z.object({ area: z.string() }),
+  mutates: true,
+  run: (p, ctx) => {
+    const [id] = areaIds([p.area]);
+    const found = partsLayer(currentComp(useStudio.getState()));
+    const o = partFor(found?.scene, id!);
+    if (!o) throw new AgentError("not_found", `“${p.area}” doesn't move in this scene.`);
+    ctx.edit(() => removePart(o.id));
+    return { removed: o.name };
   },
 });

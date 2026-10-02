@@ -31,6 +31,15 @@ import {
 import { use3D } from "./actions3d.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
+/** The motions offered first for each kind of area (the first is the usual one). */
+export const moveChoices = (kind: Region["kind"]): Array<{ label: string; motion: PartMotion }> => {
+  const fall = { label: "Fall off", motion: { kind: "fall" } as PartMotion };
+  if (kind === "door") return [{ label: "Swing open", motion: { kind: "swing", hinge: "left", direction: "in", angle: 95 } }, { label: "Slide away", motion: { kind: "slide", direction: "left" } }, fall];
+  if (kind === "garage") return [{ label: "Raise", motion: { kind: "raise", style: "slide" } }, { label: "Tip up and back", motion: { kind: "raise", style: "tilt" } }, fall];
+  if (kind === "window") return [{ label: "Push in", motion: { kind: "push", distance: -0.25 } }, { label: "Swing open", motion: { kind: "swing", hinge: "left", direction: "out", angle: 70 } }, fall];
+  return [{ label: "Push in", motion: { kind: "push", distance: -0.25 } }, { label: "Turn around", motion: { kind: "turn", axis: "vertical", turns: 1 } }, fall];
+};
+
 export const MOVES: Record<PartMotion["kind"], string> = { swing: "Swing open", raise: "Raise", push: "Push in", slide: "Slide away", turn: "Turn around", fall: "Fall off" };
 
 /** The scene's house-parts layer and its 3D scene, if it has one. */
@@ -79,7 +88,10 @@ const partsLayerOps = (comp: Composition): { ops: Op[]; sceneId: string; layerId
     is3D: false,
     blendMode: "normal",
     transform: { anchor: staticProp<Vec3>([0, 0, 0]), position: staticProp<Vec3>([0, 0, 0], true), scale: staticProp<Vec3>([100, 100, 100]), rotation: staticProp<Vec3>([0, 0, 0]), opacity: staticProp(100) },
-    masks: [],
+    // Clipped to the house outline: nothing moving behind the wall can show past the roof or the sides.
+    masks: facade
+      ? [{ id: "contain", name: "Keep inside the house outline", source: { kind: "region", ref: { role: "areas", regionIds: [facade.id] }, outline: true }, mode: "add", inverted: false, feather: staticProp(0), expansion: staticProp(0), opacity: staticProp(100) }]
+      : [],
     effects: [],
   };
   return { ops: [{ type: "scene3d.add", args: { scene } }, { type: "layer.add", args: { compId: comp.id, layer, index: comp.layerOrder.length } }], sceneId, layerId };
@@ -127,7 +139,7 @@ export const wallColorAround = async (regionId: string): Promise<RGBA> => {
  * Make an area move in 3D (or change how it moves). Creates the scene's parts layer the first time.
  * Returns the part's object id.
  */
-export const animatePart = (regionId: string, opts: { motion?: PartMotion; timing?: Partial<PartTiming>; backing?: Backing } = {}): string | null => {
+export const animatePart = (regionId: string, opts: { motion?: PartMotion; timing?: Partial<PartTiming>; backing?: Backing; coalesceKey?: string } = {}): string | null => {
   const s = useStudio.getState();
   const comp = currentComp(s);
   const venue = activeVenue(s);
@@ -167,7 +179,7 @@ export const animatePart = (regionId: string, opts: { motion?: PartMotion; timin
       ops.push({ type: "object3d.update", args: { sceneId, objectId: backingId, changes: bc } });
     } else ops.push({ type: "object3d.add", args: { sceneId, object: back } });
   } else ops.push({ type: "object3d.add", args: { sceneId, object: back } }, { type: "object3d.add", args: { sceneId, object: part } });
-  const tx = s.apply(ops, { label: existing ? `Change how “${r.name}” moves` : `${MOVES[motion.kind]}: “${r.name}”` });
+  const tx = s.apply(ops, { label: existing ? `Change how “${r.name}” moves` : `${MOVES[motion.kind]}: “${r.name}”`, ...(existing && opts.coalesceKey ? { coalesceKey: `${id}:${opts.coalesceKey}` } : {}) });
   if (!tx) return null;
   if (s.step === "space") useStudio.setState({ step: "animate" });
   s.selectLayer(layerId!);
@@ -175,11 +187,11 @@ export const animatePart = (regionId: string, opts: { motion?: PartMotion; timin
   return id;
 };
 
-export const updatePart = (objectId: string, changes: { motion?: PartMotion; timing?: Partial<PartTiming>; backing?: Backing }) => {
+export const updatePart = (objectId: string, changes: { motion?: PartMotion; timing?: Partial<PartTiming>; backing?: Backing }, coalesceKey?: string) => {
   const found = partsLayer(currentComp(useStudio.getState()));
   const info: PartInfo | undefined = found?.scene.objects[objectId]?.part;
   if (!info) return null;
-  return animatePart(info.regionId, { ...changes, ...(changes.timing ? { timing: { ...info.timing, ...changes.timing } } : {}) });
+  return animatePart(info.regionId, { ...changes, ...(changes.timing ? { timing: { ...info.timing, ...changes.timing } } : {}), ...(coalesceKey ? { coalesceKey } : {}) });
 };
 
 /** Stop an area moving: remove its part and what's behind it (an opening of the facade gets its still photo back). */

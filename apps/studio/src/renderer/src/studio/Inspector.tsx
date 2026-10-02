@@ -26,7 +26,8 @@ import { ProjectorOutputPanel } from "./ProjectorOutputPanel.tsx";
 import { simProgress, useSims } from "./simHost.ts";
 import { contentForArea, reorderAssignment } from "./assign.ts";
 import { AssignmentControls, TimingFields } from "./AssignmentPanel.tsx";
-import { makeArea3D } from "./actions3d.ts";
+import { makeArea3D, use3D } from "./actions3d.ts";
+import { animatePart, moveChoices, partFor, partsLayer } from "./parts.ts";
 import { Scene3DPanel } from "./Scene3DPanel.tsx";
 
 /** Make the selected areas 3D: a solid with thickness, or one that collapses and rebuilds. */
@@ -289,6 +290,7 @@ const RegionPanel = () => {
           </button>
         ))}
       </div>
+      {regs.length === 1 && regs[0]!.path.closed && !regs[0]!.proposal && regs[0]!.kind !== "exclusion" && <MakeItMove regionId={regs[0]!.id} />}
       <Make3D ids={ids} />
       <h3 className="subhead">In this scene{scene ? ` (${scene.name})` : ""}</h3>
       {onThese.length === 0 && <p className="muted small">Nothing yet. Drag a picture, video or animation onto the area.</p>}
@@ -482,7 +484,46 @@ const RegionEditPanel = () => {
           Remove {regs.length > 1 ? `${regs.length} areas` : "area"}
         </button>
       </div>
+      {one && one.path.closed && !one.proposal && one.kind !== "exclusion" && <MakeItMove regionId={one.id} />}
       <p className="muted small tip">Content and effects follow these outlines in every scene. If you correct an outline, everything on it updates too.</p>
+    </div>
+  );
+};
+
+/** Make an area move in 3D in this scene (doors swing, garage doors raise…); the area itself stays put. */
+const MakeItMove = ({ regionId }: { regionId: string }) => {
+  const project = useStudio((s) => s.project)!;
+  useStudio((s) => s.version);
+  const comp = currentComp(useStudio.getState());
+  const r = activeVenue({ project })!.regions[regionId]!;
+  const parts = partsLayer(comp);
+  const moving = partFor(parts?.scene, regionId);
+  return (
+    <div className="make-move" role="group" aria-label="Make it move in 3D">
+      <h3 className="subhead">Make it move (3D)</h3>
+      {moving ? (
+        <div className="row gap wrap">
+          <span className="small">Moves in this scene.</span>
+          <button
+            className="ghost"
+            onClick={() => {
+              useStudio.getState().selectLayer(parts!.layer.id);
+              use3D.setState({ objectId: moving.id });
+            }}
+          >
+            Edit how it moves
+          </button>
+        </div>
+      ) : (
+        <div className="row gap wrap">
+          {moveChoices(r.kind).map((c) => (
+            <button key={c.label} className="ghost" onClick={() => animatePart(regionId, { motion: c.motion })}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="muted small">The {r.name.toLowerCase()} moves as a 3D copy with the photo on it; what's behind the opening shows. The traced area never moves.</p>
     </div>
   );
 };

@@ -3,10 +3,17 @@
  * folder's "Venue" folder (or BE_HOUSE_PHOTO). Find areas → correct an outline → remove a doubtful
  * one → split and join → accept → undo/redo. Skipped (and reported) when there's no photo.
  */
-import { regionHoles } from "@be/core";
+import { regionHoles, secondsToTime } from "@be/core";
+import { currentPreviewLoop } from "./preview/PreviewPanel.tsx";
+import { usePreview } from "./preview/settings.ts";
 import { createProjectFromPhoto } from "./space/actions.ts";
 import { proposedAreas, useHouseSetup } from "./space/houseSetup.ts";
-import { activeVenue, useStudio } from "./studio/store.ts";
+import { assignMedia } from "./studio/assign.ts";
+import { getRenderer } from "./studio/engineHost.ts";
+import { importMediaFiles } from "./studio/media.ts";
+import { partFor, partsLayer } from "./studio/parts.ts";
+import { deserialize, serialize } from "./studio/persistence.ts";
+import { activeVenue, currentComp, useStudio } from "./studio/store.ts";
 
 type Step = () => Promise<{ ok: boolean; note?: string; settle?: number }>;
 
@@ -37,6 +44,41 @@ const pointer = (target: Element, type: string, cx: number, cy: number) =>
   target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, ...toClient(cx, cy), pointerId: 1, button: 0, buttons: type === "pointerup" ? 0 : 1 }));
 
 let skip = "";
+/** The traced areas once accepted: moving parts must never change them. */
+let mappingBefore = "";
+let savedPath = "";
+const mapping = () => JSON.stringify(Object.values(venue().regions).map((r) => [r.id, r.path, r.holes ?? [], r.cutouts ?? []]));
+const centre = (name: string): [number, number] => {
+  const r = byName(name)!;
+  const xs = r.path.vertices.map((v) => v.p[0]), ys = r.path.vertices.map((v) => v.p[1]);
+  return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+};
+/** Brightness (0-255) around canvas points in the preview at a time, once everything has loaded. */
+const lumaAt = async (seconds: number, points: Array<[number, number]>) => {
+  st().setPlaying(false);
+  st().setTime(secondsToTime(seconds));
+  const r = await getRenderer();
+  let shot = await currentPreviewLoop()!.sample();
+  const t0 = performance.now();
+  while ((r.lastFrameIncomplete || !shot.pixels) && performance.now() - t0 < 20_000) {
+    await sleep(150);
+    shot = await currentPreviewLoop()!.sample();
+  }
+  const px = shot.pixels!;
+  const k = shot.width / venue().canvas.width;
+  return points.map(([cx, cy]) => {
+    let sum = 0, n = 0;
+    for (let dy = -3; dy <= 3; dy++)
+      for (let dx = -3; dx <= 3; dx++) {
+        const x = Math.round(cx * k) + dx, y = Math.round(cy * k) + dy;
+        if (x < 0 || y < 0 || x >= shot.width || y >= shot.height) continue;
+        const i = (y * shot.width + x) * 4;
+        sum += 0.0722 * px[i]! + 0.7152 * px[i + 1]! + 0.2126 * px[i + 2]!; // bgra
+        n++;
+      }
+    return Math.round(sum / Math.max(1, n));
+  });
+};
 const skipped = () => ({ ok: true, note: `SKIPPED: ${skip}` });
 
 export const HOUSE_STEPS: Record<string, Step> = {
@@ -132,5 +174,94 @@ export const HOUSE_STEPS: Record<string, Step> = {
     st().redo();
     const again = await until(() => found().length === 0);
     return { ok: back && again, note: "undo brings the proposals back for review; redo accepts them again" };
+  },
+
+  "house-animate-door": async () => {
+    if (skip) return skipped();
+    mappingBefore = mapping();
+    st().setTime(0);
+    st().selectRegions([byName("Front door")!.id]);
+    await until(() => !!byText(".make-move button", "Swing open"));
+    click(byText(".make-move button", "Swing open"));
+    const ok = await until(() => !!partFor(partsLayer(currentComp(st()))?.scene, byName("Front door")!.id));
+    const found = partsLayer(currentComp(st()))!;
+    const part = partFor(found.scene, byName("Front door")!.id)!;
+    const m = part.part!.motion;
+    return {
+      ok: ok && mapping() === mappingBefore && !!found.layer.masks.find((x) => x.id === "contain"),
+      note: `"House parts (3D)" layer added (clipped to the house outline); the front door swings ${m.kind === "swing" ? `${m.direction} on its ${m.hinge} hinge` : m.kind}, ${part.part!.timing.start}-${part.part!.timing.start + part.part!.timing.move} s; traced areas unchanged`,
+      settle: 900,
+    };
+  },
+  "house-animate-window": async () => {
+    if (skip) return skipped();
+    st().setTime(0);
+    st().selectRegions([byName("Window")!.id]);
+    await until(() => !!byText(".make-move button", "Swing open"));
+    click(byText(".make-move button", "Swing open"));
+    const ok = await until(() => !!partFor(partsLayer(currentComp(st()))?.scene, byName("Window")!.id));
+    const scene = partsLayer(currentComp(st()))!.scene;
+    const stills = scene.objectOrder.filter((id) => scene.objects[id]!.name.endsWith("(still)")).map((id) => scene.objects[id]!.name);
+    return { ok: ok && mapping() === mappingBefore && stills.length >= 1, note: `the window swings out; still in place: ${stills.join(", ")}; traced areas unchanged`, settle: 900 };
+  },
+  "house-parts-move": async () => {
+    if (skip) return skipped();
+    usePreview.getState().set({ view: "show" });
+    const pts: Array<[number, number]> = [centre("Front door"), centre("Window"), centre("Garage door"), [5, 5]];
+    const rest = await lumaAt(0.2, pts);
+    const open = await lumaAt(2.2, pts);
+    const back = await lumaAt(6, pts);
+    // At rest the door shows its photo; open, its opening is the dark recess; outside the house nothing is lit.
+    const ok = rest[0]! > 60 && open[0]! < rest[0]! * 0.35 && Math.abs(back[0]! - rest[0]!) < 12 && rest[2]! > 60 && rest[3]! < 4 && open[3]! < 4 && mapping() === mappingBefore;
+    return { ok, note: `brightness at the door / window / garage / outside: rest ${rest.join("/")}, open (2.2 s) ${open.join("/")}, closed again (6 s) ${back.join("/")}`, settle: 600 };
+  },
+  "house-video-on-garage": async () => {
+    if (skip) return skipped();
+    const dir = `${(await window.be.app.paths()).renders.replace(/[\\/]Renders$/, "")}\\Test content`;
+    const [video] = await importMediaFiles([`${dir}\\Sample footage (generated, not AtmosFX) - swirl.mp4`], { quiet: true });
+    if (!video) return { ok: false, note: "sample video missing" };
+    st().setTime(0);
+    const inst = assignMedia(video.id, [byName("Garage door")!.id], "each");
+    const [garage] = await lumaAt(2.2, [centre("Garage door")]);
+    return { ok: !!inst && garage! > 10 && mapping() === mappingBefore, note: `sample video on the garage door (drawn over the 3D layer): brightness there at 2.2 s ${garage}`, settle: 900 };
+  },
+  "house-save-reopen": async () => {
+    if (skip) return skipped();
+    savedPath = `${(await window.be.app.paths()).renders}\\ui-test\\House demo.beproj`;
+    const saved = await window.be.files.saveProject(serialize(st().project!), savedPath);
+    const opened = await window.be.files.openProject(savedPath);
+    st().openProject(deserialize(opened!.json), savedPath);
+    await sleep(600);
+    const found = partsLayer(currentComp(st()));
+    const parts = found ? found.scene.objectOrder.filter((id) => found.scene.objects[id]!.part).length : 0;
+    return { ok: !!saved && parts === 2 && mapping() === mappingBefore, note: `saved and reopened: ${parts} moving parts, video and areas intact` };
+  },
+  "house-export": async () => {
+    if (skip) return skipped();
+    const p = st().project!;
+    const show = p.compositions[p.mainCompId!]!;
+    const fps = show.frameRate.num / show.frameRate.den;
+    const output = `${(await window.be.app.paths()).renders}\\ui-test\\House demo.mp4`;
+    const seconds = 8;
+    const id = await window.be.render.enqueue({ name: "House demo", outcome: "share", preset: "h264", compId: show.id, target: { kind: "master", keepAlpha: false }, output, width: show.width, height: show.height, frameRate: show.frameRate, startFrame: 0, frames: Math.round(fps * seconds), alpha: false, withAudio: false, estimatedBytes: 20_000_000, snapshot: JSON.stringify(p) });
+    let job: Awaited<ReturnType<typeof window.be.render.list>>[number] | undefined;
+    const t0 = performance.now();
+    while (performance.now() - t0 < 300_000) {
+      job = (await window.be.render.list()).find((j) => j.id === id);
+      if (job?.state === "done" || job?.state === "failed") break;
+      await sleep(300);
+    }
+    const took = (performance.now() - t0) / 1000;
+    if (job?.state !== "done") return { ok: false, note: `export ${job?.state}: ${job?.error ?? ""}` };
+    const luma = async (sec: number, pt: [number, number]) => {
+      const f = await window.be.media.decodeFrame(job!.result!, Math.round(sec * fps), fps, 480, show.width, show.height);
+      if (!f) return -1;
+      const k = f.width / show.width;
+      const i = (Math.round(pt[1] * k) * f.width + Math.round(pt[0] * k)) * 4;
+      return Math.round(0.2126 * f.data[i]! + 0.7152 * f.data[i + 1]! + 0.0722 * f.data[i + 2]!);
+    };
+    const doorRest = await luma(0.2, centre("Front door")), doorOpen = await luma(2.2, centre("Front door")), outside = await luma(2.2, [8, 8]);
+    const ok = doorRest > 60 && doorOpen < doorRest * 0.4 && outside < 8 && !!job.verify?.checks.every((c) => c.ok);
+    return { ok, note: `exported ${seconds} s at ${show.width}x${show.height} in ${took.toFixed(1)} s -> ${output}; door ${doorRest} at rest, ${doorOpen} open; outside the house ${outside}; ${job.verify?.checks.map((c) => `${c.ok ? "ok" : "FAILED"} ${c.name}`).join(", ")}` };
   },
 };

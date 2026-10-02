@@ -17,6 +17,8 @@
  * The building itself (venue geometry used for calibration) is not part of these scenes: they are
  * creative geometry placed in front of it. Moving a 3D object never moves a traced area.
  */
+import earcut from "earcut";
+import polygonClipping from "polygon-clipping";
 import { z } from "zod";
 import { type AnimProp, evalProp, staticProp } from "./anim.ts";
 import { refRegions, regionHoles } from "./areas.ts";
@@ -235,6 +237,34 @@ const subtractConvex = (poly: Vec2[], hole: Vec2[]): Vec2[][] => {
   return out;
 };
 
+const insidePoly = (pts: readonly Vec2[], [x, y]: Vec2) => {
+  let c = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i]!, [xj, yj] = pts[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+};
+
+/**
+ * An outline minus holes, as solids for 3D (outer outline plus holes, one entry per separate
+ * piece). A hole touching or crossing the edge — a garage door at the foot of a facade — becomes a
+ * notch in the outline instead (triangulation would drop a hole lying on the edge).
+ */
+export const solidWithHoles = (outline: readonly Vec2[], holes: readonly (readonly Vec2[])[]): Array<{ outline: Vec2[]; holes: Vec2[][] }> => {
+  const ring = (pts: readonly Vec2[]): [number, number][] => pts.map((p) => [p[0], p[1]]);
+  const open = (r: [number, number][]): Vec2[] => (r.length > 1 && r[0]![0] === r.at(-1)![0] && r[0]![1] === r.at(-1)![1] ? r.slice(0, -1) : r) as Vec2[];
+  const usable = holes.filter((h) => h.length >= 3);
+  if (!usable.length) return [{ outline: ccw([...outline]), holes: [] }];
+  try {
+    const out = polygonClipping.difference([ring(outline)], ...usable.map((h) => [ring(h)]));
+    return out.map((poly) => ({ outline: ccw(open(poly[0]!)), holes: poly.slice(1).map(open) })).filter((p) => p.outline.length >= 3);
+  } catch {
+    // Degenerate shapes: keep the holes that lie inside as they are.
+    return [{ outline: ccw([...outline]), holes: usable.filter((h) => h.every((p) => insidePoly(outline, p))).map((h) => [...h]) }];
+  }
+};
+
 const closedPoints = (path: { closed: boolean; vertices: readonly { p: Vec2 }[] } & Parameters<typeof flattenPath>[0]): Vec2[] => {
   const pts = flattenPath(path, 8);
   const out: Vec2[] = [];
@@ -403,7 +433,7 @@ const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }
     const outline = closedPoints(r.path);
     const holes = regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
     if (outline.length < 3) continue;
-    const polys = fr ? fracture(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] })) : [{ outline: ccw(outline), holes }];
+    const polys = fr ? fracture(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] })) : solidWithHoles(outline, holes);
     for (const poly of polys) {
       const w = poly.outline.map((p) => canvasToWorld(p, canvas));
       const c = polyCentroid(w);
@@ -421,6 +451,8 @@ const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }
 
 const scaleOf = (o: Object3D, t: Flicks): Vec3 => evalProp(o.scale, t).map((s) => s / 100) as unknown as Vec3;
 
+const chunk = <T>(a: readonly T[], n: number): T[][] => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+
 const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: boolean): PhysicsShape | null => {
   const g = o.geometry;
   if (!g) return null;
@@ -430,8 +462,8 @@ const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: 
   if (g.kind === "plane") return { kind: "box", half: [(g.size[0] * Math.abs(sx)) / 2, (g.size[1] * Math.abs(sy)) / 2, 0.01] };
   if (!piece) return null;
   const d = piece.depth / 2;
-  if (fixed && piece.holes.length) {
-    // A fixed wall with openings keeps them open: an exact triangle mesh (outline and holes, front and back).
+  if (fixed && (piece.holes.length || polyArea(hull2(piece.outline)) > Math.abs(polyArea(piece.outline)) * 1.02)) {
+    // A fixed wall with openings or notches keeps them open: an exact triangle mesh (outline and holes, front and back).
     const ring = (pts: readonly Vec2[]) => pts.map((p) => [p[0] * sx, p[1] * sy] as Vec2);
     const all = [ring(piece.outline), ...piece.holes.map(ring)];
     const points: number[] = [];
@@ -444,9 +476,14 @@ const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: 
         indices.push(a, b, a + 1, b, b + 1, a + 1);
       }
     }
-    // Front and back faces: a fan over the outline only (good enough to stop pieces passing through).
-    const n = piece.outline.length;
-    for (let i = 1; i < n - 1; i++) indices.push(0, i * 2, (i + 1) * 2, 1, (i + 1) * 2 + 1, i * 2 + 1);
+    // Front and back faces, triangulated with the holes left open (each ring's points come in front/back pairs).
+    const flat: number[] = [];
+    const starts: number[] = [];
+    for (const [k, r] of all.entries()) {
+      if (k) starts.push(flat.length / 2);
+      for (const q of r) flat.push(q[0], q[1]);
+    }
+    for (const t of chunk(earcut(flat, starts), 3)) indices.push(t[0]! * 2, t[1]! * 2, t[2]! * 2, t[0]! * 2 + 1, t[2]! * 2 + 1, t[1]! * 2 + 1);
     return { kind: "mesh", points, indices };
   }
   // Slightly smaller than drawn, so neighbouring pieces don't start out overlapping.

@@ -10,7 +10,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "earcut": "^3.2.4",
     "immer": "^11.1.18",
+    "polygon-clipping": "^0.15.7",
     "zod": "^4.6.5"
   }
 }

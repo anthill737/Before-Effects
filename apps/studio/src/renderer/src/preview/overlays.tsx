@@ -7,6 +7,7 @@
 import type { PathData, Region } from "@be/core";
 import { useMemo, useRef, useState } from "react";
 import { applyEffect, applyRecipeToSelection, KIND_LABEL, previewRecipe, similarRegions, suggestedRecipes } from "../studio/actions.ts";
+import { animatePart, moveChoices } from "../studio/parts.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
 import { usePreview } from "./settings.ts";
 
@@ -142,6 +143,11 @@ export const ActionBar = ({ size }: { size: { w: number; h: number } }) => {
   return (
     <div className="action-bar" style={{ top, left }} onClick={(e) => e.stopPropagation()} role="toolbar" aria-label={`Effects for ${label}`}>
       <span className="action-bar-label">{label}</span>
+      {regs.length === 1 && !regs[0]!.proposal && (kind === "door" || kind === "garage" || kind === "window") && (
+        <button className="action" onClick={() => animatePart(regs[0]!.id)} title="Make it move in 3D: the photo of it moves, and what's behind the opening shows">
+          {moveChoices(kind)[0]!.label} (3D)
+        </button>
+      )}
       {suggestions.map((r) => (
         <button
           key={r.id}

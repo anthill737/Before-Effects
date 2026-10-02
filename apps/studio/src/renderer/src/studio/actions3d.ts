@@ -158,6 +158,7 @@ export const setContain = (layer: Layer, contain: boolean) => {
   const ref = scene ? sceneArea(scene) : null;
   if (!comp || !ref) return;
   const others = layer.masks.filter((m) => m.id !== "contain");
-  const mask: Mask = { id: "contain", name: "Keep inside the area", source: { kind: "region", ref }, mode: "add", inverted: false, feather: staticProp(0), expansion: staticProp(0), opacity: staticProp(100) };
+  const parts = scene?.purpose === "parts";
+  const mask: Mask = { id: "contain", name: parts ? "Keep inside the house outline" : "Keep inside the area", source: { kind: "region", ref, ...(parts ? { outline: true } : {}) }, mode: "add", inverted: false, feather: staticProp(0), expansion: staticProp(0), opacity: staticProp(100) };
   s.apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes: { masks: contain ? [mask, ...others] : others } } }, { label: contain ? "Keep 3D inside the area" : "Let 3D extend beyond the area" });
 };

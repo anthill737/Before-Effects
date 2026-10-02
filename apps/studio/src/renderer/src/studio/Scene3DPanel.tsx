@@ -8,6 +8,7 @@ import { type AnimProp, DEFAULT_FRACTURE, evalProp, type Fracture3D, keyAt, type
 import { type ReactNode, useState } from "react";
 import { addObject, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
+import { PartEditor } from "./PartEditor.tsx";
 import { simProgress, useSims } from "./simHost.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
@@ -78,13 +79,16 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
       <p className="muted small">3D objects in front of the building, seen through the show camera. Orbit around them in “3D projection”.</p>
       <PhysicsStatus layerId={layer.id} />
       {area && (
-        <Field label="Pieces and effects" help="Projector blackout areas (“Keep light off here”) apply either way.">
-          <div className="segmented" role="radiogroup" aria-label="Pieces and effects">
+        <Field
+          label={scene.purpose === "parts" ? "Clipped to" : "Pieces and effects"}
+          help={`${scene.purpose === "parts" ? "The parts are made from their own areas; this is the outline the whole layer is cut to." : "The solid is made from its area; this is whether what it shows is cut to that area."} Projector blackout areas (“Keep light off here”) apply either way.`}
+        >
+          <div className="segmented" role="radiogroup" aria-label="Clipped to">
             <button role="radio" aria-checked={contained} className={contained ? "on" : ""} onClick={() => setContain(layer, true)}>
-              Contain within the area
+              {scene.purpose === "parts" ? "The house outline" : "Contain within the area"}
             </button>
             <button role="radio" aria-checked={!contained} className={!contained ? "on" : ""} onClick={() => setContain(layer, false)}>
-              Extend beyond
+              {scene.purpose === "parts" ? "Nothing (can extend beyond)" : "Extend beyond"}
             </button>
           </div>
         </Field>
@@ -194,7 +198,9 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
         </button>
       </div>
 
-      <Section title={L ? "Position" : "Position, turn and size"} open>
+      {o.part && <PartEditor o={o} />}
+
+      <Section title={L ? "Position" : "Position, turn and size"} open={!o.part}>
         <div className="row gap key-row">
           <span className="small muted grow">{(o.position.keyframes?.length ?? 0) > 0 ? `Animated (${o.position.keyframes!.length} keyframes)` : "Position"}</span>
           <KeyButton layer={layer} prop={o.position} label="position" onChange={(p) => up({ position: p }, "Animate position", "position-key")} />

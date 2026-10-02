@@ -118,10 +118,10 @@ export interface EvaluateOptions {
 const ev = <V extends PropValue>(p: AnimProp<V>, t: Flicks, o: EvaluateOptions): V => evalProp(p, t, o.props);
 
 /** Resolve a region reference to region outlines through the venue binding. */
-export const resolveRegionPaths = (project: Project, ref: RegionRef, venueId?: Id): PathData[] => {
+export const resolveRegionPaths = (project: Project, ref: RegionRef, venueId?: Id, outlineOnly = false): PathData[] => {
   const vid = venueId ?? project.activeVenueId;
   const venue = vid ? project.venues[vid] : undefined;
-  return refRegions(project, ref, venueId).flatMap((r) => regionFillPaths(r, venue));
+  return refRegions(project, ref, venueId).flatMap((r) => (outlineOnly ? [r.path] : regionFillPaths(r, venue)));
 };
 
 const resolvePath = (
@@ -131,7 +131,7 @@ const resolvePath = (
   o: EvaluateOptions,
 ): { paths: PathData[]; space: "comp" | "layer" } =>
   src.kind === "region"
-    ? { paths: resolveRegionPaths(project, src.ref, o.venueId), space: "comp" }
+    ? { paths: resolveRegionPaths(project, src.ref, o.venueId, !!src.outline), space: "comp" }
     : { paths: [unpackPath(ev(src.path, t, o))], space: "layer" };
 
 const layerLocalTime = (l: Layer, t: Flicks): Flicks => Math.round((t - l.startTime) * l.stretch);
