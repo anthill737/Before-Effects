@@ -72,6 +72,7 @@ export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean
         name: m.name,
         path: m.path,
         originalPath: m.originalPath,
+        ...(m.sourceFile ? { sourceFile: m.sourceFile } : {}),
         ...(m.audioPath ? { audioPath: m.audioPath } : {}),
         meta: {
           ...(m.width ? { width: m.width } : {}),
@@ -86,8 +87,11 @@ export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean
         },
       };
       if (useStudio.getState().apply({ type: "asset.add", args: { asset } }, { label: `Import ${m.name}` })) out.push(asset);
+      for (const n of m.notes ?? []) s.toast({ kind: "info", text: `${m.name}: ${n}` });
     } catch (e) {
-      s.toast({ kind: "error", text: `“${file.split(/[\\/]/).pop()}” couldn't be imported.`, details: String((e as Error).message ?? e) });
+      const msg = String((e as Error).message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+      // A photo that can't be decoded comes with its own explanation of what to do.
+      s.toast({ kind: "error", text: /couldn't be decoded/.test(msg) ? msg : `“${file.split(/[\\/]/).pop()}” couldn't be imported.`, details: msg });
     }
   }
   // Music: find the beat in the background (needed for "Move with the beat").

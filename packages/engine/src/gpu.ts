@@ -36,6 +36,8 @@ export class Gpu {
   /** Per-frame transient resources, destroyed after the frame's commands are submitted. */
   private garbage: Array<GPUTexture | GPUBuffer> = [];
   private lost = false;
+  /** WebGPU validation errors seen so far (should always be empty). */
+  readonly validationErrors: string[] = [];
 
   private constructor(
     readonly device: GPUDevice,
@@ -65,7 +67,11 @@ export class Gpu {
     });
     device.onuncapturederror = (e) => console.error("[gpu] uncaptured error:", e.error.message);
     const ai = adapter.info;
-    return new Gpu(device, { vendor: ai.vendor, architecture: ai.architecture, description: ai.description, features });
+    const gpu = new Gpu(device, { vendor: ai.vendor, architecture: ai.architecture, description: ai.description, features });
+    // Recorded even when another library (three.js) installs its own handler: a shader or pipeline
+    // mistake must never go unnoticed (tests fail on any).
+    device.addEventListener("uncapturederror", (e) => gpu.validationErrors.push((e as GPUUncapturedErrorEvent).error.message.slice(0, 300)));
+    return gpu;
   }
 
   get isLost(): boolean {

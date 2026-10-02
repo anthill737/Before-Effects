@@ -471,7 +471,7 @@ const RegionEditPanel = () => {
         </>
       )}
       <div className="row gap wrap">
-        {one && (one.kind === "window" || one.kind === "door" || one.kind === "column") && (
+        {one && (one.kind === "window" || one.kind === "door" || one.kind === "garage" || one.kind === "column" || one.kind === "vent" || one.kind === "light") && (
           <button className="ghost" onClick={() => void suggestSimilar(one.id)}>
             Find similar
           </button>

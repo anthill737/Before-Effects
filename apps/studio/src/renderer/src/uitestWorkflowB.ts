@@ -136,7 +136,7 @@ export const WORKFLOW_B_STEPS: Record<string, () => Promise<{ ok: boolean; note?
     const paths = await window.be.app.paths();
     const photo = `${paths.renders}\\ui-test\\workflow-b-house.png`;
     await window.be.files.writeBinary(photo, new Uint8Array(await blob.arrayBuffer()));
-    await createProjectFromPhoto({ path: photo, dataUrl: "" });
+    await createProjectFromPhoto({ path: photo, dataUrl: "" }, { width: HOUSE.w, height: HOUSE.h });
     await until(() => !!document.querySelector("svg.trace"), 5000);
     usePreview.getState().set({ resolution: "full", view: "show", zoom: "fit" });
     useTrace.getState().set({ tool: "rect" });

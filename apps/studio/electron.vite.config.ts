@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
 
 // Workspace packages ship TypeScript sources, so they are bundled rather than externalised.
-const bundled = ["@be/core", "@be/engine", "@be/media"];
+const bundled = ["@be/core", "@be/engine", "@be/media", "libheif-js"];
 
 export default defineConfig({
   main: {
@@ -18,6 +18,8 @@ export default defineConfig({
           // External-agent clients: an MCP server and a command-line tool (plain Node).
           "agent-mcp": resolve(__dirname, "src/main/agent-mcp.ts"),
           "agent-cli": resolve(__dirname, "src/main/agent-cli.ts"),
+          // HEIC/HEIF decoding (libheif WebAssembly) in a worker thread.
+          "heic-worker": resolve(__dirname, "src/main/heic-worker.ts"),
         },
       },
     },

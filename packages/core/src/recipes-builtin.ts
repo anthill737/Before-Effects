@@ -107,7 +107,7 @@ export const edgeTrace: RecipeDef = {
   category: "light",
   description: "A glowing light travels around the edges you select — windows, doors, rooflines, columns.",
   keywords: ["trace", "outline", "edge", "neon", "glow", "line", "border", "light", "chase", "roofline", "contour"],
-  suits: ["window", "door", "roofline", "edge", "column", "custom", "wall"],
+  suits: ["window", "door", "garage", "roof", "vent", "light", "roofline", "edge", "column", "custom", "wall"],
   defaultSeconds: 8,
   params: [
     { key: "color", label: "Color", control: "color", default: [1, 0.82, 0.5, 1], primary: true, drives: ["source.contents"] },
@@ -180,7 +180,7 @@ export const sequenceLightUp: RecipeDef = {
   category: "light",
   description: "Fill each selected region with light in turn — windows switching on across the building.",
   keywords: ["windows", "sequence", "one after another", "cascade", "chase", "light up", "turn on", "stagger", "fill", "glow", "illuminate"],
-  suits: ["window", "door", "column", "wall", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "column", "wall", "custom"],
   defaultSeconds: 6,
   params: [
     { key: "color", label: "Color", control: "color", default: [1, 0.8, 0.52, 1], primary: true, drives: ["source.contents"] },
@@ -230,7 +230,7 @@ export const pulse: RecipeDef = {
   category: "light",
   description: "Regions breathe brighter and darker in a steady rhythm — set the speed to match the music.",
   keywords: ["pulse", "breathe", "throb", "beat", "rhythm", "flash", "blink", "heartbeat", "music", "bpm"],
-  suits: ["window", "door", "column", "wall", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "column", "wall", "custom"],
   defaultSeconds: 8,
   params: [
     { key: "color", label: "Color", control: "color", default: [0.35, 0.6, 1, 1], primary: true, drives: ["source.contents"] },
@@ -270,7 +270,7 @@ export const neonOutline: RecipeDef = {
   category: "light",
   description: "A steady glowing outline that flickers on like a neon sign.",
   keywords: ["neon", "outline", "glow", "edge", "sign", "border", "contour", "line", "flicker"],
-  suits: ["window", "door", "roofline", "edge", "column", "custom", "wall"],
+  suits: ["window", "door", "garage", "roof", "vent", "light", "roofline", "edge", "column", "custom", "wall"],
   defaultSeconds: 10,
   params: [
     { key: "color", label: "Color", control: "color", default: [1, 0.25, 0.75, 1], primary: true, drives: ["source.contents"] },
@@ -314,7 +314,7 @@ export const colorWash: RecipeDef = {
   category: "color",
   description: "Paint the selected regions with a solid color of light that fades in.",
   keywords: ["color", "colour", "fill", "paint", "wash", "tint", "solid", "light"],
-  suits: ["window", "door", "column", "wall", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "column", "wall", "custom"],
   defaultSeconds: 6,
   params: [
     { key: "color", label: "Color", control: "color", default: [0.95, 0.55, 0.2, 1], primary: true, drives: ["source.contents"] },
@@ -359,7 +359,7 @@ export const mediaFill: RecipeDef = {
   category: "patterns",
   description: "Put one of your own images or videos on the selected parts, fitted to their shape.",
   keywords: ["picture", "photo", "image", "video", "clip", "movie", "media", "footage", "my", "own", "show", "place", "put"],
-  suits: ["window", "door", "wall", "column", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "wall", "column", "custom"],
   defaultSeconds: 10,
   params: [
     { key: "assetId", label: "Picture or video", control: "media", default: "", primary: true, accepts: ["image", "video"], drives: ["source"] },
@@ -418,7 +418,7 @@ export const textOnSurface: RecipeDef = {
   category: "text",
   description: "Words on the selected part, sized to fit, fading in.",
   keywords: ["text", "words", "title", "name", "message", "letters", "type", "write", "caption"],
-  suits: ["window", "door", "wall", "column", "custom", "roofline", "edge"],
+  suits: ["window", "door", "garage", "roof", "vent", "light", "wall", "column", "custom", "roofline", "edge"],
   defaultSeconds: 8,
   params: [
     { key: "text", label: "Text", control: "text", default: "Hello", primary: true, drives: ["source.doc.text"] },
@@ -483,7 +483,7 @@ export const moveWithBeat: RecipeDef = {
   category: "light",
   description: "Light flashes on the music's beats — every beat, every other beat, or on each bar.",
   keywords: ["beat", "music", "rhythm", "bpm", "sync", "song", "pulse", "dance", "bass", "kick", "flash", "audio", "sound"],
-  suits: ["window", "door", "column", "wall", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "column", "wall", "custom"],
   defaultSeconds: 30,
   params: [
     { key: "musicId", label: "Music", control: "media", default: "", primary: true, accepts: ["audio", "video"], drives: ["source.contents"] },
@@ -559,7 +559,7 @@ export const smokeRising: RecipeDef = {
   category: "fire",
   description: "Real, simulated smoke drifts up out of the selected parts, curling and fading as it rises.",
   keywords: ["smoke", "fog", "mist", "haze", "steam", "vapour", "vapor", "cloud", "rising", "drift", "fire", "simulation"],
-  suits: ["window", "door", "wall", "column", "custom", "roofline", "edge"],
+  suits: ["window", "door", "garage", "roof", "vent", "light", "wall", "column", "custom", "roofline", "edge"],
   defaultSeconds: 10,
   params: [
     { key: "color", label: "Color", control: "color", default: [0.92, 0.94, 1, 1], primary: true, drives: ["source.sim"] },
@@ -596,7 +596,7 @@ export const waterFill: RecipeDef = {
   category: "water",
   description: "Real, simulated water pours in and fills the selected parts, sloshing as it settles — or pours down the building.",
   keywords: ["water", "fill", "flow", "flowing", "pour", "liquid", "flood", "waterfall", "rain", "splash", "wave", "simulation"],
-  suits: ["window", "door", "wall", "column", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "wall", "column", "custom"],
   defaultSeconds: 10,
   params: [
     { key: "color", label: "Water color", control: "color", default: [0.16, 0.5, 0.95, 1], primary: true, drives: ["source.sim"] },

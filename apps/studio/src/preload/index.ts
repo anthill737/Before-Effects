@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent, webUtils } from "electron";
 import type { AgentCall, AssistantToolCall, BeApi, WindowKind } from "../shared/api.ts";
 
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
@@ -37,6 +37,7 @@ const api: BeApi = {
     chooseImage: () => ipcRenderer.invoke("files:chooseImage"),
     chooseFiles: (k) => ipcRenderer.invoke("files:chooseFiles", k),
     importAsset: (src, projectId) => ipcRenderer.invoke("files:importAsset", src, projectId),
+    pathForFile: (file) => webUtils.getPathForFile(file),
     readFile: (path) => ipcRenderer.invoke("files:readFile", path),
     writeText: (path, text) => ipcRenderer.invoke("files:writeText", path, text),
     writeBinary: (path, data) => ipcRenderer.invoke("files:writeBinary", path, data),

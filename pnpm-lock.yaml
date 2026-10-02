@@ -44,6 +44,9 @@ importers:
       '@be/media':
         specifier: workspace:*
         version: link:../../packages/media
+      libheif-js:
+        specifier: 1.23.2
+        version: 1.23.2
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -1202,6 +1205,10 @@ packages:
   junk@4.0.1:
     resolution: {integrity: sha512-Qush0uP+G8ZScpGMZvHUiRfI0YBWuB3gVBYlI0v0vvOJt5FLicco+IkP0a50LqTTQhmts/m6tP5SWE+USyIvcQ==}
     engines: {node: '>=12.20'}
+
+  libheif-js@1.23.2:
+    resolution: {integrity: sha512-qvHIXtggEsw1lCNCWBYKloL2Z36DJBm0R9ThGiH2JnhKYdeZFLPFkP30Lw4yMskxxhx0bKg1gLrBHX1D2w2pSw==}
+    engines: {node: '>=8.0.0'}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -2466,6 +2473,8 @@ snapshots:
   json5@2.2.3: {}
 
   junk@4.0.1: {}
+
+  libheif-js@1.23.2: {}
 
   lightningcss-android-arm64@1.33.0:
     optional: true

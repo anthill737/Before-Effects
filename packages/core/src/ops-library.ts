@@ -537,6 +537,39 @@ export const venueAdd = defineOp({
   summarize: (a) => `Set up the space "${a.venue.name}".`,
 });
 
+export const venueUpdate = defineOp({
+  type: "venue.update",
+  title: "Change the space",
+  description: "Rename the venue, change its canvas size, its reference image, or how its photo sits in the canvas (fit/fill, scale %, offset px, crop fractions).",
+  args: z.object({
+    venueId: id,
+    changes: z
+      .object({
+        name: z.string().min(1),
+        canvas: z.object({ width: z.number().int().min(16).max(16384), height: z.number().int().min(16).max(16384) }),
+        referenceAssetId: z.string().nullable(),
+        photo: z.object({
+          assetId: z.string(),
+          placement: z.object({
+            fit: z.enum(["fit", "fill"]),
+            scale: z.number().min(10).max(1000),
+            offsetX: z.number(),
+            offsetY: z.number(),
+            crop: z.object({ left: z.number().min(0).max(0.45), right: z.number().min(0).max(0.45), top: z.number().min(0).max(0.45), bottom: z.number().min(0).max(0.45) }),
+          }),
+        }),
+      })
+      .partial(),
+  }),
+  apply: (d, a) => {
+    const v = venueOf(d, a.venueId);
+    const { referenceAssetId, ...rest } = a.changes;
+    Object.assign(v, rest);
+    if (referenceAssetId === null) delete v.referenceAssetId;
+    else if (referenceAssetId !== undefined) v.referenceAssetId = referenceAssetId;
+  },
+});
+
 export const regionAdd = defineOp({
   type: "region.add",
   title: "Add region",
@@ -564,7 +597,7 @@ export const regionUpdate = defineOp({
     changes: z
       .object({
         name: z.string().min(1),
-        kind: z.enum(["window", "door", "wall", "roofline", "column", "edge", "exclusion", "custom"]),
+        kind: z.enum(["window", "door", "garage", "wall", "roof", "roofline", "column", "vent", "light", "edge", "exclusion", "custom"]),
         path: z.custom<Region["path"]>(),
         tags: z.array(z.string()),
         holes: z.custom<NonNullable<Region["holes"]>>((v) => Array.isArray(v)),
@@ -748,6 +781,7 @@ export const coreOps = [
   assetRemove,
   assetRelink,
   venueAdd,
+  venueUpdate,
   regionAdd,
   regionUpdate,
   regionRemove,

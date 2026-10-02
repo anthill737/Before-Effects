@@ -12,7 +12,7 @@ import type { OrbitCamera } from "@be/engine";
 import { DEFAULT_ORBIT } from "@be/engine";
 
 export type ResolutionChoice = "auto" | "full" | "half" | "quarter" | "eighth" | "custom";
-export type View = "show" | "3d" | "projector";
+export type View = "show" | "venue" | "3d" | "projector";
 
 export const RESOLUTIONS: Array<{ id: ResolutionChoice; label: string; fraction: number }> = [
   { id: "auto", label: "Auto", fraction: 1 },

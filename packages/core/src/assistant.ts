@@ -53,7 +53,11 @@ export const colourName = (c: readonly number[]): string => {
 const KIND_PLURAL: Record<RegionKind, string> = {
   window: "windows",
   door: "doors",
+  garage: "garage doors",
   wall: "walls",
+  roof: "roofs",
+  vent: "vents",
+  light: "light fixtures",
   roofline: "rooflines",
   column: "columns",
   edge: "edges",

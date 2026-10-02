@@ -3,6 +3,7 @@
  * projector. Areas are shared by every scene — tracing a window once makes it available
  * throughout the show.
  */
+import { PhotoPlacementPanel } from "./PhotoPlacementPanel.tsx";
 import { type RegionKind } from "@be/core";
 import { useState } from "react";
 import { usePreview } from "../preview/settings.ts";
@@ -12,7 +13,7 @@ import { acceptSuggestions, suggestSimilar } from "./actions.ts";
 import { duplicateAreas, groupAreas, renameGroup, ungroup } from "./areaEdit.ts";
 import { type TraceTool, useTrace } from "./traceStore.ts";
 
-const KIND_ORDER: RegionKind[] = ["roofline", "edge", "window", "door", "column", "wall", "custom", "exclusion"];
+const KIND_ORDER: RegionKind[] = ["roofline", "roof", "edge", "window", "door", "garage", "column", "vent", "light", "wall", "custom", "exclusion"];
 
 const TOOLS: Array<{ id: TraceTool; label: string; how: string }> = [
   { id: "select", label: "Select", how: "Click an area. Drag a corner or a + edge handle to reshape it (click + to add a point), drag inside to move it. Alt-click a corner, or select it and press Delete, to remove it. Ctrl+D duplicates." },
@@ -147,6 +148,7 @@ export const SpacePanel = () => {
         <span>Photo</span>
         <input type="range" min={0} max={1} step={0.05} value={photoOpacity} onChange={(e) => useTrace.getState().set({ photoOpacity: Number(e.target.value) })} aria-label="Photo visibility" />
       </label>
+      <PhotoPlacementPanel />
 
       {suggestions && (
         <div className="suggest-box" role="region" aria-label="Suggested areas">
@@ -166,7 +168,7 @@ export const SpacePanel = () => {
         </div>
       )}
       <div className="row gap wrap">
-        {selectedOne && (selectedOne.kind === "window" || selectedOne.kind === "door" || selectedOne.kind === "column") && !suggestions && (
+        {selectedOne && (selectedOne.kind === "window" || selectedOne.kind === "door" || selectedOne.kind === "garage" || selectedOne.kind === "column" || selectedOne.kind === "vent" || selectedOne.kind === "light") && !suggestions && (
           <button className="ghost" onClick={() => void suggestSimilar(selectedOne.id)}>
             Find similar {KIND_LABEL[selectedOne.kind][1]}
           </button>

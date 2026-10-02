@@ -11,6 +11,7 @@ import { ipcMain } from "electron";
 import { findFfmpeg } from "@be/media";
 import type { ImportedMedia } from "../shared/api.ts";
 import { paths } from "./files.ts";
+import { decodeHeif, isHeif } from "./heic.ts";
 import { log } from "./log.ts";
 
 const execFileP = promisify(execFile);
@@ -40,6 +41,13 @@ export const importMedia = async (src: string, projectId: string): Promise<Impor
   mkdirSync(dir, { recursive: true });
   const target = uniqueTarget(dir, basename(src));
   copyFileSync(src, target);
+  // Phone photos (HEIC/HEIF): keep the original, work from a decoded PNG.
+  if (isHeif(target)) {
+    const png = uniqueTarget(dir, `${basename(target, extname(target))} (decoded).png`);
+    const r = await decodeHeif(target, png);
+    log(`imported image ${src} → ${png} (from ${target})`);
+    return { kind: "image", path: r.path, originalPath: src, sourceFile: target, name: basename(src), width: r.width, height: r.height, hasAlpha: r.hasAlpha, codec: `heif (${r.decoder})`, notes: r.notes };
+  }
   const { stdout } = await execFileP(ffprobe, ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", target], { maxBuffer: 16 << 20 });
   const j = JSON.parse(stdout) as { streams: Array<Record<string, string | number | undefined>>; format: Record<string, string | number | undefined> };
   const video = j.streams.find((s) => s.codec_type === "video");

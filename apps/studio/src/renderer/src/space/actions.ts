@@ -2,6 +2,7 @@
 import {
   type Asset,
   createRegistry,
+  DEFAULT_PLACEMENT,
   emptyProject,
   History,
   newComposition,
@@ -14,6 +15,7 @@ import {
   type Venue,
 } from "@be/core";
 import { facadeBlob } from "../samples/facadeArt.ts";
+import { makeReferenceAsset } from "./photoPlacement.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
 import { usePreview } from "../preview/settings.ts";
 import { findSimilar } from "./similar.ts";
@@ -47,29 +49,31 @@ export const venuePhotoUrl = async (project: Project): Promise<string | null> =>
 };
 
 /** New show from a photo of a building or object. The photo is a tracing reference, not a 3D scan. */
-export const createProjectFromPhoto = async (given?: { path: string; dataUrl: string }): Promise<boolean> => {
+export const createProjectFromPhoto = async (given?: { path: string; dataUrl: string }, opts: { width?: number; height?: number } = {}): Promise<boolean> => {
   const s = useStudio.getState();
   const pick = given ?? (await window.be.files.chooseImage());
   if (!pick) return false;
   try {
     const name = pick.path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
     const base = emptyProject(`${name} show`);
-    const stored = await window.be.files.importAsset(pick.path, base.id);
+    const imported = await window.be.files.importAsset(pick.path, base.id);
+    const stored = imported.path;
     // Read the copied file (the page's security policy doesn't allow fetching inline data URLs).
     const bmp = await createImageBitmap(new Blob([(await window.be.files.readFile(stored)) as BlobPart]));
     const { width, height } = bmp;
     bmp.close();
-    // Work at up to 1920 px on the long side: sharp enough to trace, light enough to animate.
-    const k = Math.min(1, 1920 / Math.max(width, height));
-    const cw = Math.max(64, Math.round((width * k) / 2) * 2);
-    const ch = Math.max(64, Math.round((height * k) / 2) * 2);
-    const asset: Asset = { id: newId("asset"), kind: "image", name: pick.path.split(/[\\/]/).pop()!, path: stored, meta: { width, height } };
+    // The show is 1920×1080 (or the size asked for); the photo is fitted in without stretching.
+    const cw = opts.width ?? 1920;
+    const ch = opts.height ?? 1080;
+    const asset: Asset = { id: newId("asset"), kind: "image", name: pick.path.split(/[\\/]/).pop()!, path: stored, originalPath: pick.path, ...(imported.sourceFile ? { sourceFile: imported.sourceFile } : {}), meta: { width, height } };
+    const ref = await makeReferenceAsset(base.id, name, asset, { width: cw, height: ch }, DEFAULT_PLACEMENT);
     const venueBase: Venue = {
       id: newId("venue"),
       name,
       kind: "flat",
       canvas: { width: cw, height: ch },
-      referenceAssetId: asset.id,
+      referenceAssetId: ref.id,
+      photo: { assetId: asset.id, placement: DEFAULT_PLACEMENT },
       regionOrder: [],
       regions: {},
       groups: {},
@@ -82,6 +86,7 @@ export const createProjectFromPhoto = async (given?: { path: string; dataUrl: st
     const h = new History(base, registry);
     h.apply([
       { type: "asset.add", args: { asset } },
+      { type: "asset.add", args: { asset: ref } },
       { type: "venue.add", args: { venue, makeActive: true } },
       { type: "comp.add", args: { comp, makeMain: true } },
     ]);
@@ -92,7 +97,9 @@ export const createProjectFromPhoto = async (given?: { path: string; dataUrl: st
     s.toast({ kind: "info", text: "Trace the parts you want to light. Drag a rectangle around a window to start." });
     return true;
   } catch (e) {
-    s.toast({ kind: "error", text: "That photo couldn't be opened. Try a JPG or PNG.", details: String(e) });
+    const msg = String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+    // HEIC problems come with their own explanation; anything else gets a general hint.
+    s.toast({ kind: "error", text: /couldn't be decoded/.test(msg) ? msg : "That photo couldn't be opened. Try a JPG, PNG or HEIC photo.", details: msg });
     return false;
   }
 };

@@ -477,3 +477,4 @@ dialog.ae-import progress { width: 100%; }
 .copyable .code { margin: 4px 0 0; padding: 8px; background: #0b0d12; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; user-select: all; }
 .agent-last { color: #a8f0c6; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .toasts > .toast.passing { pointer-events: none; }
+body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px; border: 3px dashed var(--accent); border-radius: 14px; background: #0b0d12cc; color: var(--accent); display: grid; place-items: center; font-size: 28px; font-weight: 700; pointer-events: none; z-index: 1000; }

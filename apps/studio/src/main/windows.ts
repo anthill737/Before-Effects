@@ -68,6 +68,10 @@ export const createEditor = (mode: "studio" | "spike" | "uitest"): BrowserWindow
     webPreferences: webPrefs(kind, mode),
   });
   if (mode !== "spike") win.once("ready-to-show", () => win.show());
+  // A file dropped outside a drop zone must never replace the editor with that file.
+  win.webContents.on("will-navigate", (e, url) => {
+    if (!url.startsWith("http://localhost") && !url.includes("index.html")) e.preventDefault();
+  });
   load(win, kind, mode);
   win.on("closed", () => {
     editor = null;

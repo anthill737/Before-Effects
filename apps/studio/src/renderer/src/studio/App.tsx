@@ -23,6 +23,7 @@ import { Timeline } from "./Timeline.tsx";
 import { TopBar } from "./TopBar.tsx";
 import { Welcome } from "./Welcome.tsx";
 import { startAgentHost } from "../agent/index.ts";
+import { startFileDrop } from "./fileDrop.ts";
 
 const Toasts = () => {
   const toasts = useStudio((s) => s.toasts);
@@ -136,6 +137,8 @@ export const App = () => {
   const assistantOpen = useAssistant((s) => s.open);
   useShortcuts();
   useEffect(() => startAutosave(), []);
+  // Photos and media dragged in from Explorer (works on the welcome screen too).
+  useEffect(() => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? startFileDrop() : undefined), []);
   // External agents (when Agent access is on) are served by the editor window, even before a show is open.
   useEffect(() => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? startAgentHost() : undefined), []);
   useEffect(() => (screen === "studio" ? startEditorSync() : undefined), [screen]);

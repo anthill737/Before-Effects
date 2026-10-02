@@ -102,6 +102,10 @@ export interface Asset {
   readonly missing?: boolean;
   /** Original location before it was copied into the project's media folder. */
   readonly originalPath?: string;
+  /** The file as imported when `path` is a working copy made from it (e.g. a HEIC photo decoded to PNG). */
+  readonly sourceFile?: string;
+  /** Made by Before Effects for the venue (the photo placed in the canvas), not content to use. */
+  readonly purpose?: "venue-reference";
   /** Decoded sound (WAV) for files with audio, used identically by preview and export. */
   readonly audioPath?: string;
   readonly analysis?: AudioAnalysis;
@@ -303,7 +307,7 @@ export interface Composition {
 // ---------------------------------------------------------------------------------------------
 // Physical installation (venue) — never moved by creative edits
 
-export type RegionKind = "window" | "door" | "wall" | "roofline" | "column" | "edge" | "exclusion" | "custom";
+export type RegionKind = "window" | "door" | "garage" | "wall" | "roof" | "roofline" | "column" | "vent" | "light" | "edge" | "exclusion" | "custom";
 
 export interface Region {
   readonly id: Id;
@@ -368,13 +372,43 @@ export interface Venue {
   /** flat: a single planar surface traced over a reference; model: imported/measured 3D geometry. */
   readonly kind: "flat" | "model";
   readonly canvas: { readonly width: number; readonly height: number };
+  /**
+   * The reference image as seen on the canvas (canvas-sized): what tracing, the venue preview and
+   * photo-textured 3D parts use. For a photo it's made from `photo` with `placement`.
+   */
   readonly referenceAssetId?: Id;
+  /** The original photo of the building (kept as imported) and how it sits in the canvas. */
+  readonly photo?: { readonly assetId: Id; readonly placement: PhotoPlacement };
   readonly regionOrder: readonly Id[];
   readonly regions: Readonly<Record<Id, Region>>;
   readonly groups: Readonly<Record<Id, RegionGroup>>;
   readonly projectorOrder: readonly Id[];
   readonly projectors: Readonly<Record<Id, Projector>>;
 }
+
+/**
+ * How a photo sits in the venue canvas, without stretching: "fit" shows all of it (bars where the
+ * shapes differ), "fill" covers the canvas (edges cropped). `scale` is relative to that (100 = as
+ * fitted), offsets are canvas pixels, crop trims each edge of the photo (fraction 0..0.45).
+ */
+export interface PhotoPlacement {
+  readonly fit: "fit" | "fill";
+  readonly scale: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly crop: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number };
+}
+
+export const DEFAULT_PLACEMENT: PhotoPlacement = { fit: "fit", scale: 100, offsetX: 0, offsetY: 0, crop: { left: 0, right: 0, top: 0, bottom: 0 } };
+
+/** Where the photo (after cropping) lands on the canvas, in canvas pixels; and the crop in photo pixels. */
+export const placePhoto = (photo: { width: number; height: number }, canvas: { width: number; height: number }, p: PhotoPlacement) => {
+  const sx = photo.width * p.crop.left, sy = photo.height * p.crop.top;
+  const sw = Math.max(1, photo.width * (1 - p.crop.left - p.crop.right)), sh = Math.max(1, photo.height * (1 - p.crop.top - p.crop.bottom));
+  const k = (p.fit === "fit" ? Math.min(canvas.width / sw, canvas.height / sh) : Math.max(canvas.width / sw, canvas.height / sh)) * (p.scale / 100);
+  const w = sw * k, h = sh * k;
+  return { source: { x: sx, y: sy, w: sw, h: sh }, dest: { x: (canvas.width - w) / 2 + p.offsetX, y: (canvas.height - h) / 2 + p.offsetY, w, h }, pxPerPhotoPx: k };
+};
 
 /** Show-to-venue binding: role name → ordered region ids in that venue. */
 export interface Binding {

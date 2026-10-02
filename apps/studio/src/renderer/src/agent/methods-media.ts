@@ -395,7 +395,7 @@ method({
   name: "preview.set",
   summary: "Preview view (show, 3d inspection, projector), resolution (auto, full, half, quarter, eighth, custom with customScale), effect quality, 3D orbit. Never changes the project or export size.",
   params: z.object({
-    view: z.enum(["show", "3d", "projector"]).optional(),
+    view: z.enum(["show", "venue", "3d", "projector"]).optional(),
     resolution: z.enum(["auto", "full", "half", "quarter", "eighth", "custom"]).optional(),
     customScale: z.number().min(0.05).max(1).optional(),
     effectQuality: z.enum(["full", "draft"]).optional(),
@@ -427,7 +427,7 @@ const toPng = async (px: Uint8Array, w: number, h: number): Promise<Uint8Array> 
 method({
   name: "preview.capture",
   summary: "Capture the preview exactly as rendered (current view and resolution) at a time (seconds; default the playhead), waiting until media and prepared physics are loaded. Saves a PNG; inline returns it as base64 too.",
-  params: z.object({ seconds: z.number().min(0).optional(), view: z.enum(["show", "3d", "projector"]).optional(), inline: z.boolean().optional(), path: z.string().optional(), timeoutMs: z.number().int().min(0).max(120_000).optional() }),
+  params: z.object({ seconds: z.number().min(0).optional(), view: z.enum(["show", "venue", "3d", "projector"]).optional(), inline: z.boolean().optional(), path: z.string().optional(), timeoutMs: z.number().int().min(0).max(120_000).optional() }),
   long: true,
   run: async (p) => {
     const s = st();

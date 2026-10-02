@@ -347,6 +347,19 @@ const STEPS: Record<string, () => Promise<Result>> = {
 
 Object.assign(STEPS, PHOTO_STEPS, MEDIA_STEPS, ASSISTANT_STEPS, RENDER_STEPS, SIM_STEPS, AE_STEPS, WORKFLOW_A_STEPS, WORKFLOW_B_STEPS, PERF_STEPS);
 
+// Last: every preview view draws without a single WebGPU validation error (shader typos, bad pipelines).
+STEPS["no-gpu-errors"] = async () => {
+  const r = await getRenderer();
+  const loop = currentPreviewLoop();
+  for (const view of ["show", "venue", "3d", "projector"] as const) {
+    usePreview.getState().set({ view });
+    await new Promise((res) => setTimeout(res, 400));
+    await loop?.sample();
+  }
+  usePreview.getState().set({ view: "show" });
+  return { ok: r.gpu.validationErrors.length === 0, note: r.gpu.validationErrors.length ? `${r.gpu.validationErrors.length} WebGPU errors, first: ${r.gpu.validationErrors[0]}` : "all four preview views drew with no WebGPU validation errors" };
+};
+
 (window as unknown as { __beTest: unknown }).__beTest = {
   steps: () => Object.keys(STEPS),
   run: async (name: string): Promise<Result> => {

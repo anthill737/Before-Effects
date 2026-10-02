@@ -21,7 +21,7 @@ import { encodeForFile, type PixelFormat, readback, renderProjectorOutput } from
 import { PhysicsEngine } from "./physics.ts";
 import { type Scene3DSource, SceneHost } from "./scene3d.ts";
 import { SimEngine, type SimStore } from "./sim/engine.ts";
-import { ENCODE, IMPORT_PIXELS } from "./shaders.ts";
+import { BUILDING_PREVIEW, ENCODE, IMPORT_PIXELS } from "./shaders.ts";
 import { type OrbitCamera, VenuePreview3D } from "./venue3d.ts";
 
 export interface PixelFrame {
@@ -35,7 +35,7 @@ export type FrameTarget =
   | { readonly kind: "master"; readonly keepAlpha: boolean }
   | { readonly kind: "projector"; readonly venueId: Id; readonly projectorId: Id; readonly showGrid?: boolean };
 
-export type PreviewView = "show" | "3d" | "projector";
+export type PreviewView = "show" | "venue" | "3d" | "projector";
 
 export interface PresentOptions {
   readonly view: PreviewView;
@@ -180,6 +180,10 @@ export class FrameRenderer {
       } else {
         gpu.pass(encoder, BLIT, target, [this.greyTexture().createView(), gpu.samplerLinear]);
       }
+    } else if (o.view === "venue") {
+      // Simulated view on the house: the photo stands in for surface colour, the content is the light.
+      const u = new Float32Array([o.ambient ?? 0.08, 1.4, o.reference ? 1 : 0, 0]);
+      gpu.pass(encoder, BUILDING_PREVIEW, target, [content.createView(), (o.reference ?? this.greyTexture()).createView(), gpu.samplerLinear, { buffer: gpu.uniform(u) }]);
     } else if (o.view === "3d" && o.time !== undefined && this.scenesAt(project, compId, o.time).length) {
       // A scene with 3D objects: inspect the 3D scene itself from the orbiting camera.
       const src = this.scenesAt(project, compId, o.time)[0]!;

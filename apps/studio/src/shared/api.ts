@@ -27,6 +27,10 @@ export interface ImportedMedia {
   readonly sampleRate?: number | undefined;
   readonly audioChannels?: number | undefined;
   readonly codec?: string | undefined;
+  /** The file as imported when `path` is a working copy (HEIC/HEIF decoded to PNG). */
+  readonly sourceFile?: string | undefined;
+  /** What happened while reading it (e.g. HDR tone mapping, fallback decoder). */
+  readonly notes?: readonly string[] | undefined;
 }
 
 /** An export to render in the background. `snapshot` is the show as it was when queued. */
@@ -96,6 +100,18 @@ export interface AgentCallResult {
   readonly result?: unknown;
   readonly error?: { readonly code: string; readonly message: string; readonly details?: unknown };
   readonly revision?: number;
+}
+
+export interface ImportedAsset {
+  /** The working file (for HEIC: the decoded PNG). */
+  readonly path: string;
+  /** The file as imported, when a working copy was made from it (e.g. the original HEIC). */
+  readonly sourceFile?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly hasAlpha?: boolean;
+  readonly decoder?: "libheif" | "ffmpeg";
+  readonly notes?: readonly string[];
 }
 
 export interface SavedFile {
@@ -237,7 +253,10 @@ export interface BeApi {
     chooseImage(): Promise<{ path: string; dataUrl: string } | null>;
     chooseFiles(kind: "media" | "image" | "audio" | "aep"): Promise<string[]>;
     /** Copy a file into the project's media folder (original untouched); returns the new path. */
-    importAsset(src: string, projectId: string): Promise<string>;
+    /** Copy a file into the show's media folder (original untouched). HEIC/HEIF photos are decoded to a PNG working copy. */
+    importAsset(src: string, projectId: string): Promise<ImportedAsset>;
+    /** The file path of a file dropped from Explorer. */
+    pathForFile(file: File): string;
     readFile(path: string): Promise<Uint8Array>;
     writeText(path: string, text: string): Promise<void>;
     writeBinary(path: string, data: Uint8Array): Promise<void>;

@@ -26,7 +26,7 @@ export const pathD = (p: PathData): string => {
   return p.closed ? `${d} Z` : d;
 };
 
-const KIND_ORDER: Record<Region["kind"], number> = { wall: 0, exclusion: 1, column: 2, window: 3, door: 3, custom: 4, edge: 5, roofline: 5 };
+const KIND_ORDER: Record<Region["kind"], number> = { wall: 0, roof: 0, exclusion: 1, column: 2, window: 3, door: 3, garage: 3, vent: 4, light: 4, custom: 4, edge: 5, roofline: 5 };
 
 /** Region outlines + selection for the Show view. `interactive` is false in follower windows. */
 export const RegionOverlay = ({ size, interactive }: { size: { w: number; h: number }; interactive: boolean }) => {

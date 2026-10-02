@@ -99,7 +99,7 @@ const instance = (id: string) => {
 const points = z.array(z.tuple([z.number(), z.number()])).min(3);
 const rect = z.object({ x: z.number(), y: z.number(), w: z.number().positive(), h: z.number().positive() });
 const rectPoints = (r: z.infer<typeof rect>): Vec2[] => [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
-const kinds = z.enum(["window", "door", "wall", "roofline", "column", "edge", "exclusion", "custom"]);
+const kinds = z.enum(["window", "door", "garage", "wall", "roof", "roofline", "column", "vent", "light", "edge", "exclusion", "custom"]);
 
 const areaInfo = (r: Region, detail: boolean) => {
   const pts = flattenPath(r.path, 4);
@@ -836,3 +836,41 @@ method({
 
 // Kind names a person would use (for areas.create docs).
 export const AREA_KINDS = KIND_CHOICES.map((k) => ({ kind: k.kind, label: k.label }));
+
+// ---- the building photo ------------------------------------------------------------------------------
+
+method({
+  name: "venue.get",
+  summary: "The building: canvas size, the original photo (kept unchanged), how it's placed in the canvas, projectors.",
+  params: z.object({}),
+  run: () => {
+    const v = venue();
+    const p = project();
+    const photo = v.photo ? p.assets[v.photo.assetId] : undefined;
+    return {
+      id: v.id,
+      name: v.name,
+      canvas: v.canvas,
+      photo: photo ? { name: photo.name, width: photo.meta.width, height: photo.meta.height, original: photo.sourceFile ?? photo.originalPath ?? photo.path, placement: v.photo!.placement } : null,
+      reference: v.referenceAssetId ? p.assets[v.referenceAssetId]?.name : null,
+      projectors: v.projectorOrder.map((id) => ({ id, name: v.projectors[id]!.name, output: v.projectors[id]!.output })),
+    };
+  },
+});
+
+method({
+  name: "venue.placePhoto",
+  summary: "Place the building photo in the canvas without stretching: fit ('fit' shows all, 'fill' covers), scale % (100 = as fitted), offsetX/offsetY px, crop fractions per edge (0–0.45). Traced areas don't move.",
+  params: z.object({ fit: z.enum(["fit", "fill"]).optional(), scale: z.number().min(10).max(1000).optional(), offsetX: z.number().optional(), offsetY: z.number().optional(), crop: z.object({ left: z.number().min(0).max(0.45), right: z.number().min(0).max(0.45), top: z.number().min(0).max(0.45), bottom: z.number().min(0).max(0.45) }).partial().optional() }),
+  mutates: true,
+  long: true,
+  run: async (p, ctx) => {
+    const v = venue();
+    if (!v.photo) throw new AgentError("rejected", "This building has no photo to place.");
+    const { placementOps } = await import("../space/photoPlacement.ts");
+    const ops = await placementOps({ ...(p.fit ? { fit: p.fit } : {}), ...(p.scale !== undefined ? { scale: p.scale } : {}), ...(p.offsetX !== undefined ? { offsetX: p.offsetX } : {}), ...(p.offsetY !== undefined ? { offsetY: p.offsetY } : {}), ...(p.crop ? { crop: { ...v.photo.placement.crop, ...p.crop } } : {}) });
+    if (!ops) throw new AgentError("rejected", "The photo couldn't be placed.");
+    ctx.edit(() => st().apply(ops, { label: "Place the photo" }));
+    return { placement: venue().photo!.placement, revision: currentRevision() };
+  },
+});

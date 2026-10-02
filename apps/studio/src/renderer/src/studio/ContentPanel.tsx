@@ -75,7 +75,8 @@ export const ContentPanel = () => {
   const comp = currentComp(useStudio.getState());
   if (!comp) return null;
   const venue = activeVenue({ project });
-  const assets = Object.values(project.assets).filter((a) => a.id !== venue?.referenceAssetId);
+  // The building photo and its placed copy are the tracing guide, not content.
+  const assets = Object.values(project.assets).filter((a) => a.id !== venue?.referenceAssetId && a.id !== venue?.photo?.assetId && a.purpose !== "venue-reference");
   const areas = venue ? venue.regionOrder.filter((id) => venue.regions[id]?.path.closed && venue.regions[id]?.kind !== "exclusion") : [];
   const groups = venue ? Object.values(venue.groups) : [];
 

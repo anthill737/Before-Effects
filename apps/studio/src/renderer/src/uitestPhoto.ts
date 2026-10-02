@@ -85,7 +85,7 @@ export const PHOTO_STEPS: Record<string, () => Promise<{ ok: boolean; note?: str
       fr.onload = () => res(String(fr.result));
       fr.readAsDataURL(blob);
     });
-    const ok = await createProjectFromPhoto({ path: photoPath, dataUrl });
+    const ok = await createProjectFromPhoto({ path: photoPath, dataUrl }, { width: HOUSE.w, height: HOUSE.h });
     await until(() => !!document.querySelector("svg.trace") && !!document.querySelector(".photo-underlay"), 5000);
     const v = venue();
     return { ok: ok && st().step === "space" && v.canvas.width === 1600 && !!document.querySelector(".photo-underlay"), note: `venue canvas ${v.canvas.width}×${v.canvas.height}; photo copied to ${st().project!.assets[v.referenceAssetId!]?.path}`, settle: 900 };

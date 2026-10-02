@@ -295,7 +295,9 @@ struct U { ambient: f32, exposure: f32, refOpacity: f32, _p: f32 };
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let light = textureSampleLevel(content, samp, i.uv, 0.0).rgb;
-  let albedo = srgb_to_linear(textureSampleLevel(reference, samp, i.uv, 0.0).rgb);
+  let refc = textureSampleLevel(reference, samp, i.uv, 0.0);
+  // Outside the photo (bars around a fitted photo) there's no surface to light.
+  let albedo = srgb_to_linear(refc.rgb) * refc.a;
   // Lift dark surfaces slightly so projected light stays visible on very dark photos.
   let surface = mix(vec3f(0.18), albedo, u.refOpacity) * 1.6;
   let rgb = surface * (u.ambient + light * u.exposure);

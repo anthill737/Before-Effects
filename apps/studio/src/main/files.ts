@@ -1,11 +1,12 @@
 /** Files, dialogs, encoding and health checks for the UI. */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { availablePresets, EncodeSession, type EncodeSpec, findFfmpegSync, MediaError, probe, type VerifyExpectation, verifyOutput } from "@be/media";
 import type { AppPaths, HealthReport } from "../shared/api.ts";
 import { log, logDir } from "./log.ts";
+import { decodeHeif, isHeif } from "./heic.ts";
 import { running } from "./processes.ts";
 
 export const paths = (): AppPaths => {
@@ -155,18 +156,18 @@ export const registerFileIpc = () => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const r = await dialog.showOpenDialog(win!, {
       title: "Choose a photo of your building or object",
-      filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "bmp"] }],
+      filters: [{ name: "Photos", extensions: ["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif", "hif"] }],
       properties: ["openFile"],
     });
     if (r.canceled || !r.filePaths[0]) return null;
     const p = r.filePaths[0];
-    const ext = p.split(".").pop()!.toLowerCase();
-    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "bmp" ? "image/bmp" : "image/jpeg";
-    return { path: p, dataUrl: `data:${mime};base64,${readFileSync(p).toString("base64")}` };
+    // The photo is read through importAsset (which also decodes HEIC); no need to send it inline.
+    return { path: p, dataUrl: "" };
   });
 
   // Copy an imported file into the project's media folder; the original is never modified.
-  ipcMain.handle("files:importAsset", (_e, src: string, projectId: string) => {
+  // HEIC/HEIF photos are kept as imported and decoded to a PNG working copy beside them.
+  ipcMain.handle("files:importAsset", async (_e, src: string, projectId: string) => {
     const dir = join(paths().media, projectId.replace(/[^\w.-]+/g, "_"));
     mkdirSync(dir, { recursive: true });
     const base = basename(src) || "media";
@@ -178,7 +179,12 @@ export const registerFileIpc = () => {
     }
     copyFileSync(src, target);
     log(`imported ${src} → ${target}`);
-    return target;
+    if (isHeif(target)) {
+      const png = join(dirname(target), `${basename(target, extname(target))} (decoded).png`);
+      const r = await decodeHeif(target, png);
+      return { path: r.path, sourceFile: target, width: r.width, height: r.height, hasAlpha: r.hasAlpha, decoder: r.decoder, notes: r.notes };
+    }
+    return { path: target };
   });
 
   ipcMain.handle("files:chooseFolder", async (e, title?: string) => {
@@ -218,8 +224,8 @@ export const registerFileIpc = () => {
   ipcMain.handle("files:chooseFiles", async (e, kind: "media" | "image" | "audio" | "aep") => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const filters = {
-      media: [{ name: "Images, videos and sound", extensions: ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "m4v", "webm", "mkv", "avi", "mxf", "wav", "mp3", "m4a", "aac", "flac", "ogg"] }],
-      image: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "bmp"] }],
+      media: [{ name: "Images, videos and sound", extensions: ["jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "hif", "mp4", "mov", "m4v", "webm", "mkv", "avi", "mxf", "wav", "mp3", "m4a", "aac", "flac", "ogg"] }],
+      image: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif", "hif"] }],
       audio: [{ name: "Sound", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg"] }],
       aep: [{ name: "After Effects project or export", extensions: ["aep", "aepx", "json"] }],
     }[kind];

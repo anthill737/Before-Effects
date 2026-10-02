@@ -132,7 +132,7 @@ export const openAfterEffectsProject = async (given?: string): Promise<boolean> 
 
     // Keep the original next to the show's media, untouched, with the report.
     set({ detail: "Saving the report…" });
-    const keptCopy = await window.be.files.importAsset(file, project.id);
+    const keptCopy = (await window.be.files.importAsset(file, project.id)).path;
     const reportPath = `${dir(keptCopy)}\\After Effects import report.txt`;
     await window.be.files.writeBinary(reportPath, new TextEncoder().encode(reportText(report, keptCopy)));
 

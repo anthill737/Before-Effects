@@ -33,7 +33,7 @@ export const areaContent: RecipeDef = {
   category: "patterns",
   description: "A picture or video placed in the selected areas: repeated in each one, or spanning across them.",
   keywords: ["picture", "photo", "image", "video", "clip", "movie", "media", "footage", "content", "atmosfx", "assign", "area", "place", "put"],
-  suits: ["window", "door", "wall", "column", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "wall", "column", "custom"],
   defaultSeconds: 10,
   params: [
     { key: "assetId", label: "Picture or video", control: "media", default: "", primary: true, accepts: ["image", "video"], drives: ["source", "transform", "masks"] },

@@ -140,7 +140,11 @@ export const similarRegions = (project: Project, regionId: string): string[] => 
 export const KIND_LABEL: Record<RegionKind, [string, string]> = {
   window: ["window", "windows"],
   door: ["door", "doors"],
+  garage: ["garage door", "garage doors"],
   wall: ["wall", "walls"],
+  roof: ["roof", "roofs"],
+  vent: ["vent", "vents"],
+  light: ["light fixture", "light fixtures"],
   roofline: ["roofline", "rooflines"],
   column: ["column", "columns"],
   edge: ["edge", "edges"],

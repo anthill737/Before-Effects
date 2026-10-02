@@ -90,7 +90,7 @@ export const crackRebuild: RecipeDef = {
   category: "cracks",
   description: "Glowing cracks spread across the selected parts, the pieces fall away into darkness, then fly back and rebuild.",
   keywords: ["crack", "cracks", "break", "shatter", "smash", "crumble", "fall", "explode", "destroy", "rebuild", "pieces", "collapse"],
-  suits: ["window", "door", "wall", "column", "custom"],
+  suits: ["window", "door", "garage", "roof", "vent", "wall", "column", "custom"],
   defaultSeconds: 8,
   params: [
     { key: "color", label: "Crack light", control: "color", default: [1, 0.82, 0.55, 1], primary: true, drives: ["source.contents"] },

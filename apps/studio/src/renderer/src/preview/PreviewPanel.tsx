@@ -24,7 +24,8 @@ import { dropOnArea, isContentDrag, readDragPayload } from "../studio/assign.ts"
 import { areaAt } from "../space/areaEdit.ts";
 
 const VIEWS: Array<{ id: View; label: string; hint: string }> = [
-  { id: "show", label: "Show preview", hint: "The show exactly as it will be exported" },
+  { id: "show", label: "Show preview", hint: "The show exactly as it will be exported (projected light only)" },
+  { id: "venue", label: "On the house", hint: "Simulated: your content lit onto the house photo, as the audience would see it. The photo is never exported or sent to the projector." },
   { id: "3d", label: "3D projection", hint: "Your content on the building — drag to orbit, right-drag to pan, wheel to zoom" },
   { id: "projector", label: "Projector output", hint: "The image the projector will output, with its alignment and output corrections" },
 ];
@@ -252,9 +253,9 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
             style={{ width: stage.w, height: stage.h, imageRendering: s.zoom !== "fit" && s.zoom >= 2 ? "pixelated" : "auto", mixBlendMode: tracing && photoUrl ? "screen" : undefined }}
             aria-label={VIEWS.find((v) => v.id === s.view)?.label}
           />
-          {s.view === "show" && venue && <RegionOverlay size={stage} interactive={role === "editor"} />}
+          {(s.view === "show" || s.view === "venue") && venue && <RegionOverlay size={stage} interactive={role === "editor"} />}
           {tracing && <TracingLayer size={stage} />}
-          {s.view === "show" && venue && role === "editor" && !tracing && <ActionBar size={stage} />}
+          {(s.view === "show" || s.view === "venue") && venue && role === "editor" && !tracing && <ActionBar size={stage} />}
           {s.view === "projector" && projector && role === "editor" && <CalibrationOverlay size={stage} />}
           {s.view === "3d" && <OrbitControls />}
           {s.view === "projector" && !projector && <div className="canvas-note">Add a projector in “Areas” to see its output.</div>}
