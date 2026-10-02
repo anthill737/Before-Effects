@@ -67,6 +67,17 @@ let revision = 0;
 const revLog: RevisionEntry[] = [];
 export const currentRevision = () => revision;
 
+/** Agent calls in progress: their own edits count as one revision when the call finishes. */
+const deferred = new Map<string, { label: string; changed: boolean }>();
+const bump = (label: string, source: string) => {
+  revision++;
+  const s = useStudio.getState();
+  const entry: RevisionEntry = { revision, label, source, at: new Date().toISOString() };
+  revLog.push(entry);
+  if (revLog.length > 1000) revLog.splice(0, revLog.length - 1000);
+  window.be.agent.event("revision", { ...entry, dirty: s.dirty, scene: s.compId });
+};
+
 let started = false;
 /** Track revisions and forward editor events to connected agents. Call once in the editor window. */
 export const startAgentHost = (): (() => void) => {
@@ -74,13 +85,13 @@ export const startAgentHost = (): (() => void) => {
   started = true;
   const offStore = useStudio.subscribe((s, prev) => {
     if (s.version !== prev.version || s.history !== prev.history) {
-      revision++;
-      const tx = (s as unknown as { lastTx?: { label: string; source: string } | null }).lastTx;
+      const tx = (s as unknown as { lastTx?: { label: string; source: string; group?: string } | null }).lastTx;
       const opened = s.history !== prev.history;
-      const entry: RevisionEntry = { revision, label: opened ? "Opened a show" : (tx?.label ?? "Change"), source: opened ? "system" : (tx?.source ?? "user"), at: new Date().toISOString() };
-      revLog.push(entry);
-      if (revLog.length > 1000) revLog.splice(0, revLog.length - 1000);
-      window.be.agent.event("revision", { ...entry, dirty: s.dirty, scene: s.compId });
+      const mine = !opened && tx?.group ? deferred.get(tx.group) : undefined;
+      if (mine) {
+        mine.changed = true;
+        mine.label = tx!.label;
+      } else bump(opened ? "Opened a show" : (tx?.label ?? "Change"), opened ? "system" : (tx?.source ?? "user"));
     }
     if (s.selection !== prev.selection) window.be.agent.event("selection", { regionIds: s.selection.regionIds, effectId: s.selection.recipeId, layerId: s.selection.layerId });
     if (s.compId !== prev.compId) window.be.agent.event("scene", { sceneId: s.compId });
@@ -141,6 +152,8 @@ export const dispatch = async (call: AgentCall): Promise<AgentCallResult> => {
   const raw = (call.params ?? {}) as Record<string, unknown>;
   const { expectRevision, ...params } = raw;
   const scope: AgentScope = { group: `agent:${call.requestId}`, errors: [], notes: [], txIds: [] };
+  const batch = { label: "", changed: false };
+  deferred.set(scope.group, batch);
   const ctx: MethodContext = {
     requestId: call.requestId,
     edit: (fn) => {
@@ -160,6 +173,8 @@ export const dispatch = async (call: AgentCall): Promise<AgentCallResult> => {
     }
     const result = await runOne(def, validate(def, params), ctx);
     if (scope.errors.length) throw new AgentError("rejected", scope.errors.join(" "));
+    deferred.delete(scope.group);
+    if (batch.changed) bump(batch.label, "agent");
     if (scope.txIds.length) {
       const h = useStudio.getState().history;
       const tx = h?.transactions().find((t) => t.id === scope.txIds.at(-1));
@@ -169,7 +184,11 @@ export const dispatch = async (call: AgentCall): Promise<AgentCallResult> => {
     return { ok: true, result: result ?? null, revision, ...(scope.notes.length ? { notes: scope.notes } : {}) } as AgentCallResult;
   } catch (e) {
     rollback(scope);
+    // Rolled back completely: nothing changed, so the revision stays (a partial rollback via revert counts itself).
+    deferred.delete(scope.group);
     return { ok: false, error: describeError(e), revision };
+  } finally {
+    deferred.delete(scope.group);
   }
 };
 

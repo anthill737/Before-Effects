@@ -240,8 +240,11 @@ await step("2. inspect the open project (start the house show if none)", async (
 });
 
 await step("3. create an area and assign media", async () => {
+  const revBefore = (await mcp.call("project_get", {})).data.result.revision;
   const a = await mcp.call("areas_create", { kind: "window", name: "Front window", rect: { x: 1316, y: 460, w: 292, h: 218 } });
   assert(a.ok, JSON.stringify(a.data));
+  // One call (create + name it) is one undo step and one revision.
+  assert(a.data.revision === revBefore + 1, `revision ${revBefore} → ${a.data.revision}, expected +1`);
   windowId = a.data.result.area.id;
   const imp = await mcp.call("assets_import", { paths: [SWIRL, PATTERN] });
   assert(imp.ok, JSON.stringify(imp.data));
