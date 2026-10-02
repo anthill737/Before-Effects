@@ -1,0 +1,1012 @@
+# Blur & Sharpen — Before Effects capability register
+# Sources: S02 effect list + support matrix (Blur & Sharpen rows; Obsolete rows for Reduce Interlace Flicker), S36 Blur and Sharpen effects page, S01 Cycore plugins and Obsolete effects pages, brief §11H, §6, §14, §15. Live pages read 2026-10-01 through a browser session (WebFetch was blocked with HTTP 403). The Cycore pages give one-line summaries only, so CC control lists come from product knowledge.
+# Shared rule: radii are in composition pixels and are scaled with preview resolution, so a draft preview matches export. Working buffers are rgba16float, scene-linear and premultiplied.
+
+- id: fx.blur-sharpen.edge-overscan-policy
+  name: Blur edges and overscan
+  sources:
+    - ref: brief
+      item: "§11H — define edge handling and overscan so large blurs do not clip unexpectedly"
+      category: Blur and sharpness (product requirement)
+      checked: true
+    - ref: S36
+      item: Repeat Edge Pixels option (About Blur & Sharpen effects)
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Use big blurs and glows without hard-clipped edges or dark borders, and choose whether a layer's edge fades out, repeats its edge pixels, mirrors, or blurs into real content beyond the frame.
+  projection_example: >-
+    A 200 px glow on a roofline near the top of the composition continues softly past the frame edge instead of ending in a straight cut. The output mask still keeps the glow off the neighbouring building.
+  controls:
+    - { name: "Edge mode (Transparent, Repeat Edge Pixels, Mirror, Use overscan content)", type: "enum", animatable: false }
+    - { name: "Overscan margin", type: "enum (auto) or float (px)", animatable: false }
+    - { name: "Clip to layer bounds", type: "bool", animatable: false }
+  animation: >-
+    Not animatable; set per effect, with a project default.
+  dependencies: [proj.effect-stack, proj.composition, preview.cache, out.output-mask, map.region]
+  implementation: >-
+    Every pass declares bounds expansion as a function of its parameters (Gaussian 3σ, box n·r, lens max radius, directional L/2). The compositor propagates the region of interest upstream (request = output ROI expanded by the kernel footprint) and renders into oversized rgba16float buffers, so nothing clips until the final composite. Compositions can render an overscan margin beyond the frame for frame-edge blurs. Edge modes map to sampler addressing: clamp-to-edge for Repeat, mirror-repeat for Mirror, and a WGSL-emulated transparent border, because WebGPU has no border colour. Region-confined blurs clip against map.region masks. Oversized regions are tiled under a VRAM budget.
+  io: >-
+    Overscan is internal; exported frames are cropped to the output size. The output mask is still applied downstream.
+  limitations: >-
+    The GPU maximum texture size (8192 or 16384) caps the expanded region; beyond that, the pyramid path runs at reduced resolution and the UI says so. Creative overscan never bypasses out.output-mask.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      No action needed. Blurs and glows "just don't clip". The edge choice sits under More controls → Edges.
+    defaults: >-
+      Repeat Edge Pixels for full-frame footage. Transparent for shapes, text and regions. Auto overscan sized from the declared bounds expansion.
+    automation: >-
+      Picks the edge mode from the layer type. Expands bounds automatically. Warns when the GPU limit forces reduced resolution.
+    usability_check: >-
+      A first-time user adds a large glow to a shape touching the frame edge, and no hard edge or dark border appears in preview or export, with no setting changed.
+  acceptance: >-
+    AS-1 and mini scene "edge-glow": a 300 px blur at the frame edge shows no clipping or darkening; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.focus-on-region
+  name: Focus on a region (selective focus)
+  sources:
+    - ref: brief
+      item: "§11H — depth/lens-style and variable-map blurs; §10 — depth-of-field compositing"
+      category: Blur and sharpness (product requirement)
+      checked: true
+  artist_can: >-
+    Keep one window, door or feature sharp while the rest of the building softens, and move the focus from one feature to another over time.
+  projection_example: >-
+    Before the reveal, everything but the central doorway goes soft to draw the audience's eye, then the focus racks to the clock tower.
+  controls:
+    - { name: "Focus target", type: "region-ref or point2d", animatable: true }
+    - { name: "Blur amount", type: "float", animatable: true }
+    - { name: "Falloff distance", type: "float", animatable: true }
+    - { name: "Focus change time", type: "time", animatable: false }
+    - { name: "Look (Soft, Lens bokeh)", type: "enum", animatable: false }
+    - { name: "Keep blur inside each region", type: "bool", animatable: false }
+  animation: >-
+    Target, amount and falloff keyframable. Changing the target generates a smooth rack-focus transition.
+  dependencies: [map.region, map.model-3d, pass.depth, fx.blur-sharpen.camera-lens-blur, fx.blur-sharpen.compound-blur, ux.recipe-engine, anim.keyframe.core]
+  implementation: >-
+    Recipe plus a map generator. The blur map is the distance from the target: a jump-flood distance field over the map.region raster, venue-space 3D distance when map.model-3d exists, or pass.depth for 3D scenes. That map drives Camera Lens Blur (Lens look) or the pyramid variable blur from Compound Blur (Soft look). A rack focus interpolates between two maps. Temporal: none. Bounds: those of the underlying blur. Precision: distance field in r32float.
+  io: >-
+    none
+  limitations: >-
+    Region distance is 2D unless venue geometry exists, so a far window and a near one at the same screen distance blur alike in 2D mode.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Select a window or feature → "Focus on this". Select another and choose "Move focus here" to rack focus.
+    defaults: >-
+      Soft look, blur = 1.5% of the composition diagonal, falloff = 25% of the building width, 1 s rack.
+    automation: >-
+      Builds the distance map, adds the blur and keys the rack focus.
+    usability_check: >-
+      A first-time user makes everything but a chosen door go soft, then moves the focus to another feature, in at most 4 actions and under 45 s.
+  acceptance: >-
+    AS-2 support scene: focus racks between two regions; preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.bilateral-blur
+  name: Bilateral Blur
+  sources:
+    - ref: S02
+      item: Bilateral Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Bilateral Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Smooth flat areas while mostly keeping edges, for a soft, dreamy, painterly surface (similar to Photoshop's Surface Blur).
+  projection_example: >-
+    Smooths a photographed stone texture into a soft painted look before it is projected back onto the same stone.
+  controls:
+    - { name: "Radius", type: "float", animatable: true }
+    - { name: "Threshold", type: "float", animatable: true }
+    - { name: "Colorize", type: "bool", animatable: false }
+  animation: >-
+    Radius and Threshold keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    Bilateral-grid pass (splat into a downsampled x, y, intensity grid; blur; slice), so cost is near-constant with radius. With Colorize off, it operates on luminance and outputs a monochrome image (per S36); with Colorize on, each channel uses range weights. Temporal: none. Bounds: + Radius. Precision: grid in rgba16float with f32 weights.
+  io: >-
+    none
+  limitations: >-
+    The grid approximation differs slightly from a brute-force bilateral at very small radii; small radii use the brute-force path.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Painterly smooth" look → More controls.
+    defaults: >-
+      Radius 8, Threshold 20, Colorize on.
+    automation: >-
+      Scales the radius to the region size.
+    usability_check: >-
+      A first-time user applies a painterly smooth look to a selected surface in at most 3 actions.
+  acceptance: >-
+    Mini scene "stone-paint": result within tolerance of a brute-force bilateral reference.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.box-blur
+  name: Box Blur
+  sources:
+    - ref: S36
+      item: Box Blur
+      category: "Blur & Sharpen"
+      checked: true
+    - ref: S02
+      item: Box Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+  artist_can: >-
+    Blur with an adjustable number of box-filter passes (Iterations), from boxy to Gaussian-smooth.
+  projection_example: >-
+    Same uses as Fast Box Blur.
+  controls:
+    - { name: "Blur Radius", type: "float", animatable: true }
+    - { name: "Iterations", type: "int", animatable: true }
+    - { name: "Blur Dimensions", type: "enum", animatable: false }
+    - { name: "Repeat Edge Pixels", type: "bool", animatable: false }
+  animation: >-
+    As Fast Box Blur.
+  dependencies: [fx.blur-sharpen.fast-box-blur]
+  implementation: >-
+    Served by the Fast Box Blur pass. The legacy identity (match name "ADBE Box Blur") maps to it on import.
+  io: >-
+    none
+  limitations: >-
+    S36 still documents Box Blur (8, 16 and 32-bpc) and says the Fast Box Blur match name is ADBE Box Blur2, while the old match name ADBE Box Blur still applies it under the old name Box Blur. The S02 matrix lists only Fast Box Blur, so the Box Blur support data there is unknown. Controls and outcome are identical, so nothing useful is lost.
+  disposition: superseded
+  superseded_by: fx.blur-sharpen.fast-box-blur
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Soften" recipe, the same as Fast Box Blur.
+    defaults: >-
+      As Fast Box Blur.
+    automation: >-
+      A preset or script naming Box Blur resolves to Fast Box Blur.
+    usability_check: >-
+      Covered by the Fast Box Blur check.
+  acceptance: >-
+    Covered by Fast Box Blur acceptance.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.camera-lens-blur
+  name: Camera Lens Blur
+  sources:
+    - ref: S02
+      item: Camera Lens Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Camera Lens Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Make a real-lens out-of-focus look with shaped bokeh (iris blades, roundness, diffraction rings), glowing highlights, and focus that varies across the image from a map or depth.
+  projection_example: >-
+    Projected city-night footage on the facade turns into big coloured bokeh balls while one window stays in focus.
+  controls:
+    - { name: "Blur Radius (up to 500)", type: "float", animatable: true }
+    - { name: "Iris Properties (Shape, Roundness, Aspect Ratio, Rotation, Diffraction Fringe)", type: "group", animatable: true }
+    - { name: "Blur Map (Layer, Channel, Placement, Blur Focal Distance, Invert Blur Map)", type: "group", animatable: true }
+    - { name: "Highlight (Gain, Threshold, Saturation)", type: "group", animatable: true }
+    - { name: "Edge Behavior (Repeat Edge Pixels)", type: "bool", animatable: false }
+    - { name: "Use Linear Working Space", type: "bool", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable; Blur Focal Distance is the rack-focus control.
+  dependencies: [pass.depth, 3d.camera, proj.layer, fx.blur-sharpen.edge-overscan-policy, color.management]
+  implementation: >-
+    The circle of confusion per pixel comes from the blur map channel or pass.depth relative to the Blur Focal Distance. A 16×16 tile max-CoC is computed and dilated. A half-resolution gather uses a polygonal iris kernel (blades, roundness, rotation, aspect) sampled on rings, with near and far fields kept separate so sharp foreground does not leak. Diffraction fringe is a ring-weighted kernel. A highlight pre-pass multiplies pixels above Threshold by Gain, with Saturation control. A CoC-aware upsample follows. Temporal: none. Bounds: + Blur Radius. Precision: scene-linear rgba16float, with f32 accumulation. Because the working space is already linear, "Use Linear Working Space" defaults on; switching it off emulates gamma-space After Effects looks.
+  io: >-
+    Reads depth from EXR or Cryptomatte workflows via pass.depth.
+  limitations: >-
+    Gather-based bokeh cannot show content hidden behind a sharp foreground object (2.5D limitation); true 3D depth of field belongs to 3d.camera. S36 notes it replaces Lens Blur.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Focus on…" (Lens look) and the "Dreamy bokeh" look.
+    defaults: >-
+      Hexagon iris with roundness 50%, radius 20, highlights Gain 20 / Threshold 0.9 / Saturation 80.
+    automation: >-
+      Uses depth automatically when the layer is a 3D render. Otherwise builds a region-distance map.
+    usability_check: >-
+      A first-time user turns a night-city clip into bokeh with one window sharp in at most 4 actions and under 60 s.
+  acceptance: >-
+    Mini scene "night-bokeh": 32-bpc highlight bokeh retains colour, and export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.camera-shake-deblur
+  name: Camera-Shake Deblur
+  sources:
+    - ref: S02
+      item: Camera-Shake Deblur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Camera-Shake Deblur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Repair frames blurred by camera shake by rebuilding them from sharper neighbouring frames.
+  projection_example: >-
+    Handheld footage of the venue, filmed for a "the building watches itself" sequence, is stabilised and then deblurred so it holds up at 4K on the wall.
+  controls:
+    - { name: "Blur Duration (frames)", type: "int", animatable: false }
+    - { name: "Deblur Method (Standard, High Quality)", type: "enum", animatable: false }
+    - { name: "Strength (100-200%)", type: "percent", animatable: true }
+    - { name: "Shake Sensitivity", type: "float", animatable: false }
+  animation: >-
+    Strength keyframable.
+  dependencies: [fx.time.optical-flow-engine, fx.time.temporal-sampling-contract, fx.distort.warp-stabilizer, preview.cache]
+  implementation: >-
+    A per-frame sharpness score (variance of the Laplacian on luma) is computed and cached for the clip. For frames below the Shake Sensitivity threshold, the sharpest frames within ±Blur Duration are warped into place with optical flow (High Quality uses the sidecar backend) and blended with confidence weights scaled by Strength. Temporal: reads frames t ± Blur Duration plus their flows. Bounds: unchanged. Precision: rgba16float.
+  io: >-
+    Uses flow caches.
+  limitations: >-
+    Needs nearby sharp frames. S36 recommends stabilising first and stacking low-strength copies for hard shots; Before Effects does both through the recipe.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Fix shaky footage" recipe, which stabilises and then deblurs.
+    defaults: >-
+      Standard method, Blur Duration 3, Strength 100%, auto sensitivity.
+    automation: >-
+      Adds the stabiliser before deblur. Analyses sharpness in the background. Flags frames it could not repair.
+    usability_check: >-
+      A first-time user fixes a shaky handheld clip in at most 2 actions, excluding analysis time, which is measured separately.
+  acceptance: >-
+    Mini scene "handheld-fix": the median Laplacian sharpness of flagged frames increases by at least 25%.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.channel-blur
+  name: Channel Blur
+  sources:
+    - ref: S02
+      item: Channel Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Channel Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Blur the red, green, blue and alpha channels by different amounts, for colour-fringe softness or to clean noise in one channel.
+  projection_example: >-
+    Blurs only the alpha of a hard-edged logo for a soft-edged mask on brick, while the colour stays crisp.
+  controls:
+    - { name: "Red / Green / Blue / Alpha Blurriness", type: "float[4]", animatable: true }
+    - { name: "Edge Behavior (Repeat Edge Pixels)", type: "bool", animatable: false }
+    - { name: "Blur Dimensions", type: "enum", animatable: false }
+  animation: >-
+    All blurriness values keyframable and expression-linkable.
+  dependencies: [fx.blur-sharpen.gaussian-blur, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    The Gaussian pass with a per-channel σ vector, using the pyramid path per channel when large. RGB is blurred un-premultiplied, alpha separately, then the result is re-premultiplied to avoid dark halos. Temporal: none. Bounds: + 3 × max σ. Precision: rgba16float with f32 accumulation.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Soften" → More controls → "Per colour".
+    defaults: >-
+      All channels 0 except the one chosen.
+    automation: >-
+      none
+    usability_check: >-
+      A first-time user softens only a logo's edge without blurring its colour, guided by the "Soft edge only" preset, in at most 3 actions.
+  acceptance: >-
+    Mini scene "soft-alpha": no dark fringe on an alpha-only blur over white.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.compound-blur
+  name: Compound Blur
+  sources:
+    - ref: S02
+      item: Compound Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Compound Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Blur different parts of a layer by different amounts using another layer's brightness as a blur map, for smudges, heat haze or smoke-obscured areas.
+  projection_example: >-
+    An animated turbulent-noise map makes a wall look as though seen through rising heat haze.
+  controls:
+    - { name: "Blur Layer", type: "layer-ref", animatable: false }
+    - { name: "Maximum Blur", type: "float", animatable: true }
+    - { name: "Stretch Map To Fit", type: "bool", animatable: false }
+    - { name: "Invert Blur", type: "bool", animatable: false }
+  animation: >-
+    Maximum Blur keyframable; the blur layer may animate.
+  dependencies: [proj.layer, fx.blur-sharpen.gaussian-blur, fx.blur-sharpen.edge-overscan-policy, fx.noise-grain.turbulent-noise]
+  implementation: >-
+    Variable-radius blur. A Gaussian pyramid is built once, then each pixel samples trilinearly at level log2(r) with r = map × Maximum Blur (Fast). Final quality uses a summed-area table (rgba32float) variable box gather, iterated twice. Reads the blur layer at t, after its effects (an improvement on After Effects, where the map is the layer source). Temporal: none. Bounds: + Maximum Blur. Precision: f32 SAT and rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    The pyramid mode slightly overweights sharp map transitions; Final mode is exact.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Heat haze" look, and "Soften using a pattern" under Soften.
+    defaults: >-
+      Generated turbulent-noise map, Maximum Blur 12.
+    automation: >-
+      Generates and animates the map layer; no manual layer needed.
+    usability_check: >-
+      A first-time user applies a heat-haze look to a wall in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "heat-haze": Fast and Final modes differ by less than tolerance on reference maps.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.directional-blur
+  name: Directional Blur
+  sources:
+    - ref: S02
+      item: Directional Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Directional Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Streak a layer in one direction to suggest fast motion.
+  projection_example: >-
+    Text streaks horizontally as it whooshes across the facade.
+  controls:
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Blur Length", type: "float", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable; can be linked to layer velocity.
+  dependencies: [proj.effect-stack, fx.blur-sharpen.edge-overscan-policy, expr.engine]
+  implementation: >-
+    Line-integral blur along a unit vector, symmetric about the pixel (0° and 180° are equal, per S36). Iterated jump passes with doubling tap spacing (4 to 8 bilinear taps each) give O(log L) cost. Temporal: none. Bounds: + L/2 along the direction. Precision: f32 accumulation.
+  io: >-
+    none
+  limitations: >-
+    Not true motion blur (no time sampling); see the Time effects for motion blur.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Motion streak" look; drag the arrow on the canvas for direction and length.
+    defaults: >-
+      Direction from the layer's motion path when animated, length 30 px.
+    automation: >-
+      An optional expression links the streak to the layer's speed.
+    usability_check: >-
+      A first-time user adds a streak matching a moving title's direction in at most 3 actions.
+  acceptance: >-
+    Mini scene "title-whoosh": the O(log L) path matches a brute-force reference within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.fast-box-blur
+  name: Fast Box Blur
+  sources:
+    - ref: S02
+      item: Fast Box Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Fast Box Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Blur quickly at any size, with Iterations controlling boxy versus smooth, including very large soft washes.
+  projection_example: >-
+    A huge 400 px blur turns a projected video into a soft ambient colour wash behind the main content.
+  controls:
+    - { name: "Blur Radius", type: "float", animatable: true }
+    - { name: "Iterations", type: "int", animatable: true }
+    - { name: "Blur Dimensions (Horizontal and Vertical, Horizontal, Vertical)", type: "enum", animatable: false }
+    - { name: "Repeat Edge Pixels", type: "bool", animatable: false }
+  animation: >-
+    Radius and Iterations keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    Each iteration is a separable running-sum box filter in compute, using per-tile local sums so the f32 sums never cancel catastrophically. Cost per pixel is independent of radius; three iterations approximate a Gaussian. Temporal: none. Bounds: + n·r per axis. Precision: f32 sums, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    S36 says it can replicate the Fast Blur (Legacy) result. Fast Blur (Legacy) itself belongs to the Obsolete category.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Soften" when the size is large or the quality is "Fast".
+    defaults: >-
+      Iterations 3.
+    automation: >-
+      "Soften" switches between Gaussian and Fast Box automatically by size and performance budget, and tells the user.
+    usability_check: >-
+      A first-time user makes a 400 px ambient wash in at most 3 actions, and preview stays at least 24 fps at 1080p.
+  acceptance: >-
+    Mini scene "ambient-wash": 3 iterations match a Gaussian of equal variance within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.gaussian-blur
+  name: Gaussian Blur
+  sources:
+    - ref: S02
+      item: Gaussian Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Gaussian Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Soften any layer smoothly, from a slight softening to a huge diffuse blur. It is also the building block of glows, soft masks and many looks.
+  projection_example: >-
+    Softens a light trace so the glow around the roofline reads as light rather than a hard line.
+  controls:
+    - { name: "Blurriness", type: "float", animatable: true }
+    - { name: "Blur Dimensions (Horizontal and Vertical, Horizontal, Vertical)", type: "enum", animatable: false }
+    - { name: "Repeat Edge Pixels", type: "bool", animatable: false }
+  animation: >-
+    Blurriness keyframable, expression-linkable and audio-drivable (for example, pulses on the beat).
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    Separable two-pass compute (rows then columns) with workgroup shared-memory tiles and f32 accumulation. For σ > 8 px it descends a 2× mip chain (Kawase/box prefilter) to the level where the residual σ ≤ 8, blurs there, and upsamples with a tent filter; this must match a full-resolution Gaussian within 1/1024 RMS. Temporal: current frame only. Bounds: + 3σ per blurred axis, or none with Repeat Edge Pixels (clamped). Precision: rgba16float premultiplied.
+  io: >-
+    none
+  limitations: >-
+    S36 notes it renders slightly differently from Gaussian Blur (Legacy), which is registered under the Obsolete category. The layer quality switch does not affect it, as in After Effects.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Soften" on any selection, with a single Amount slider. It is also used inside "Make it glow".
+    defaults: >-
+      Amount = 0.5% of the region diagonal. Edges follow the overscan policy.
+    automation: >-
+      Scales with preview resolution. Chooses the pyramid path for large sizes. Picks the edge mode.
+    usability_check: >-
+      A first-time user softens a selected layer in at most 3 actions and under 20 s, with no dark border in the result.
+  acceptance: >-
+    AS-1 (glow on the roofline trace) and mini scene "soft-trace": preview at half resolution matches export within tolerance.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: fx.blur-sharpen.lens-blur
+  name: Lens Blur (legacy)
+  sources:
+    - ref: S36
+      item: Lens Blur (predecessor named in the Camera Lens Blur section)
+      category: "Blur & Sharpen"
+      checked: true
+    - ref: S02
+      item: Lens Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+  artist_can: >-
+    The original lens-style blur; all of its outcomes are available in Camera Lens Blur.
+  projection_example: >-
+    Same uses as Camera Lens Blur.
+  controls:
+    - { name: "Iris and blur map controls (see Camera Lens Blur)", type: "group", animatable: true }
+  animation: >-
+    As Camera Lens Blur.
+  dependencies: [fx.blur-sharpen.camera-lens-blur]
+  implementation: >-
+    No separate pass. Legacy projects or presets naming it map to Camera Lens Blur with equivalent settings.
+  io: >-
+    none
+  limitations: >-
+    S36 says Lens Blur cannot be applied in After Effects CS5.5 or later, and that Camera Lens Blur replaces it with a larger radius (500), faster rendering and no multiprocessing restriction. Not in the S02 matrix.
+  disposition: superseded
+  superseded_by: fx.blur-sharpen.camera-lens-blur
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Not shown; "Focus on…" and "Dreamy bokeh" cover it.
+    defaults: >-
+      none
+    automation: >-
+      none
+    usability_check: >-
+      Covered by the Camera Lens Blur check.
+  acceptance: >-
+    Covered by Camera Lens Blur acceptance.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.radial-blur
+  name: Radial Blur
+  sources:
+    - ref: S02
+      item: Radial Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Radial Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Blur around a point as if the camera zoomed (rays bursting outward) or spun (circular swirl).
+  projection_example: >-
+    A zoom-burst blur centred on the doorway makes the facade appear to rush toward the audience.
+  controls:
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Type (Spin, Zoom)", type: "enum", animatable: false }
+    - { name: "Antialiasing (Best Quality) (Low, High)", type: "enum", animatable: false }
+  animation: >-
+    Amount and Center keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, fx.blur-sharpen.edge-overscan-policy, map.region]
+  implementation: >-
+    Zoom: cascaded multi-pass gather toward the centre (each pass N taps at geometric scale steps; three passes give N³ effective taps). Spin: the same in the angular domain via polar sampling. Temporal: none. Bounds: Zoom expands outward by Amount; Spin stays within the circumscribed circle. Precision: f32 accumulation. No grainy Draft mode; preview uses fewer passes and labels it.
+  io: >-
+    none
+  limitations: >-
+    The After Effects Draft-quality grain look is not reproduced by default; it can be had with an added noise option.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Zoom burst" and "Spin blur" looks; drag the centre on the canvas.
+    defaults: >-
+      Zoom, centred on the selected region, Amount 20.
+    automation: >-
+      Centres on the selected region.
+    usability_check: >-
+      A first-time user makes a zoom burst from a chosen door in at most 3 actions.
+  acceptance: >-
+    Mini scene "door-rush": cascade output matches a 512-tap reference within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.reduce-interlace-flicker
+  name: Reduce Interlace Flicker
+  sources:
+    - ref: S02
+      item: Reduce Interlace Flicker
+      category: Obsolete
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: Reduce Interlace Flicker (Obsolete effects page)
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Soften vertically to stop thin horizontal lines and fine detail from twittering on interlaced displays.
+  projection_example: >-
+    Possibly: thin horizontal architectural lines in content shimmer when scaled by a projector's scaler.
+  controls:
+    - { name: "Softness", type: "float", animatable: true }
+  animation: >-
+    Softness keyframable.
+  dependencies: [fx.blur-sharpen.gaussian-blur]
+  implementation: >-
+    Vertical-only Gaussian pass (σ = Softness). Temporal: none. Bounds: + 3σ vertically. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Decision 2026-10-02: kept for After Effects import fidelity (imported projects may use it), implemented as a vertical softening pass. Projectors are progressive, so it is not shown in the beginner library.
+
+    Open question 1: does any target output or source in this product involve interlaced signals or line-twitter, given that projectors and media servers are progressive? If not, this is superseded by Gaussian Blur with Blur Dimensions = Vertical. Open question 2 (register hygiene): S02 now lists this effect under Obsolete, and fx.obsolete.reduce-interlace-flicker already registers the same Adobe item as superseded by fx.blur-sharpen.gaussian-blur. Keep one entry; if the Obsolete entry is accepted, set this one to superseded with superseded_by fx.obsolete.reduce-interlace-flicker.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: F
+  beginner:
+    action: >-
+      If kept: "Fix shimmering thin lines" under Soften → More controls.
+    defaults: >-
+      Softness 1.
+    automation: >-
+      none
+    usability_check: >-
+      If kept: a first-time user removes shimmer from thin horizontal lines in at most 3 actions.
+  acceptance: >-
+    To be defined once relevance is resolved.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.sharpen
+  name: Sharpen
+  sources:
+    - ref: S02
+      item: Sharpen
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Sharpen
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Increase contrast where colours change, to crisp up soft footage or images.
+  projection_example: >-
+    Crisps up an upscaled archive photograph of the building before it is projected at 4K.
+  controls:
+    - { name: "Sharpen Amount", type: "float", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, color.management]
+  implementation: >-
+    3×3 Laplacian-weighted pass applied to a perceptual (log2) encoding of luminance and mapped back, avoiding the bright-edge halos that sharpening directly in linear light causes. Chroma is untouched. Temporal: none. Bounds: + 1 px. Precision: rgba16float with negative clamping.
+  io: >-
+    none
+  limitations: >-
+    Creative sharpening only. Compensating for projector softness or warp resampling belongs to the output stage, not here, so it is never applied twice.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Sharpen" with an Amount slider.
+    defaults: >-
+      Amount 15.
+    automation: >-
+      Warns when sharpening is stacked on already-sharpened sources.
+    usability_check: >-
+      A first-time user sharpens a soft photo in at most 3 actions and under 15 s.
+  acceptance: >-
+    Mini scene "archive-photo": no halo overshoot above 5% at high-contrast edges.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.smart-blur
+  name: Smart Blur
+  sources:
+    - ref: S02
+      item: Smart Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S36
+      item: Smart Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Blur smooth areas while keeping lines and edges crisp, or output just the edges as a line drawing.
+  projection_example: >-
+    Flattens a photo of the facade into clean cartoon-like colour areas, then "Edge Only" gives line art to trace with light.
+  controls:
+    - { name: "Radius", type: "float", animatable: true }
+    - { name: "Threshold", type: "float", animatable: true }
+    - { name: "Mode (Normal, Edge Only, Overlay Edge)", type: "enum", animatable: false }
+  animation: >-
+    Radius and Threshold keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, fx.blur-sharpen.edge-overscan-policy, tool.edge-trace]
+  implementation: >-
+    Sigma-filter pass: averages only neighbours within Threshold of the centre, as a separable approximation in two passes. Edge Only and Overlay Edge output a thresholded Sobel edge map (black/white, or white over the image). Temporal: none. Bounds: + Radius. Precision: rgba16float, where After Effects is limited to 8/16-bpc.
+  io: >-
+    none
+  limitations: >-
+    The separable approximation differs from a true 2D sigma filter on diagonal edges; Final quality uses the 2D path.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Cartoon smooth" look, and "Find edges for tracing" (Edge Only) inside the edge-trace tool.
+    defaults: >-
+      Radius 5, Threshold 25, Normal.
+    automation: >-
+      Edge Only output can seed edge tracing.
+    usability_check: >-
+      A first-time user gets a clean line drawing of a facade photo in at most 3 actions.
+  acceptance: >-
+    Mini scene "facade-lineart": edge output is stable across preview resolutions.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.unsharp-mask
+  name: Unsharp Mask
+  sources:
+    - ref: S02
+      item: Unsharp Mask
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: Unsharp Mask
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Sharpen with control over how wide the sharpened edge zone is and how big a difference counts as an edge, so noise is left alone.
+  projection_example: >-
+    Adds punch to brick texture detail without sharpening sensor noise in the sky.
+  controls:
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Radius", type: "float", animatable: true }
+    - { name: "Threshold", type: "float", animatable: true }
+  animation: >-
+    All controls keyframable and expression-linkable.
+  dependencies: [fx.blur-sharpen.gaussian-blur, color.management]
+  implementation: >-
+    Reuses the Gaussian pass: detail = I - G(I) on perceptually encoded luminance, with a soft-knee Threshold, added back × Amount. Temporal: none. Bounds: + 3σ. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Same output-stage caveat as Sharpen.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Sharpen" → More controls (Width, Ignore noise).
+    defaults: >-
+      Amount 50, Radius 1.5, Threshold 4.
+    automation: >-
+      Estimates the noise level to suggest a Threshold.
+    usability_check: >-
+      A first-time user sharpens texture without visibly sharpening noise, using the suggested threshold, in at most 3 actions.
+  acceptance: >-
+    Mini scene "brick-punch": noise in a flat patch increases by less than 5%.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.cc-cross-blur
+  name: CC Cross Blur
+  sources:
+    - ref: S02
+      item: CC Cross Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: CC Cross Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Blur horizontally and vertically by independent amounts with a cross-shaped kernel, blended back over the original in a chosen mode.
+  projection_example: >-
+    Gives bright windows a soft cross-shaped bloom, like a diffusion filter.
+  controls:
+    - { name: "Radius X", type: "float", animatable: true }
+    - { name: "Radius Y", type: "float", animatable: true }
+    - { name: "Transfer Mode", type: "enum", animatable: false }
+    - { name: "Repeat Edge Pixels", type: "bool", animatable: false }
+  animation: >-
+    Radii keyframable and expression-linkable.
+  dependencies: [fx.blur-sharpen.fast-box-blur, mask.blend-modes, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    Two independent 1D blurs (H and V) computed from the source, not applied in sequence, and averaged to a cross-shaped kernel, then composited over the source with the transfer mode. Temporal: none. Bounds: + Radius X horizontally, + Radius Y vertically. Precision: f32 accumulation.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Diffusion glow" look → More controls.
+    defaults: >-
+      Radius X 20, Radius Y 20, Screen.
+    automation: >-
+      none
+    usability_check: >-
+      A first-time user adds a cross-shaped bloom to bright windows in at most 3 actions.
+  acceptance: >-
+    Mini scene "window-bloom": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.cc-radial-blur
+  name: CC Radial Blur
+  sources:
+    - ref: S02
+      item: CC Radial Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S36
+      item: CC Radial Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Make zoom, rotate, fading and scratchy radial blur variations around a centre point.
+  projection_example: >-
+    A fading zoom blur pulses out from a sculpture's centre on each beat.
+  controls:
+    - { name: "Type (Straight Zoom, Fading Zoom, Centered, Rotate, Scratch, Rotate Fading)", type: "enum", animatable: false }
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Quality", type: "float", animatable: false }
+    - { name: "Center", type: "point2d", animatable: true }
+  animation: >-
+    Amount and Center keyframable, expression-linkable and audio-drivable.
+  dependencies: [fx.blur-sharpen.radial-blur]
+  implementation: >-
+    Shares the radial cascade pass. Fading types weight taps by distance; Scratch adds seeded hash jitter per ray (stateless, deterministic). Temporal: none. Bounds: + Amount outward. Precision: f32 accumulation.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Zoom burst" look → Style.
+    defaults: >-
+      Fading Zoom, Amount 30.
+    automation: >-
+      Centres on the selected region.
+    usability_check: >-
+      A first-time user switches the zoom-burst style to "fading" in at most 2 actions.
+  acceptance: >-
+    Mini scene "sculpture-pulse": same seed gives identical scratches after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.cc-radial-fast-blur
+  name: CC Radial Fast Blur
+  sources:
+    - ref: S02
+      item: CC Radial Fast Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S36
+      item: CC Radial Fast Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    A fast radial zoom blur whose Brightest mode turns bright areas into light-ray streaks bursting from a point.
+  projection_example: >-
+    Light rays stream out of the windows from a point behind the building as the sun "rises".
+  controls:
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Zoom (Standard, Brightest, Darkest)", type: "enum", animatable: false }
+  animation: >-
+    Center and Amount keyframable and expression-linkable.
+  dependencies: [fx.blur-sharpen.radial-blur, fx.stylize.glow]
+  implementation: >-
+    Radial cascade gather with average (Standard), max (Brightest) or min (Darkest) accumulation; max/min keep highlight energy for ray looks. Temporal: none. Bounds: + Amount outward. Precision: rgba16float, so values above 1.0 stay in the rays.
+  io: >-
+    none
+  limitations: >-
+    After Effects supports 8/16-bpc only; Before Effects processes in float, so highlights may look brighter than in After Effects.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Make it glow" → "Rays".
+    defaults: >-
+      Brightest, Amount 40, centre above the roofline.
+    automation: >-
+      Places the centre at the top centre of the building.
+    usability_check: >-
+      A first-time user adds light rays from windows in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "sunrise-rays": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.blur-sharpen.cc-vector-blur
+  name: CC Vector Blur
+  sources:
+    - ref: S02
+      item: CC Vector Blur
+      category: "Blur & Sharpen"
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S36
+      item: CC Vector Blur
+      category: "Blur & Sharpen"
+      checked: true
+  artist_can: >-
+    Smear the image along directions taken from a map layer, for brushed, swirling, painterly or flow-like streaks.
+  projection_example: >-
+    Brick texture smears along a swirling noise field, as if the wall turns to flowing paint.
+  controls:
+    - { name: "Type (Natural, Constant Length, Perpendicular, Direction Center, Direction Fading)", type: "enum", animatable: false }
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Angle Offset", type: "angle", animatable: true }
+    - { name: "Revolutions", type: "float", animatable: true }
+    - { name: "Vector Map / Property", type: "layer-ref + enum", animatable: false }
+    - { name: "Map Softness", type: "float", animatable: true }
+  animation: >-
+    All numeric controls keyframable and expression-linkable; the map may animate.
+  dependencies: [proj.layer, fx.blur-sharpen.gaussian-blur, fx.noise-grain.fractal-noise]
+  implementation: >-
+    Line-integral convolution. The vector field comes from the map's gradient (Natural, Perpendicular) or an angle encoding, pre-softened with the Gaussian pass. Each pixel gathers N samples along the RK2-integrated streamline. Temporal: reads the map at t. Bounds: + Amount. Precision: field in rg32float, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail blur or sharpen effect with no projection workflow behind it. Gaussian, directional, radial and fast box blur and the overscan policy stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Turn into flowing paint" look.
+    defaults: >-
+      Natural, generated fractal-noise map, Amount 15.
+    automation: >-
+      Generates and animates the map.
+    usability_check: >-
+      A first-time user makes a wall smear into flowing paint in at most 3 actions.
+  acceptance: >-
+    Mini scene "paint-flow": preview equals export.
+  status: not-started
+  evidence: []

@@ -1,0 +1,219 @@
+/**
+ * Background rendering. Exports are jobs in a queue, rendered one at a time by a hidden worker
+ * window (its own GPU device). Each job carries an immutable snapshot of the show, so editing
+ * continues while it renders and later edits never change a job already queued.
+ *
+ * Jobs report progress, can be cancelled and retried, check disk space first, are verified when
+ * done, and are kept in an export history. Delivery to Google Drive copies into the
+ * Drive-for-desktop folder; a failed copy can be retried without rendering again.
+ */
+import { copyFile, mkdir, statfs, stat } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { app, BrowserWindow, ipcMain } from "electron";
+import type { RenderJob, RenderJobSpec } from "../shared/api.ts";
+import { log } from "./log.ts";
+import { webPrefs } from "./windows.ts";
+
+const jobs: RenderJob[] = [];
+let worker: BrowserWindow | null = null;
+let workerReady = false;
+let current: string | null = null;
+let counter = 0;
+let modeArg = "studio";
+
+const historyFile = () => join(app.getPath("userData"), "render-history.json");
+
+const save = () => {
+  try {
+    const keep = jobs.filter((j) => j.state === "done" || j.state === "failed" || j.state === "cancelled").slice(-200).map(({ snapshot: _s, ...rest }) => rest);
+    writeFileSync(historyFile(), JSON.stringify(keep, null, 2));
+  } catch (e) {
+    log(`render history not saved: ${String(e)}`);
+  }
+};
+
+const load = () => {
+  try {
+    if (!existsSync(historyFile())) return;
+    for (const j of JSON.parse(readFileSync(historyFile(), "utf8")) as RenderJob[]) jobs.push({ ...j, snapshot: "" });
+  } catch {
+    /* history is a convenience */
+  }
+};
+
+const broadcast = () => {
+  const list = jobs.map(({ snapshot: _s, ...rest }) => rest);
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w !== worker) w.webContents.send("render:update", list);
+};
+
+const update = (id: string, changes: Partial<RenderJob>) => {
+  const j = jobs.find((x) => x.id === id);
+  if (!j) return;
+  Object.assign(j, changes);
+  broadcast();
+  if (changes.state && changes.state !== "rendering") save();
+};
+
+const ensureWorker = () => {
+  if (worker && !worker.isDestroyed()) return worker;
+  workerReady = false;
+  worker = new BrowserWindow({ show: false, width: 640, height: 360, webPreferences: webPrefs("render", modeArg) });
+  const url = process.env.ELECTRON_RENDERER_URL;
+  if (url) void worker.loadURL(`${url}#render`);
+  else void worker.loadFile(join(import.meta.dirname, "../renderer/index.html"), { hash: "render" });
+  worker.webContents.on("console-message", (d) => {
+    if (d.level === "error" || d.level === "warning") log(`[render:${d.level}] ${d.message}`);
+  });
+  worker.webContents.on("render-process-gone", (_e, d) => {
+    log(`render worker gone: ${d.reason}`);
+    if (current) update(current, { state: "failed", error: "The renderer stopped unexpectedly. Try again; if it keeps happening, lower the export size." });
+    current = null;
+    worker = null;
+    pump();
+  });
+  worker.on("closed", () => {
+    worker = null;
+    workerReady = false;
+  });
+  return worker;
+};
+
+/** Free space on the drive holding `path`, in bytes (null when unknown). */
+const freeBytes = async (path: string): Promise<number | null> => {
+  try {
+    let dir = dirname(path);
+    while (!existsSync(dir) && dir !== dirname(dir)) dir = dirname(dir);
+    const s = await statfs(dir);
+    return s.bavail * s.bsize;
+  } catch {
+    return null;
+  }
+};
+
+const pump = () => {
+  if (current) return;
+  const next = jobs.find((j) => j.state === "queued");
+  if (!next) return;
+  const w = ensureWorker();
+  // The worker announces itself ("render:ready") once its job handler is listening.
+  if (!workerReady) return;
+  current = next.id;
+  update(next.id, { state: "rendering", startedAt: new Date().toISOString(), phase: "Starting" });
+  w.webContents.send("render:job", next);
+};
+
+/** Google Drive for desktop: the synced "My Drive" folder, when installed. */
+let testDrive: string | null = null;
+
+export const driveFolder = (): string | null => {
+  if (testDrive !== null) return testDrive;
+  const candidates = [
+    ...["G", "H", "I", "J"].map((d) => `${d}:\\My Drive`),
+    join(homedir(), "Google Drive", "My Drive"),
+    join(homedir(), "Google Drive"),
+    join(homedir(), "My Drive"),
+  ];
+  return candidates.find((c) => existsSync(c)) ?? null;
+};
+
+export const registerRenderQueue = (mode: string) => {
+  modeArg = mode;
+  load();
+
+  ipcMain.handle("render:enqueue", async (_e, spec: RenderJobSpec) => {
+    const free = await freeBytes(spec.output);
+    if (free !== null && free < spec.estimatedBytes * 1.2 + 200 * 1024 * 1024) {
+      throw new Error(`There isn't enough free space on that drive (needs about ${Math.ceil((spec.estimatedBytes * 1.2) / 1e9)} GB, has ${(free / 1e9).toFixed(1)} GB). Choose another folder or free some space.`);
+    }
+    const job: RenderJob = { ...spec, id: `job${Date.now().toString(36)}${++counter}`, state: "queued", createdAt: new Date().toISOString(), done: 0, phase: "Waiting" };
+    jobs.push(job);
+    log(`render job ${job.id} queued: ${job.name} → ${job.output}`);
+    broadcast();
+    pump();
+    return job.id;
+  });
+
+  ipcMain.handle("render:list", () => jobs.map(({ snapshot: _s, ...rest }) => rest));
+
+  ipcMain.handle("render:cancel", (_e, id: string) => {
+    const j = jobs.find((x) => x.id === id);
+    if (!j) return;
+    if (j.state === "queued") update(id, { state: "cancelled", phase: "Cancelled" });
+    if (j.state === "rendering") worker?.webContents.send("render:cancel", id);
+  });
+
+  ipcMain.handle("render:retry", (_e, id: string) => {
+    const j = jobs.find((x) => x.id === id);
+    if (!j || !j.snapshot) throw new Error("This render can't be retried after restarting Before Effects. Export it again from the show.");
+    const copy: RenderJob = { ...j, id: `job${Date.now().toString(36)}${++counter}`, state: "queued", createdAt: new Date().toISOString(), done: 0, phase: "Waiting", error: undefined, verify: undefined, finishedAt: undefined, startedAt: undefined };
+    jobs.push(copy);
+    broadcast();
+    pump();
+    return copy.id;
+  });
+
+  ipcMain.handle("render:clearFinished", () => {
+    for (let i = jobs.length - 1; i >= 0; i--) if (jobs[i]!.state !== "queued" && jobs[i]!.state !== "rendering") jobs.splice(i, 1);
+    save();
+    broadcast();
+  });
+
+  // ---- worker side ----
+  ipcMain.on("render:ready", () => {
+    workerReady = true;
+    pump();
+  });
+  ipcMain.on("render:progress", (_e, id: string, p: Partial<RenderJob>) => update(id, p));
+  ipcMain.on("render:finished", (_e, id: string, p: Partial<RenderJob>) => {
+    update(id, { ...p, finishedAt: new Date().toISOString() });
+    log(`render job ${id} ${p.state}${p.error ? `: ${p.error}` : ""}`);
+    current = null;
+    pump();
+  });
+
+  // ---- delivery ----
+  ipcMain.handle("deliver:driveFolder", () => driveFolder());
+  // Test hook (journey tests only): point delivery at a chosen folder to exercise failure and retry.
+  ipcMain.handle("deliver:testFolder", (_e, p: string | null) => {
+    if (modeArg === "uitest") testDrive = p;
+  });
+  ipcMain.handle("deliver:copyToDrive", async (_e, id: string, subfolder?: string) => {
+    const j = jobs.find((x) => x.id === id);
+    if (!j || j.state !== "done" || !j.result) throw new Error("Only finished exports can be uploaded.");
+    const drive = driveFolder();
+    if (!drive) throw new Error("Google Drive for desktop isn't installed or signed in, so there's no Drive folder to copy into. Install it from google.com/drive/download, then try again.");
+    const destDir = join(drive, subfolder ?? "Before Effects");
+    const target = join(destDir, basename(j.result));
+    update(id, { delivery: { state: "copying", target } });
+    try {
+      await mkdir(destDir, { recursive: true });
+      await copyFile(j.result, target);
+      const [a, b] = await Promise.all([stat(j.result), stat(target)]);
+      if (a.size !== b.size) throw new Error("The copy is incomplete.");
+      update(id, { delivery: { state: "copied", target, at: new Date().toISOString() } });
+      log(`copied ${j.result} → ${target} (Drive for desktop uploads it in the background)`);
+      return target;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      const why =
+        code === "ENOENT" || code === "ENOTDIR"
+          ? `the Google Drive folder (${drive}) isn't reachable. Check that Google Drive for desktop is running and signed in`
+          : code === "ENOSPC"
+            ? "there isn't enough space for the copy on the Drive folder's disk"
+            : code === "EACCES" || code === "EPERM" || code === "EBUSY"
+              ? "Windows wouldn't allow the copy (the file may be open in another program)"
+              : String((e as Error).message ?? e);
+      log(`drive copy failed for ${j.result}: ${String((e as Error).message ?? e)}`);
+      update(id, { delivery: { state: "failed", target, error: why } });
+      throw new Error(`Couldn't copy to Google Drive: ${why}. Your exported file is safe, so you can try again without exporting again.`);
+    }
+  });
+};
+
+export const shutdownRenders = () => {
+  worker?.destroy();
+  worker = null;
+};
+

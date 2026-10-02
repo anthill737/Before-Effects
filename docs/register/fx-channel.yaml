@@ -1,0 +1,685 @@
+# Channel — Before Effects capability register
+# Sources: S02 effect list + support matrix (helpx, "last updated May 13, 2026", fetched 2026-10-01); S01 user guide: Channel effects page (…/list-of-effects/channel-effects.html, updated 26 Jun 2025, fetched 2026-10-01) and Cycore plugins page; brief §6, §11I, §11J, §14.
+#
+# Conventions used in `implementation` below:
+#   - Working buffers are rgba16float, scene-linear, premultiplied. Channel ops unpremultiply where they read or write color, and re-premultiply.
+#   - Derived channels (luminance, hue, lightness, saturation, YIQ) are computed in the display-referred "grading encoding" (extended sRGB by default,
+#     ACEScct in ACES projects), so values match what artists see; alpha is never encoded.
+#   - Layer inputs follow the proj.effect-stack layer-reference convention: the referenced layer at the same time, choosable as source-only or
+#     with its masks/effects, plus "If sizes differ: center / stretch to fit".
+
+- id: fx.channel.arithmetic
+  name: Arithmetic
+  sources:
+    - ref: S02
+      item: Arithmetic
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Arithmetic (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Apply simple math per color channel against constant values (add, subtract, multiply, difference, min/max, screen, threshold-like Block/Slice, and bitwise And/Or/Xor) for glitchy or graphic looks.
+  projection_example: >-
+    Use Xor on a geometric pattern projected onto columns to get a digital-glitch interference look.
+  controls:
+    - { name: "Operator (And / Or / Xor / Add / Subtract / Difference / Min / Max / Block Above / Block Below / Slice / Multiply / Screen)", type: "enum", animatable: false }
+    - { name: "Red Value / Green Value / Blue Value", type: "float[3]", animatable: true }
+    - { name: "Clip Result Values", type: "bool", animatable: false }
+  animation: >-
+    Channel values keyframable and expression-linkable (e.g. Xor value stepping with the beat).
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine]
+  implementation: >-
+    Per-pixel WGSL on unpremultiplied grading-encoded values. Bitwise operators work on 8-bit quantized integers (u32) for parity with AE's 8-bpc-only implementation; arithmetic operators run in f32, with Clip off giving wrap via fract().
+  io: >-
+    none
+  limitations: >-
+    Bitwise results are inherently 8-bit and posterized. HDR values are clamped to 0–1 before bitwise operators, and the effect declares this.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only. Reached through the "Digital glitch colors" recipe → More controls → "Channel math".
+    defaults: >-
+      Operator Add, values 0, Clip on.
+    automation: >-
+      The recipe randomizes values with a seeded expression that is stable between preview and export.
+    usability_check: >-
+      A novice applies the glitch-colors recipe and changes its intensity in under 30 s without opening Channel math.
+  acceptance: >-
+    Mini scene "channel-math": each operator matches an 8-bit reference table exactly.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.blend
+  name: Blend
+  sources:
+    - ref: S02
+      item: Blend
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Blend (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Blend the layer with another layer using an animatable amount: crossfade, color only, tint only, darken only or lighten only. This is a proper crossfade even when both layers have transparency.
+  projection_example: >-
+    Crossfade between two window animations that both have transparent areas, without the background showing through mid-fade.
+  controls:
+    - { name: "Blend With Layer", type: "layer", animatable: false }
+    - { name: "Mode (Crossfade / Color Only / Tint Only / Darken Only / Lighten Only)", type: "enum", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+    - { name: "If Layer Sizes Differ (Center / Stretch To Fit)", type: "enum", animatable: false }
+  animation: >-
+    Blend amount keyframable. This is the point of the effect, since AE layer blend modes are not animatable.
+  dependencies: [proj.effect-stack, proj.layer, mask.blend-modes, anim.keyframe.core]
+  implementation: >-
+    A two-input pass. Crossfade lerps the premultiplied RGBA of both inputs, which is correct with mixed alpha. Color Only and Tint Only colorize in HLS in grading encoding. Darken and Lighten are per-channel min/max on unpremultiplied values.
+  io: >-
+    none
+  limitations: >-
+    none.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: C
+  beginner:
+    action: >-
+      "Crossfade with another layer" — pick the other layer; the card shows a single Mix slider to animate.
+    defaults: >-
+      Crossfade, Mix 0 → 100 % over 1 s when created by the recipe, Stretch To Fit.
+    automation: >-
+      The recipe keyframes the Mix and hides the control layer's own output (control-only visibility).
+    usability_check: >-
+      A novice crossfades two transparent animations in at most 3 actions and under 30 s, with no background flash.
+  acceptance: >-
+    Mini scene "alpha-crossfade": at 50 % mix, alpha equals the average of the inputs' alphas, with no dark or bright fringe.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.calculations
+  name: Calculations
+  sources:
+    - ref: S02
+      item: Calculations
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Calculations (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Combine a chosen channel of this layer with a chosen channel of a second layer using a blend or math operator, with inversion, opacity and transparency preservation. Used to build mattes and textures from channels.
+  projection_example: >-
+    Multiply the depth pass's luminance by a noise layer's red channel to make a fog matte that thickens with distance.
+  controls:
+    - { name: "Input Channel (RGBA / Gray / Red / Green / Blue / Alpha)", type: "enum", animatable: false }
+    - { name: "Invert Input", type: "bool", animatable: false }
+    - { name: "Second Layer", type: "layer", animatable: false }
+    - { name: "Second Layer Channel", type: "enum", animatable: false }
+    - { name: "Second Layer Opacity", type: "percent", animatable: true }
+    - { name: "Invert Second Layer", type: "bool", animatable: false }
+    - { name: "Stretch Second Layer To Fit", type: "bool", animatable: false }
+    - { name: "Preserve Transparency", type: "bool", animatable: false }
+    - { name: "Blending Mode / Operator (blend modes + add, subtract, difference, min, max, and/or/xor)", type: "enum", animatable: false }
+    - { name: "Overflow (Clip / Wrap / Scale)", type: "enum", animatable: false }
+    - { name: "Operate On (RGB / ARGB / Alpha)", type: "enum", animatable: false }
+  animation: >-
+    Second-layer opacity keyframable.
+  dependencies: [proj.effect-stack, proj.layer, mask.blend-modes, pass.depth]
+  implementation: >-
+    A two-input pass. Channel extraction (gray = working-primaries luma in grading encoding) feeds the shared mask.blend-modes kernels, extended with the arithmetic operator set and overflow behaviour so that it fully covers Compound Arithmetic. Bitwise operators use 8-bit quantized integers. Preserve Transparency keeps the input alpha.
+  io: >-
+    none
+  limitations: >-
+    Scale overflow needs whole-frame min/max, so it uses a GPU reduction pass and depends on statistics of the current frame.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only. Reached through the "Mix channels from two layers" recipe → More controls. Common matte cases are offered as named recipes ("Fog by distance", "Mask from another layer's red").
+    defaults: >-
+      RGBA, Normal, opacity 100 %, Clip, Preserve Transparency off.
+    automation: >-
+      Recipes pick the channels and operator.
+    usability_check: >-
+      A novice builds a distance fog matte with the recipe in under 1 minute without choosing channels by hand.
+  acceptance: >-
+    Mini scene "channel-math": operators match reference math within 1/1023, and Compound Arithmetic mapping tests pass.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.cc-composite
+  name: CC Composite
+  sources:
+    - ref: S02
+      item: CC Composite
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: CC Composite (Channel effects page; Cycore plugins page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Composite the layer's original, un-effected image back over (or under) the effected result with a blend mode and opacity, at any point in the effect stack.
+  projection_example: >-
+    After a heavy glow and distortion stack on a facade outline, put the crisp original lines back on top with Screen so the architecture stays legible.
+  controls:
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Composite Original (In Front / Behind / Add / Multiply / Screen / Overlay / Difference / … blend modes)", type: "enum", animatable: false }
+    - { name: "RGB Only", type: "bool", animatable: false }
+  animation: >-
+    Opacity keyframable.
+  dependencies: [proj.effect-stack, mask.blend-modes, anim.keyframe.core]
+  implementation: >-
+    The effect stack exposes its input (the layer source after masks) as a named texture. This pass blends that texture with the current stack result using the mask.blend-modes kernels in scene-linear, premultiplied. RGB Only keeps the current alpha.
+  io: >-
+    none
+  limitations: >-
+    The control list is based on Cycore's documentation and general knowledge; Adobe's page only summarizes the effect.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Effect mix" control on any effect card ("Bring back the original") → More controls → blend mode.
+    defaults: >-
+      In Front, opacity 100 %, RGB Only off.
+    automation: >-
+      Recipes that heavily stylize architectural lines add it automatically to keep the lines legible.
+    usability_check: >-
+      A novice brings the crisp original back over a stylized layer with one slider in under 20 s.
+  acceptance: >-
+    Mini scene "stack-original": the composited original is bit-identical to the stack input where the effect result is transparent.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.channel-combiner
+  name: Channel Combiner
+  sources:
+    - ref: S02
+      item: Channel Combiner
+      category: Channel
+      adobe_support:
+        gpu: true
+        bpc: [16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Channel Combiner (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Extract, convert and route channel values: convert RGB↔HLS/YUV, straight↔premultiplied, or put lightness/hue/saturation/min/max RGB into a single channel or alpha. Useful for inspecting a channel or making a matte from an attribute.
+  projection_example: >-
+    Make a matte from saturation so only the colorful parts of a video drive a glow on the facade.
+  controls:
+    - { name: "Use 2nd Layer / Source Layer", type: "layer", animatable: false }
+    - { name: "From (RGB to HLS, HLS to RGB, RGB to YUV, YUV to RGB, Straight to Premultiplied, Premultiplied to Straight, Red, Green, Blue, Alpha, Lightness, Hue, Saturation, Saturation Multiplied, Min RGB, Max RGB, Luminance…)", type: "enum", animatable: false }
+    - { name: "To (Red Only / Green Only / Blue Only / Alpha Only / Hue Only / Lightness Only / Saturation Only)", type: "enum", animatable: false }
+    - { name: "Invert", type: "bool", animatable: false }
+    - { name: "Solid Alpha", type: "bool", animatable: false }
+  animation: >-
+    No continuous controls. Route changes are discrete and can be hold-keyframed.
+  dependencies: [proj.effect-stack, proj.layer]
+  implementation: >-
+    Per-pixel conversion matrix and formula pass. HLS and YUV (Rec.601 for parity) are computed in grading encoding. Straight↔premultiplied conversions operate on the raw working values and alpha.
+  io: >-
+    none
+  limitations: >-
+    YUV uses Rec.601 coefficients as in AE. A Rec.709 option is provided for HD-sourced material.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Make a mask from brightness / colorfulness / one channel" → More controls. The viewer's channel menu covers "just let me look at a channel".
+    defaults: >-
+      From Lightness, To Alpha Only.
+    automation: >-
+      The mask recipes choose From/To; the viewer channel display needs no effect.
+    usability_check: >-
+      A novice creates a "colorful parts only" mask with the recipe in under 30 s.
+  acceptance: >-
+    Mini scene "channel-route": RGB→HLS→RGB round-trip within 1/1023; premultiply/unpremultiply round-trip within 1/1023 for alpha above 1/255.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.compound-arithmetic
+  name: Compound Arithmetic
+  sources:
+    - ref: S02
+      item: Compound Arithmetic
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Compound Arithmetic (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Combine the layer with a second layer through an operator (copy, add, subtract, multiply, difference, and/or/xor, lighten/darken, min/max, screen, overlay, hard light) with overflow handling (legacy compatibility effect).
+  projection_example: >-
+    Difference two nearly identical renders to reveal what changed between versions of a scene.
+  controls:
+    - { name: "Second Source Layer", type: "layer", animatable: false }
+    - { name: "Operator", type: "enum", animatable: false }
+    - { name: "Operate On Channels (RGB / ARGB / Alpha)", type: "enum", animatable: false }
+    - { name: "Overflow Behavior (Clip / Wrap / Scale)", type: "enum", animatable: false }
+    - { name: "Stretch Second Source To Fit", type: "bool", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Blend amount maps to Calculations' opacity/mix.
+  dependencies: [fx.channel.calculations]
+  implementation: >-
+    No separate pass. It maps 1:1 onto fx.channel.calculations, which carries the same operator list, channel targeting and overflow modes.
+  io: >-
+    none
+  limitations: >-
+    Superseded: Adobe states the effect exists only for old projects and recommends blending modes. Mapping: Second Source → Second Layer; Operator → Operator; Operate On → Operate On; Overflow → Overflow; Stretch → Stretch Second Layer To Fit; Blend With Original → mix. All outcomes are reproduced.
+  disposition: superseded
+  superseded_by: fx.channel.calculations
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Not listed separately. The search name opens Calculations with the equivalent settings.
+    defaults: >-
+      n/a
+    automation: >-
+      Effect-library alias.
+    usability_check: >-
+      A user searching the legacy name reaches Calculations in one action.
+  acceptance: >-
+    Unit test: each Compound Arithmetic operator/overflow combination matches Calculations output.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.invert
+  name: Invert
+  sources:
+    - ref: S02
+      item: Invert
+      category: Channel
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Invert (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Invert all colors (negative), a single RGB/HLS/YIQ channel, or the alpha channel.
+  projection_example: >-
+    Flash the whole facade into a photographic negative on a musical hit, or flip a matte so content shows outside the windows instead of inside.
+  controls:
+    - { name: "Channel (RGB / Red / Green / Blue / HLS / Hue / Lightness / Saturation / YIQ / Luminance / In Phase Chrominance / Quadrature Chrominance / Alpha)", type: "enum", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Blend keyframable, e.g. negative flashes on beat markers.
+  dependencies: [proj.effect-stack, anim.keyframe.core, audio.to-keyframes]
+  implementation: >-
+    Per-pixel pass. Color inversion is 1 − x on unpremultiplied grading-encoded values, so the negative looks as artists expect; HDR values are encoded first and above-1 values clamp, and this is declared. HLS and YIQ variants convert, invert and convert back. Alpha inversion acts on alpha and re-premultiplies.
+  io: >-
+    none
+  limitations: >-
+    Inverting scene-linear HDR is ill-defined. Above-1.0 values are clamped before inversion.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Invert colors" (one action on the selection) and "Flip the cut-out" for mattes.
+    defaults: >-
+      RGB, blend 0 %.
+    automation: >-
+      The "Flash on the beat" recipe keyframes the blend from beat markers.
+    usability_check: >-
+      A first-time user inverts a selected layer in one action and undoes it in one action.
+  acceptance: >-
+    Mini scene "channel-route": a double invert is identity within 1/1023, and alpha inversion has no fringe.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.minimax
+  name: Minimax
+  sources:
+    - ref: S02
+      item: Minimax
+      category: Channel
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Minimax (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Grow or shrink bright or dark areas (or a matte) by taking each channel's minimum or maximum within a radius, horizontally, vertically or both.
+  projection_example: >-
+    Choke a keyed performer's matte by 2 px to remove edge spill, or thicken traced window outlines so they read from a distance.
+  controls:
+    - { name: "Operation (Minimum / Maximum / Minimum Then Maximum / Maximum Then Minimum)", type: "enum", animatable: false }
+    - { name: "Radius", type: "float", animatable: true }
+    - { name: "Channel (Color / Alpha / Alpha and Color / Red / Green / Blue)", type: "enum", animatable: false }
+    - { name: "Direction (Horizontal & Vertical / Horizontal / Vertical)", type: "enum", animatable: false }
+    - { name: "Don't Shrink Edges", type: "bool", animatable: false }
+  animation: >-
+    Radius keyframable (rounded to whole pixels at render resolution, with a fractional blend option for smooth animation).
+  dependencies: [proj.effect-stack, anim.keyframe.core, track.roto]
+  implementation: >-
+    Separable van Herk/Gil-Werman min/max filter in two WGSL compute passes (H then V), with constant cost per pixel regardless of radius and a square structuring element like AE. Bounds expansion equals the radius for Maximum. Operates on premultiplied values for alpha; color channels are filtered unpremultiplied.
+  io: >-
+    none
+  limitations: >-
+    Radius is in pixels, so the look scales with proxy resolution; the engine scales the radius by the proxy factor. Square kernels give blocky corners; a circular option via distance transform may be added.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: C
+  beginner:
+    action: >-
+      "Grow / shrink the edges" on masks and cut-outs, and "Thicker lines" on traced outlines.
+    defaults: >-
+      Alpha, Minimum (shrink) or Maximum (grow) set by the chosen action, radius 1 px at output resolution.
+    automation: >-
+      The radius is expressed at output resolution and scaled for proxies automatically.
+    usability_check: >-
+      A novice removes a 2 px edge halo from a keyed layer in under 30 s using "Shrink edges".
+  acceptance: >-
+    AS-4 performer composite: the matte choke removes halos with no unexplained dark or bright fringe, and the proxy preview matches export after scaling.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.remove-color-matting
+  name: Remove Color Matting
+  sources:
+    - ref: S02
+      item: Remove Color Matting
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Remove Color Matting (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Remove dark or colored halos from semi-transparent edges of footage that was premultiplied against a background color.
+  projection_example: >-
+    Remove the black fringe around a premultiplied particle render before it is composited over the facade texture.
+  controls:
+    - { name: "Background Color", type: "color", animatable: false }
+    - { name: "Clip HDR Results", type: "bool", animatable: false }
+  animation: >-
+    Not normally animated.
+  dependencies: [proj.effect-stack, proj.project-model, color.management]
+  implementation: >-
+    Per-pixel unmatte: rgb = (rgbPremult − (1 − a)·bg)/a for a > ε, then re-premultiply into the working representation. It is evaluated in the encoding in which the source was premultiplied, which is taken from footage interpretation: linear for EXR renders, display-encoded for most 8-bit video. Clip HDR is optional for 32-bit.
+  io: >-
+    Interacts with footage alpha interpretation (straight / premultiplied with matte color) in the project model.
+  limitations: >-
+    Only correct when the matte color is known and uniform. It does not synthesize alpha (unlike "unmult"-style luma-to-alpha tools).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Mostly automatic. Import detects premultiplied alpha with a matte color. On a selected layer, "Fix dark/bright edges" applies it explicitly.
+    defaults: >-
+      Background black, Clip HDR on for display-referred sources and off for EXR.
+    automation: >-
+      Footage interpretation guesses the matte color from edge pixels and offers the fix in plain words.
+    usability_check: >-
+      A novice removes a black edge fringe from a supplied render in one action and confirms with the edge zoom view.
+  acceptance: >-
+    AS-4 performer composite and mini scene "premult-fix": a test edge over gray shows no fringe beyond 1/255 after the fix.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.set-channels
+  name: Set Channels
+  sources:
+    - ref: S02
+      item: Set Channels
+      category: Channel
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Set Channels (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Build the layer's red, green, blue and alpha from chosen channels (or luminance, hue, etc.) of up to four other layers.
+  projection_example: >-
+    Pack three grayscale masks (windows, columns, roofline) into one RGB "region map" layer that a rig samples for staggered effects.
+  controls:
+    - { name: "Source Layer 1–4 (for red, green, blue, alpha)", type: "layer[4]", animatable: false }
+    - { name: "Set Red / Green / Blue / Alpha To Source N's (Red / Green / Blue / Alpha / Luminance / Hue / Lightness / Saturation / Full / Half / Off)", type: "enum[4]", animatable: false }
+    - { name: "If Layer Sizes Differ (Stretch To Fit)", type: "bool", animatable: false }
+  animation: >-
+    Routing is discrete. The source layers animate on their own.
+  dependencies: [proj.effect-stack, proj.layer, map.region]
+  implementation: >-
+    A multi-input pass sampling up to four layer textures. Each source is unpremultiplied, the chosen channel or derived value (in grading encoding) is extracted, the RGBA is assembled and re-premultiplied. No bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    none.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Use another layer's brightness as transparency" recipe and the region-map rigs → More controls.
+    defaults: >-
+      Each output channel comes from the same channel of the layer itself (identity).
+    automation: >-
+      Rigs that need packed masks generate this setup automatically.
+    usability_check: >-
+      A novice makes a layer's transparency follow another layer's brightness with the recipe in under 30 s.
+  acceptance: >-
+    Mini scene "channel-route": routed channels are bit-identical to their sources.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.set-matte
+  name: Set Matte
+  sources:
+    - ref: S02
+      item: Set Matte
+      category: Channel
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Set Matte (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Replace (or intersect) the layer's alpha with a channel of any other layer, at a chosen point in the effect stack, with one matte source reusable across many layers.
+  projection_example: >-
+    Matte a texture by the window mask before the glow effect, so the glow still spreads beyond the windows.
+  controls:
+    - { name: "Take Matte From Layer", type: "layer", animatable: false }
+    - { name: "Use For Matte (Red / Green / Blue / Alpha / Luminance / Hue / Lightness / Saturation / Full / Off)", type: "enum", animatable: false }
+    - { name: "Invert Matte", type: "bool", animatable: false }
+    - { name: "Stretch Matte To Fit", type: "bool", animatable: false }
+    - { name: "Composite Matte With Original", type: "bool", animatable: false }
+    - { name: "Premultiply Matte Layer", type: "bool", animatable: false }
+  animation: >-
+    The matte layer animates on its own. Toggles are hold-keyframable.
+  dependencies: [proj.effect-stack, mask.track-matte, proj.layer]
+  implementation: >-
+    Per-pixel pass inside the effect stack. The new alpha comes from the chosen channel of the referenced layer (derived values in grading encoding), is optionally multiplied with the existing alpha, and is applied to the premultiplied RGB. Later effects in the stack see the matted result, which is the advantage over a track matte.
+  io: >-
+    none
+  limitations: >-
+    Adobe labels it compatibility-only. It is kept because "matte here in the effect order" is a distinct outcome from a track matte, which applies after the stack.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: C
+  beginner:
+    action: >-
+      Beginners normally use "Show only inside…" (mask.track-matte). This effect appears as the "Cut out first, then add the glow" option of glow recipes and under More controls.
+    defaults: >-
+      Alpha, Composite Matte With Original on, Stretch on.
+    automation: >-
+      Glow-on-region recipes insert it before the glow automatically.
+    usability_check: >-
+      A novice gets a glow that spills outside the windows using the recipe option in under 30 s.
+  acceptance: >-
+    AS-1 architectural trace: glow after Set Matte extends beyond the region, and reordering effects changes the result predictably (brief §6).
+  status: not-started
+  evidence: []
+
+- id: fx.channel.shift-channels
+  name: Shift Channels
+  sources:
+    - ref: S02
+      item: Shift Channels
+      category: Channel
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Shift Channels (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Replace any of the layer's R, G, B or A channels with another of its own channels or a derived value (luminance, hue, lightness, saturation, full, half, off).
+  projection_example: >-
+    Use the luminance of a white line animation as its alpha, so it can be added over the facade without a black box.
+  controls:
+    - { name: "Take Alpha / Red / Green / Blue From (Alpha / Red / Green / Blue / Luminance / Hue / Lightness / Saturation / Full On / Half On / Off)", type: "enum[4]", animatable: false }
+  animation: >-
+    Discrete. Hold-keyframable.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    Per-pixel swizzle on unpremultiplied values, with derived values computed in grading encoding, followed by re-premultiplication.
+  io: >-
+    none
+  limitations: >-
+    none.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: C
+  beginner:
+    action: >-
+      "Use brightness as transparency" (luma to alpha) and the "Swap color channels" look.
+    defaults: >-
+      Identity mapping.
+    automation: >-
+      Importing black-background light elements suggests "Use brightness as transparency".
+    usability_check: >-
+      A novice removes the black box from a light-streak clip in one action.
+  acceptance: >-
+    Mini scene "channel-route": swizzles are bit-exact, and luma-to-alpha has no fringe when composited.
+  status: not-started
+  evidence: []
+
+- id: fx.channel.solid-composite
+  name: Solid Composite
+  sources:
+    - ref: S02
+      item: Solid Composite
+      category: Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Solid Composite (Channel effects page)
+      category: Channel
+      checked: true
+  artist_can: >-
+    Put a colored solid behind the layer with its own opacity and blend mode, without adding a separate layer.
+  projection_example: >-
+    Give a transparent logo animation a deep blue backing color only while it plays on the central wall.
+  controls:
+    - { name: "Source Opacity", type: "percent", animatable: true }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blending Mode", type: "enum", animatable: false }
+  animation: >-
+    Color and both opacities keyframable.
+  dependencies: [proj.effect-stack, mask.blend-modes, anim.keyframe.core]
+  implementation: >-
+    Per-pixel composite of a constant premultiplied color under the layer in scene-linear, using the mask.blend-modes kernels. No bounds expansion; it fills the layer bounds only.
+  io: >-
+    none
+  limitations: >-
+    Fills only the layer's bounds, not the whole composition.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Channel-manipulation effect for After Effects parity. Blend modes, mattes and Invert cover projection needs."
+  milestone: C
+  beginner:
+    action: >-
+      "Add a background color" on a selected layer.
+    defaults: >-
+      Black, opacity 100 %, source opacity 100 %, Normal.
+    automation: >-
+      The color swatch row offers the show palette.
+    usability_check: >-
+      A novice adds a colored background behind a transparent layer in at most 2 actions and under 15 s.
+  acceptance: >-
+    Mini scene "stack-original": the solid shows only where the source alpha < 1, with no fringe.
+  status: not-started
+  evidence: []

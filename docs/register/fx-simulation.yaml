@@ -1,0 +1,1511 @@
+# Simulation — Before Effects capability register
+# Sources: S02 (effect list + support matrix), S15 (Simulation effects), brief §0, §1, §11C, §11D, §19, §20, §22. Live helpx.adobe.com pages returned HTTP 403 (bot block) on 2026-10-01 for all regional variants; category membership was cross-checked via search-engine listings of S15, but Adobe items were authored from prior knowledge (checked: false) and adobe_support values are best-known, not matrix-verified.
+
+- id: fx.simulation.card-dance
+  name: Card Dance
+  sources:
+    - ref: S02
+      item: Card Dance
+      category: Simulation
+      adobe_support: { gpu: false, bpc: [8], mfr: null }
+      checked: false
+    - ref: S15
+      item: Card Dance
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Split a layer into a grid of cards that move, rotate and scale in 3D, each card driven by the brightness of one or two gradient layers, so waves of cards ripple, flip and reveal a back image.
+  projection_example: >-
+    A facade breaks into tiles aligned to the stone coursing that flip in a wave from left to right, revealing the next scene on their backs.
+  controls:
+    - { name: "Rows and columns (or grid from region cells)", type: int, animatable: false }
+    - { name: "Back layer", type: layer, animatable: false }
+    - { name: "Gradient layers 1 and 2", type: layer, animatable: false }
+    - { name: "Rotation order and transformation order", type: enum, animatable: false }
+    - { name: "Position X/Y/Z (source channel, multiplier, offset)", type: group, animatable: true }
+    - { name: "Rotation X/Y/Z (source channel, multiplier, offset)", type: group, animatable: true }
+    - { name: "Scale X/Y (source channel, multiplier, offset)", type: group, animatable: true }
+    - { name: "Camera system (comp camera, built-in camera, corner pins)", type: enum, animatable: false }
+    - { name: "Built-in camera and corner pin values", type: group, animatable: true }
+    - { name: "Lighting (type, intensity, color, position, ambient)", type: group, animatable: true }
+    - { name: "Material (diffuse, specular, highlight sharpness)", type: group, animatable: true }
+  animation: >-
+    All multipliers, offsets, camera, light and material values are keyframable and expression-linkable. Motion normally comes from animating the gradient layers (a moving ramp), not from per-card keys.
+  dependencies: [proj.layer, anim.keyframe.core, 3d.camera, 3d.light, map.region, fx.generate.gradient-ramp]
+  implementation: >-
+    Stateless WGSL instanced-quad pass: each card samples the gradient layers at its centre, maps the chosen channel through multiplier × value + offset into a transform, and is drawn as a double-sided quad (front = source cell, back = back-layer cell) through the comp camera with Lambert/Blinn shading in scene-linear rgba16float. Output is a pure function of time and inputs, so frames render in any order and in parallel. Bounds expand to comp size because cards rotate out of the layer rectangle; simulation-like only, there is no physics.
+  io: >-
+    none
+  limitations: >-
+    Cards are flat, thickness-free quads with no collisions; chunky falling blocks need fx.simulation.rigid-body-fracture or 3d.extrude.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Flip into tiles" recipe → More controls: select a wall, choose "Flip into tiles", pick direction, speed and what appears on the back.
+    defaults: >-
+      Grid matched to the region (or a detected window/coursing grid), a generated left-to-right gradient sweep over 2 s, back layer = the next scene.
+    automation: >-
+      Creates and animates the driving gradient precomp, binds the comp camera to the audience viewpoint and aligns the grid to the region bounds.
+    usability_check: >-
+      A first-time user makes a selected wall flip into tiles revealing a second image, in a chosen direction, in ≤3 deliberate actions and under 60 s.
+  acceptance: >-
+    Mini scene "tile-flip": 16×10 card wave on a facade region; frames rendered out of order and in parallel hash-match a sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.caustics
+  name: Caustics
+  sources:
+    - ref: S02
+      item: Caustics
+      category: Simulation
+      adobe_support: { gpu: false, bpc: [8], mfr: null }
+      checked: false
+    - ref: S15
+      item: Caustics
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Render the look of seeing an image through a rippling water surface: the underlying layer refracts, light focuses into moving caustic patterns, and an optional sky layer reflects on top.
+  projection_example: >-
+    A plaza wall looks submerged, with bright caustic light crawling over the stone, driven by a Wave World ripple or looping noise.
+  controls:
+    - { name: "Bottom (layer, scaling, repeat mode, blur)", type: group, animatable: true }
+    - { name: "Water surface (height-map layer)", type: layer, animatable: false }
+    - { name: "Wave height, smoothing, water depth, refractive index", type: float, animatable: true }
+    - { name: "Surface color and opacity", type: group, animatable: true }
+    - { name: "Caustics strength", type: float, animatable: true }
+    - { name: "Sky (layer, scaling, intensity, convergence)", type: group, animatable: true }
+    - { name: "Lighting (type, intensity, color, position, height, ambient)", type: group, animatable: true }
+    - { name: "Material (diffuse, specular, highlight sharpness)", type: group, animatable: true }
+  animation: >-
+    Every value except layer choices is keyframable and expression-linkable. Motion comes from the animated height-map layer (Wave World, fractal noise), sampled at the same time.
+  dependencies: [fx.simulation.wave-world, fx.noise-grain.fractal-noise, 3d.light, proj.layer]
+  implementation: >-
+    Stateless two-stage WGSL pass on a height map: Sobel normals refract view rays (Snell, user index) to offset the bottom-layer lookup, and a compute stage forward-projects a refracted vertex grid onto the bottom plane, accumulating the area ratio (Jacobian) with fixed-point atomics so the sum is order-independent, then blurs it by Smoothing. Only the height-map source can hold state, so Caustics itself is random-access and parallel-safe. Caustic peaks exceed 1.0 in the scene-linear rgba16float buffer so downstream Glow reacts; no bounds expansion (repeat modes handle edges).
+  io: >-
+    none
+  limitations: >-
+    Single-surface, single-bounce optics (no dispersion, light shafts or splashes); detail is bounded by height-map resolution. It renders water optics, not a fluid solver: the water moves however the height map moves.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Turn to water" recipe (Underwater variant) → More controls.
+    defaults: >-
+      Auto-created looping water height map sized to the region, refractive index 1.33, moderate depth and caustics strength, light from above the audience viewpoint.
+    automation: >-
+      Builds and links the height-map precomp, loops it seamlessly over the scene and scales ripple size to the region's real dimensions.
+    usability_check: >-
+      A first-time user makes a selected wall look underwater with moving caustic light in under 45 s, and makes it calmer or rougher with one slider.
+  acceptance: >-
+    Mini scene "turn-to-water": a single random frame rendered alone hash-matches the same frame from a sequential render, before and after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.foam
+  name: Foam
+  sources:
+    - ref: S02
+      item: Foam
+      category: Simulation
+      adobe_support: { gpu: false, bpc: [8], mfr: null }
+      checked: false
+    - ref: S15
+      item: Foam
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Generate bubbles and foam that rise, wobble, stick together, pop and flow around a map, with reflective soap-film surfaces or a custom bubble texture.
+  projection_example: >-
+    Bubbles stream up from a fountain region and pop at the cornice, sliding around window frames that act as a flow map.
+  controls:
+    - { name: "View (draft, draft + flow map, rendered)", type: enum, animatable: false }
+    - { name: "Producer (point, X/Y size, orientation, production rate)", type: group, animatable: true }
+    - { name: "Bubbles (size, size variance, lifespan, growth speed, strength)", type: group, animatable: true }
+    - { name: "Physics (initial speed/direction, wind, turbulence, wobble, repulsion, pop velocity, viscosity, stickiness)", type: group, animatable: true }
+    - { name: "Zoom and universe size", type: float, animatable: true }
+    - { name: "Rendering (blend mode, bubble texture or texture layer, orientation, environment map, reflection strength/convergence)", type: group, animatable: true }
+    - { name: "Flow map (layer, steepness, fit, simulation quality)", type: group, animatable: false }
+    - { name: "Random seed", type: seed, animatable: false }
+  animation: >-
+    Producer and physics values are keyframable and expression- or audio-drivable; changes are integrated forward, affecting bubbles from that moment on rather than rewriting earlier ones.
+  dependencies: [fx.simulation.particle-system, fx.simulation.cache-checkpoints, fx.simulation.deterministic-seeds, fx.simulation.emission-masks, fx.simulation.collision-surfaces]
+  implementation: >-
+    Preset of the GPU compute particle engine: bubble particles with neighbour repulsion and stickiness through a uniform-grid hash (cells sorted by key so reductions run in a fixed order), curl-noise turbulence, flow-map gradient forces and pop events at lifespan or overlap; rendered as instanced sphere impostors with Fresnel environment reflection or texture sprites. Stateful fixed-step integration with checkpoints every N frames; seeking replays from the nearest checkpoint and pre-roll fills the start. Simulation-like: heuristic bubble physics, not a liquid or foam solver.
+  io: >-
+    none
+  limitations: >-
+    Neighbour interactions make results sensitive to float order: bitwise repeatability is guaranteed on the same GPU/driver (hash-tested), not across vendors, so show machines use baked caches. Not a physical foam simulation.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Bubbles" recipe ("Foam up" variant) → More controls.
+    defaults: >-
+      Emit from the bottom edge of the selected region, 2 s lifespan, soap-film reflection with a neutral environment, fixed seed, 2 s pre-roll so bubbles already fill the frame at the start.
+    automation: >-
+      Builds the flow map from region geometry (walls block, openings flow), scales bubble size to the region and simulates in the background.
+    usability_check: >-
+      A first-time user makes bubbles rise from a selected doorway in under 45 s; scrubbing to any frame shows the same bubbles as playback.
+  acceptance: >-
+    AS-3 reproducibility check: frames 300–310 rendered from a cold start after reopening hash-match the same frames from a full sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.particle-playground
+  name: Particle Playground
+  sources:
+    - ref: S02
+      item: Particle Playground
+      category: Simulation
+      adobe_support: { gpu: false, bpc: [8], mfr: null }
+      checked: false
+    - ref: S15
+      item: Particle Playground
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Legacy particle generator: fire dots or text characters from a cannon or grid, explode a layer into particles, replace dots with another layer's frames, push particles with gravity, repel and walls, and drive particle properties from layer maps.
+  projection_example: >-
+    The letters of a show title pour out of a doorway as particles, or a logo explodes into dust that stops at the wall mask.
+  controls:
+    - { name: "Cannon → point emitter (position, barrel radius, rate, direction, spread, velocity, color, radius)", type: group, animatable: true }
+    - { name: "Grid → grid/glyph emitter (size, particles across/down, text characters)", type: group, animatable: true }
+    - { name: "Layer Exploder and Particle Exploder → layer-explode emitter and sub-emitters", type: group, animatable: true }
+    - { name: "Layer Map → sprite source with time offset", type: group, animatable: false }
+    - { name: "Gravity, Repel, Wall → forces and collision boundary", type: group, animatable: true }
+    - { name: "Persistent/Ephemeral Property Mappers → attribute maps from a layer", type: group, animatable: false }
+  animation: >-
+    As fx.simulation.particle-system: emitter and force values keyframable; attribute maps may be animated layers.
+  dependencies: [fx.simulation.particle-system, fx.simulation.emission-masks, fx.simulation.collision-surfaces, text.layer]
+  implementation: >-
+    No separate engine: "Particle Playground" is a search alias plus presets ("Cannon", "Text grid", "Explode layer") on fx.simulation.particle-system, using its grid/glyph and layer-explode emitters, sub-emitters, region-SDF walls and attribute maps.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.simulation.particle-system, which covers each useful outcome through the mapping listed in controls. Field rendering and the legacy dialog-based text entry are not reproduced; text comes from a real text layer so it stays editable.
+  disposition: superseded
+  superseded_by: fx.simulation.particle-system
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      No separate button; outcomes are reached through the "Explode into particles" and "Letters pour out" recipes. Searching "Particle Playground" opens the closest preset.
+    defaults: >-
+      Recipe defaults of the particle system (emit from selection, fixed seed, pre-roll).
+    automation: >-
+      Converts the selected text or layer into the matching emitter automatically.
+    usability_check: >-
+      A first-time user makes a title explode into particles in ≤3 deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "title-explode": text layer exploded through the particle system; seek and reopen give identical frames.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.shatter
+  name: Shatter
+  sources:
+    - ref: S02
+      item: Shatter
+      category: Simulation
+      adobe_support: { gpu: false, bpc: [8], mfr: null }
+      checked: false
+    - ref: S15
+      item: Shatter
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Break a layer into extruded pieces (bricks, glass, squares, hexagons, triangles, planks, puzzle or a custom map) that blow apart from force points or a gradient, tumble under gravity, and show separate front, side and back textures under 3D camera and lighting.
+  projection_example: >-
+    A wall explodes outward into bricks matched to the real coursing, then, time-reversed, flies back into place on the downbeat.
+  controls:
+    - { name: "View (rendered, wireframe, wireframe + forces)", type: enum, animatable: false }
+    - { name: "Render (all, layer, pieces)", type: enum, animatable: false }
+    - { name: "Pattern (bricks, glass, squares, hexagons, triangles, planks, puzzle, custom map, from regions)", type: enum, animatable: false }
+    - { name: "Repetitions, direction, origin, extrusion depth", type: group, animatable: true }
+    - { name: "Forces 1 and 2 (position, depth, radius, strength)", type: group, animatable: true }
+    - { name: "Gradient (layer, shatter threshold, invert)", type: group, animatable: true }
+    - { name: "Physics (rotation speed, tumble axis, randomness, viscosity, mass variance, gravity, direction, inclination)", type: group, animatable: true }
+    - { name: "Textures (color, opacity, front/side/back mode and layer)", type: group, animatable: true }
+    - { name: "Camera system, lighting and material", type: group, animatable: true }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Force positions, radii, strengths and the gradient threshold are keyframable and beat-snappable; rebuild is produced by time-reversing the shatter through time remap.
+  dependencies: [fx.simulation.rigid-body-fracture, fx.simulation.deterministic-seeds, 3d.scene, 3d.camera, 3d.light, 3d.material-pbr, map.region, anim.time-remap]
+  implementation: >-
+    Fragment geometry is generated in the core from the pattern tiling or seeded Voronoi, clipped to layer alpha and extruded into prisms with front/side/back UVs, then drawn as three.js WebGPU instanced meshes into the comp. Motion matches AE's ballistic model in closed form: a piece's release time comes from force spheres and the gradient threshold, then p = p0 + v0·t + ½g·t² with analytic viscosity damping and ω·t rotation, so every frame is stateless and seekable. A "Collide" option hands the same pieces to fx.simulation.rigid-body-fracture (Rapier, checkpointed); output bounds are comp-sized.
+  io: >-
+    none
+  limitations: >-
+    Closed-form mode has no piece-to-piece or floor collisions (as in AE); falling and stacking needs the rigid-body mode. Without a 3D venue model the pieces are a 2.5D illusion that holds only from the audience viewpoint.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Shatter and rebuild": select a wall, choose the recipe, then adjust intensity, direction and duration; click on the wall to set where it breaks.
+    defaults: >-
+      Brick pattern sized from detected coursing or region size, one force at the clicked point, gravity toward the audience floor, 1.5 s explode, 1 s hold, 1.5 s rebuild by time reversal.
+    automation: >-
+      Creates the shatter, the reverse via time remap, front texture from current content, side texture from a stone material, and a camera bound to the audience viewpoint.
+    usability_check: >-
+      A first-time user makes a selected wall shatter and rebuild in ≤3 deliberate actions and under 60 s, and scrubbing shows identical pieces on every pass.
+  acceptance: >-
+    AS-3 (Transformation): wall fragments and reassembles; reopened project and out-of-order frame renders hash-match a sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.wave-world
+  name: Wave World
+  sources:
+    - ref: S02
+      item: Wave World
+      category: Simulation
+      adobe_support: { gpu: false, bpc: [8], mfr: null }
+      checked: false
+    - ref: S15
+      item: Wave World
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Simulate water waves on a flat surface: ring and line producers make ripples that spread, reflect off edges and a ground/obstacle map, and decay, output as a grayscale height map to drive Caustics, displacement or lighting.
+  projection_example: >-
+    Ripples spread from where a performer touches the wall and bounce off the window frames; the height map drives Caustics and Displacement Map for a living water facade.
+  controls:
+    - { name: "View (wireframe preview, height map)", type: enum, animatable: false }
+    - { name: "Wireframe controls (rotation, vertical scale)", type: group, animatable: true }
+    - { name: "Height map output (brightness, contrast, gamma, dry areas, transparency)", type: group, animatable: true }
+    - { name: "Grid resolution and downsampling", type: int, animatable: false }
+    - { name: "Wave speed and damping", type: float, animatable: true }
+    - { name: "Reflect edges and pre-roll (seconds)", type: group, animatable: false }
+    - { name: "Ground (layer, steepness, height, wave strength)", type: group, animatable: true }
+    - { name: "Producers (ring/line, position, size, angle, amplitude, frequency, phase); unlimited count", type: group, animatable: true }
+    - { name: "Obstacles from regions", type: region-set, animatable: false }
+  animation: >-
+    Producer amplitude, frequency and position are keyframable and audio-drivable (drops on beats); edits change the waves from that time forward.
+  dependencies: [fx.simulation.cache-checkpoints, fx.simulation.collision-surfaces, fx.simulation.caustics, fx.distort.displacement-map, map.region, audio.analysis]
+  implementation: >-
+    Stateful height-field solver: the 2D damped wave equation on a GPU grid in WGSL compute (explicit finite-difference leapfrog over two r32float buffers, CFL-limited integer substeps per frame), with ground depth as local wave speed and region SDF walls as reflective or absorbing boundaries. The state is tiny (two height buffers, ~2 MB at 512²), so it is checkpointed every frame into the sim cache; seeks replay from the nearest checkpoint and pre-roll runs before time 0. Output is an rgba16float height map; float32 state keeps long sims stable.
+  io: >-
+    none
+  limitations: >-
+    Shallow-water-like 2D waves only: no breaking waves, splashes or 3D volume, and detail is bounded by grid resolution. Output is a height map rather than a finished picture, so the recipe pairs it with Caustics and displacement.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Turn to water" recipe ("Ripples" variant): click on the canvas to drop ripple sources.
+    defaults: >-
+      512 grid at comp aspect, a ring producer at each click, 1 s pre-roll, reflecting edges, selected region outlines act as walls, output wired into Caustics and displacement.
+    automation: >-
+      Builds the obstacle map from region masks, links the height map to downstream effects, places producers at click points and caches the sim in the background.
+    usability_check: >-
+      A first-time user creates ripples from two clicked points on a wall in under 30 s; scrubbing backwards never stalls more than 1 s at 1080p preview quality.
+  acceptance: >-
+    Mini scene "ripple-facade": two producers plus window obstacles; 20 random-frame seeks hash-match a sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-ball-action
+  name: CC Ball Action
+  sources:
+    - ref: S02
+      item: CC Ball Action
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Ball Action
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Turn a layer into a grid of shaded 3D balls that take each area's colour, then scatter, twist and rotate the grid in depth.
+  projection_example: >-
+    A logo on a building dissolves into a field of coloured spheres that twist in depth and then re-form.
+  controls:
+    - { name: "Grid spacing and ball size", type: float, animatable: true }
+    - { name: "Scatter and instability state", type: float, animatable: true }
+    - { name: "Rotation axis", type: enum, animatable: false }
+    - { name: "Rotation", type: angle, animatable: true }
+    - { name: "Twist property", type: enum, animatable: false }
+    - { name: "Twist angle", type: angle, animatable: true }
+    - { name: "Light (intensity, color, direction)", type: group, animatable: true }
+    - { name: "Shading (ambient, diffuse, specular, roughness, metal)", type: group, animatable: true }
+  animation: >-
+    Scatter, rotation, twist and lighting keyframable; the dissolve-and-reform move is two keys on Scatter.
+  dependencies: [fx.simulation.deterministic-seeds, anim.keyframe.core, 3d.camera]
+  implementation: >-
+    Stateless WGSL instanced sphere-impostor pass: the source layer is sampled on a grid (alpha-culled), each ball is offset by hash(seed, ball id) × scatter and twisted about the chosen axis by the selected property, then shaded in scene-linear light. Random-access and parallel-safe; bounds expand to comp size; despite its category it is not a simulation.
+  io: >-
+    none
+  limitations: >-
+    No physics or collisions; balls are impostors, so extreme close-ups show flat silhouettes.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Dissolve into dots" recipe → More controls.
+    defaults: >-
+      Ball spacing ~1% of region width, scatter animated 0 → 40% → 0 over 3 s, soft studio light.
+    automation: >-
+      Keys the dissolve/reform envelope and scales spacing to the target region.
+    usability_check: >-
+      A first-time user turns a logo into twisting dots and back in under 45 s using only intensity and duration.
+  acceptance: >-
+    Mini scene "logo-dots": out-of-order frame renders hash-match a sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-bubbles
+  name: CC Bubbles
+  sources:
+    - ref: S02
+      item: CC Bubbles
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Bubbles
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Fill the frame with rising, wobbling bubbles whose surfaces reflect the layer's own image, with amount, speed, size and shading style.
+  projection_example: >-
+    Light bubbles drift up the length of a column to suggest the building is underwater.
+  controls:
+    - { name: "Bubble amount, speed, size", type: float, animatable: true }
+    - { name: "Wobble amplitude and frequency", type: float, animatable: true }
+    - { name: "Reflection type", type: enum, animatable: false }
+    - { name: "Shading type (none, lighten, darken, fade inwards/outwards)", type: enum, animatable: false }
+    - { name: "Emit from (region or mask)", type: region-set, animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Amount, speed, size and wobble keyframable and audio-drivable.
+  dependencies: [fx.simulation.deterministic-seeds, fx.simulation.emission-masks]
+  implementation: >-
+    Stateless analytic particles in WGSL: bubble i's birth time, start position, speed, size and wobble phase come from hash(seed, i), and its position at time t is closed form (rise + sinusoidal wobble), so any frame renders directly without checkpoints. Drawn as sphere impostors reflecting the source layer with a Fresnel term; bounds comp-sized. Simulation-like: bubbles never interact (Foam covers sticking and popping).
+  io: >-
+    none
+  limitations: >-
+    No bubble interaction, popping or flow around obstacles.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Bubbles" recipe (default light variant).
+    defaults: >-
+      Bubbles rise from the bottom of the selection, sized to 1–3% of region height, gentle wobble.
+    automation: >-
+      Emitter and scale derived from the selected region; switches to Foam when the user enables "Pop and stick".
+    usability_check: >-
+      A first-time user adds rising bubbles to a selected wall in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "bubble-column": random-frame renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-drizzle
+  name: CC Drizzle
+  sources:
+    - ref: S02
+      item: CC Drizzle
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Drizzle
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Make raindrop ripples appear on the layer as if it were a puddle: rings spread, displace the image and catch the light.
+  projection_example: >-
+    The base of a wall or a floor projection gets rain ripples while CC Rainfall streaks fall above.
+  controls:
+    - { name: "Drip rate and longevity", type: float, animatable: true }
+    - { name: "Rippling, displacement, ripple height, spreading", type: float, animatable: true }
+    - { name: "Light (source, intensity, color, type, height, position, direction)", type: group, animatable: true }
+    - { name: "Shading (ambient, diffuse, specular, roughness, metal)", type: group, animatable: true }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Drip rate and ripple controls keyframable; drip rate can follow audio onsets.
+  dependencies: [fx.simulation.deterministic-seeds, fx.simulation.cc-rainfall, fx.simulation.emission-masks]
+  implementation: >-
+    Stateless WGSL pass: drop events form a hashed Poisson process (per spatial cell and time slot, hash(seed, cell, slot)), each ripple is an analytic damped radial wave limited by longevity, and their heights are summed via a grid of active events, then turned into normals for displacement and shading. Random-access with no checkpoints; simulation-like, since ripples don't reflect or interfere physically (Wave World does).
+  io: >-
+    none
+  limitations: >-
+    No wave reflection from obstacles; very high drip rates cost more per pixel.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Make it rain" recipe → "Puddle ripples" toggle.
+    defaults: >-
+      Moderate drip rate, 1.5 s ripple life, ripples confined to the lower part of the selection.
+    automation: >-
+      Matches drip rate to the rain amount and restricts ripples to horizontal-looking regions (sills, floor).
+    usability_check: >-
+      A first-time user adds ripples to an existing rain look with one toggle in under 10 s.
+  acceptance: >-
+    Mini scene "rain-facade" (with ripples): random-frame renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-hair
+  name: CC Hair
+  sources:
+    - ref: S02
+      item: CC Hair
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Hair
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Grow hair, fur or grass-like strands out of a layer, controlling length, thickness, weight (droop), density and direction maps, coloured from the layer or a chosen colour.
+  projection_example: >-
+    A statue or facade sprouts fur or grass for a playful "organic growth" moment, then sheds it.
+  controls:
+    - { name: "Length, thickness, weight, constant mass, density", type: float, animatable: true }
+    - { name: "Hairfall map (strength, layer, property, softness, noise)", type: group, animatable: true }
+    - { name: "Hair color (color, inheritance, opacity)", type: group, animatable: true }
+    - { name: "Light (intensity, color, direction)", type: group, animatable: true }
+    - { name: "Shading (ambient, diffuse, specular, roughness)", type: group, animatable: true }
+    - { name: "Wind (product addition: seeded noise sway)", type: float, animatable: true }
+  animation: >-
+    Length and density animate growth; wind sway is an evolving seeded noise, not dynamics.
+  dependencies: [fx.simulation.deterministic-seeds, fx.noise-grain.fractal-noise, map.region]
+  implementation: >-
+    Stateless procedural strands: roots placed by seeded blue-noise over layer alpha × density map, each strand a polyline bent in closed form by weight and the map direction, rendered as GPU-instanced tapered ribbons with Kajiya-Kay anisotropic shading and analytic anti-aliasing. Any frame renders independently; bounds expand by the maximum strand length.
+  io: >-
+    none
+  limitations: >-
+    No strand dynamics or collisions (as in AE); dense fur at 4K is instance-heavy, so quality presets cap strand count. Hero grooms belong in Blender and come in as rendered footage.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Grow fur / grass" recipe → More controls.
+    defaults: >-
+      Strands from the selected region, length 5% of region height, colour inherited from content, growth animated over 2 s.
+    automation: >-
+      Scales strand length and density to the region and adds a gentle wind sway.
+    usability_check: >-
+      A first-time user makes a selected statue grow fur in under 45 s and adjusts length with one slider.
+  acceptance: >-
+    Mini scene "fur-grow": growth animation renders identically out of order and after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-mr-mercury
+  name: CC Mr. Mercury
+  sources:
+    - ref: S02
+      item: CC Mr. Mercury
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Mr. Mercury
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Turn a layer into liquid-metal-like blobs that are emitted, run under gravity, merge and separate, shaded like mercury and coloured from the layer.
+  projection_example: >-
+    Gold lettering melts into dripping liquid blobs that run down the columns.
+  controls:
+    - { name: "Producer (position, radius X/Y)", type: group, animatable: true }
+    - { name: "Direction, velocity, birth rate, longevity", type: float, animatable: true }
+    - { name: "Gravity, resistance, extra", type: float, animatable: true }
+    - { name: "Animation mode (explosive, fractal omni, twirl, direction, vortex, jet sideways and others)", type: enum, animatable: false }
+    - { name: "Blob influence, birth size, death size", type: float, animatable: true }
+    - { name: "Influence map", type: enum, animatable: false }
+    - { name: "Light and shading", type: group, animatable: true }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Producer, velocity, gravity and blob sizes keyframable; changes act forward in time.
+  dependencies: [fx.simulation.particle-system, fx.simulation.cache-checkpoints, fx.simulation.deterministic-seeds, fx.simulation.emission-masks]
+  implementation: >-
+    GPU compute particles (fx.simulation.particle-system), with Mr. Mercury's animation modes as force presets, rendered as a screen-space metaball field: blob falloffs are splatted into an r16float field, thresholded into a surface with normals from the field gradient, and shaded with environment/Blinn terms using the source colours. The particle part is stateful and checkpointed. Simulation-like: metaballs, not a liquid solver (no volume conservation or surface tension).
+  io: >-
+    none
+  limitations: >-
+    Blobs do not conserve volume or wet surfaces; real pouring liquid needs fx.simulation.fluid-smoke (unresolved) or a Blender bake.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Melt into liquid metal" recipe → More controls.
+    defaults: >-
+      Emit from the selected layer's lower edge, gravity down, chrome shading with colours inherited, 2 s melt.
+    automation: >-
+      Sets the producer from the selection bounds, pre-rolls the sim and caches it.
+    usability_check: >-
+      A first-time user makes selected text melt into liquid metal in ≤3 deliberate actions and under 45 s; scrubbing is consistent with playback.
+  acceptance: >-
+    Mini scene "gold-melt": seek and reopen hash-match a sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-particle-systems-ii
+  name: CC Particle Systems II
+  sources:
+    - ref: S02
+      item: CC Particle Systems II
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Particle Systems II
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Emit 2D particles with birth rate, longevity, producer area, physics presets, gravity, resistance, and birth/death size and colour.
+  projection_example: >-
+    A burst of sparks on a wall marks the moment a light trace completes.
+  controls:
+    - { name: "Birth rate and longevity", type: float, animatable: true }
+    - { name: "Producer (position, radius X/Y)", type: group, animatable: true }
+    - { name: "Physics (animation, velocity, inherit velocity, gravity, resistance, direction, extra)", type: group, animatable: true }
+    - { name: "Particle (type, texture, rotation, birth/death size, size variation, max opacity, color map, birth/death color, transfer mode)", type: group, animatable: true }
+    - { name: "Random seed", type: seed, animatable: false }
+  animation: >-
+    As fx.simulation.cc-particle-world in flat mode.
+  dependencies: [fx.simulation.cc-particle-world, fx.simulation.particle-system]
+  implementation: >-
+    No separate implementation: the CC Particle World front-end in "Flat (2D)" mode reproduces the same Producer/Physics/Particle model without camera depth; the legacy name is a search alias.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.simulation.cc-particle-world: CC Particle Systems II is the 2D subset of the same model, and every control maps one-to-one onto the flat mode.
+  disposition: superseded
+  superseded_by: fx.simulation.cc-particle-world
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      No separate button; reached through the "Sparks" and "Burst" particle recipes.
+    defaults: >-
+      Recipe defaults of the particle system.
+    automation: >-
+      Searching the legacy name opens the flat-mode preset.
+    usability_check: >-
+      A first-time user adds a spark burst to a chosen moment in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Covered by the fx.simulation.cc-particle-world acceptance scene in flat mode.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-particle-world
+  name: CC Particle World
+  sources:
+    - ref: S02
+      item: CC Particle World
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Particle World
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Emit 3D particles with lifetime, birth/death size and colour, physics presets (explosive, vortex, twirl, fire, fractal), gravity, resistance and floor bounce, drawn as lines, shaded spheres, stars, bubbles or textured cards through the comp camera.
+  projection_example: >-
+    Sparks fountain up from a doorway, bounce on the step and fade, reading in correct depth from the audience viewpoint.
+  controls:
+    - { name: "Grid and guides (position, radius, motion path, grid, horizon, axis box)", type: group, animatable: false }
+    - { name: "Birth rate and longevity", type: float, animatable: true }
+    - { name: "Producer (position X/Y/Z, radius X/Y/Z)", type: group, animatable: true }
+    - { name: "Physics animation (explosive, direction/cone axis, viscous, twirl, twister, vortex, fire, jet sideways, fractal omni/up/down)", type: enum, animatable: false }
+    - { name: "Velocity, inherit velocity, gravity, resistance, extra, extra angle", type: float, animatable: true }
+    - { name: "Floor (position, action none/bounce/stick/kill)", type: group, animatable: true }
+    - { name: "Particle type (line, polygons, textured polygons, shaded/faded spheres, bubble, star, cube, motion polygon)", type: enum, animatable: false }
+    - { name: "Texture (layer, scatter, texture time)", type: group, animatable: false }
+    - { name: "Rotation, birth/death size, size variation, max opacity, opacity map", type: group, animatable: true }
+    - { name: "Color map (birth/death color, custom gradient), volume shade, transfer mode", type: group, animatable: true }
+    - { name: "Extras (effect camera or comp camera, depth cue, composite, random seed)", type: group, animatable: false }
+  animation: >-
+    Producer, rates and physics values keyframable, expression-linkable and audio-drivable (birth rate on beats); the producer can follow a motion path or a tracked null.
+  dependencies: [fx.simulation.particle-system, fx.simulation.emission-masks, fx.simulation.collision-surfaces, fx.simulation.cache-checkpoints, fx.simulation.deterministic-seeds, 3d.camera, pass.depth]
+  implementation: >-
+    A CC-style front-end over fx.simulation.particle-system: Producer → box/ellipsoid emitter, animation modes → force-field presets, floor → plane collider (bounce/stick/kill), particle types → instanced sprite/mesh/impostor renderers, colour and opacity maps → 1D LUTs over normalized age. GPU state in storage buffers, fixed-step deterministic integration, checkpoints for seeking; rendered through the comp camera with depth written for pass.depth.
+  io: >-
+    none
+  limitations: >-
+    Same determinism scope as the particle system (same GPU/driver class; baked caches for other machines). Particle-to-particle interaction is not modelled.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Sparks", "Fountain" and "Embers" recipes → More controls.
+    defaults: >-
+      Emit from the selection, upward cone, gravity on, floor at the region bottom with bounce, faded-sphere particles, 2 s pre-roll.
+    automation: >-
+      Sets the floor from region geometry, sizes particles to the region, binds the comp camera to the audience viewpoint and caches the sim.
+    usability_check: >-
+      A first-time user makes sparks fountain from a selected doorway and bounce on the step in under 60 s without opening More controls.
+  acceptance: >-
+    AS-3 reproducibility: seek, reopen and parallel render all hash-match a sequential render of the spark fountain.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-pixel-polly
+  name: CC Pixel Polly
+  sources:
+    - ref: S02
+      item: CC Pixel Polly
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Pixel Polly
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Break a layer into a grid of triangles or squares that blow away from a force centre with gravity, spin and randomness.
+  projection_example: >-
+    A projected poster on a wall bursts into triangles that fall away, revealing the real brick.
+  controls:
+    - { name: "Force, gravity, spinning", type: float, animatable: true }
+    - { name: "Force center", type: point2d, animatable: true }
+    - { name: "Direction and speed randomness", type: float, animatable: true }
+    - { name: "Grid spacing", type: float, animatable: false }
+    - { name: "Object (polygon, textured polygon, square, textured square)", type: enum, animatable: false }
+    - { name: "Depth sort and start time", type: group, animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Force, gravity and force centre keyframable; start time sets when pieces release.
+  dependencies: [fx.simulation.shatter, fx.simulation.deterministic-seeds]
+  implementation: >-
+    Shares Shatter's fragment pass: grid triangulation or squares, per-piece closed-form ballistic motion with hashed velocity and spin, instanced rendering with optional bitonic depth sort. Stateless and random-access; bounds comp-sized.
+  io: >-
+    none
+  limitations: >-
+    No collisions; pieces are flat polygons.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Break apart" recipe ("Pixel pieces" style).
+    defaults: >-
+      Spacing ~2% of region width, force at the clicked point, gravity down, 1.5 s.
+    automation: >-
+      Sets the start time to the current playhead and the force centre to the click.
+    usability_check: >-
+      A first-time user breaks a selected image into falling pieces in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "poster-burst": random-frame renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-rainfall
+  name: CC Rainfall
+  sources:
+    - ref: S02
+      item: CC Rainfall
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Rainfall
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Fill an area with falling rain streaks with depth, speed, wind and spread, optionally refracting the background, composited over or with the layer.
+  projection_example: >-
+    Rain falls across a whole facade but only over the walls (not the windows), with drops subtly refracting the projected content.
+  controls:
+    - { name: "Drops, size, scene depth", type: float, animatable: true }
+    - { name: "Speed, wind, wind variation, spread", type: float, animatable: true }
+    - { name: "Color and opacity", type: group, animatable: true }
+    - { name: "Background reflection (influence, spread width/height)", type: group, animatable: true }
+    - { name: "Transfer mode and composite with original", type: enum, animatable: false }
+    - { name: "Extras (appearance, offset, ground level, embed depth)", type: group, animatable: true }
+    - { name: "Random seed", type: seed, animatable: false }
+  animation: >-
+    Amount, wind and speed keyframable (a storm builds); wind can be audio-driven.
+  dependencies: [fx.simulation.deterministic-seeds, mask.track-matte, map.region, ux.recipe-engine]
+  implementation: >-
+    Stateless analytic particles in WGSL: drop i's phase and lane come from hash(seed, i), y(t) = (phase + speed·t) mod fall height with wind drift, drawn as motion-streak quads sized by scene depth, and refraction samples the layer offset along the streak normal. Any frame renders independently (no checkpoints, parallel-safe); region restriction uses a track matte, and with fx.simulation.emission-masks (D) drops can start from ledges and splash on sills.
+  io: >-
+    none
+  limitations: >-
+    Stateless rain cannot pool or accumulate; splashes need collision-surfaces (D). Changing the drop count re-randomizes which drops exist.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make it rain": select an area, choose the recipe, adjust amount, wind and speed.
+    defaults: >-
+      Medium rain, slight wind, drop size scaled to region height and output resolution, windows excluded when walls are selected, ground at the region bottom.
+    automation: >-
+      Builds the matte from the selection and exclusions, scales drops to resolution and links ground level to the region's bottom edge.
+    usability_check: >-
+      A first-time user makes it rain over a selected wall in ≤3 deliberate actions and under 30 s, and changes wind direction with one drag.
+  acceptance: >-
+    Mini scene "rain-facade": rain over the wall region, excluded from windows; random-frame and parallel renders hash-match sequential output after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-scatterize
+  name: CC Scatterize
+  sources:
+    - ref: S02
+      item: CC Scatterize
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Scatterize
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Blow a layer apart into scattered pixel fragments with left and right twist, like dust being dispersed.
+  projection_example: >-
+    A projected statue outline disintegrates into drifting dust from left to right.
+  controls:
+    - { name: "Scatter", type: float, animatable: true }
+    - { name: "Right twist and left twist", type: angle, animatable: true }
+    - { name: "Transfer mode", type: enum, animatable: false }
+    - { name: "Progress map (product addition: gradient controlling onset)", type: layer, animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Scatter is keyed from 0 up to disperse; the optional progress map makes the dispersal sweep across the layer.
+  dependencies: [fx.simulation.deterministic-seeds, fx.generate.gradient-ramp]
+  implementation: >-
+    Stateless WGSL: the layer is cut into small cells, each displaced by hash(seed, cell) × scatter and twisted by vertical position, drawn as instanced quads/points with the chosen transfer mode. Random-access; bounds expand by the maximum scatter distance.
+  io: >-
+    none
+  limitations: >-
+    No forces or turbulence; fragments move on fixed hashed vectors. For wind-blown dust use particles with a layer-explode emitter.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Blow away as dust" recipe → More controls.
+    defaults: >-
+      Left-to-right sweep via a generated ramp, 2 s, normal transfer.
+    automation: >-
+      Creates the progress ramp oriented to the chosen direction.
+    usability_check: >-
+      A first-time user makes a selected image blow away as dust in a chosen direction in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "dust-away": random-frame renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-snowfall
+  name: CC Snowfall
+  sources:
+    - ref: S02
+      item: CC Snowfall
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Snowfall
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Fill an area with falling snowflakes with depth, size and speed variation, wind, wiggle and background illumination.
+  projection_example: >-
+    Snow drifts down over a lit facade for a winter show, thicker in front of the dark walls.
+  controls:
+    - { name: "Flakes, size, size variation, scene depth", type: float, animatable: true }
+    - { name: "Speed, speed variation, wind, wind variation, spread", type: float, animatable: true }
+    - { name: "Wiggle (amount, variation, frequency)", type: group, animatable: true }
+    - { name: "Color, opacity, background illumination", type: group, animatable: true }
+    - { name: "Transfer mode and composite with original", type: enum, animatable: false }
+    - { name: "Extras (offset, ground level, embed depth)", type: group, animatable: true }
+    - { name: "Random seed", type: seed, animatable: false }
+  animation: >-
+    Amount, wind and speed keyframable; wind can be audio-driven.
+  dependencies: [fx.simulation.deterministic-seeds, mask.track-matte, map.region, ux.recipe-engine]
+  implementation: >-
+    Same stateless analytic scheme as CC Rainfall: each flake's phase, lane, size and wiggle phases from hash(seed, i), position closed-form (fall + wind + sum-of-sines wiggle), soft round sprites with depth-based size and softness. Random-access, no checkpoints, parallel-safe.
+  io: >-
+    none
+  limitations: >-
+    Stateless snow cannot settle or build up on ledges; accumulation would need a stateful buffer with checkpoints (fx.simulation.collision-surfaces, D).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Snow": select an area, choose the recipe, adjust amount, flake size and wind.
+    defaults: >-
+      Gentle snowfall, slight wind, flakes scaled to resolution and region height, ground at the region bottom.
+    automation: >-
+      Builds the matte from the selection and scales flakes to the output resolution.
+    usability_check: >-
+      A first-time user adds snow over a selected facade in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "snow-facade": random-frame renders hash-match sequential output after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.cc-star-burst
+  name: CC Star Burst
+  sources:
+    - ref: S02
+      item: CC Star Burst
+      category: Simulation
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S15
+      item: CC Star Burst
+      category: Simulation
+      checked: false
+  artist_can: >-
+    Fly through a field of star dots coloured from the layer, like a warp-speed starfield, with scatter, speed, phase, grid spacing and size.
+  projection_example: >-
+    A ceiling or wall becomes a warp-speed starfield as the transition into a space-themed scene.
+  controls:
+    - { name: "Scatter, speed, phase", type: float, animatable: true }
+    - { name: "Grid spacing and size", type: float, animatable: true }
+    - { name: "Blend with original", type: float, animatable: true }
+  animation: >-
+    Speed and phase keyframable; a speed ramp gives the warp-jump moment.
+  dependencies: [fx.simulation.deterministic-seeds, anim.keyframe.core]
+  implementation: >-
+    Stateless WGSL: a grid of points with hashed depth offsets, z(t) = (z0 − speed·t) mod depth, perspective-projected and drawn as sphere sprites sampling the layer colour. Random-access; bounds comp-sized.
+  io: >-
+    none
+  limitations: >-
+    A stylised starfield, not a 3D star scene; for camera-coupled stars use particles in 3D.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Particle or simulation plug-in clone with no projection scenario of its own. Smoke, water, particles, rain, snow, shatter, caustics, collapse and rigid-body simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Warp speed" recipe → More controls.
+    defaults: >-
+      Speed ramps up over 2 s, white stars over the current content.
+    automation: >-
+      Keys the speed ramp to the scene transition point.
+    usability_check: >-
+      A first-time user adds a warp-speed transition between two scenes in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "warp-transition": random-frame renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.particle-system
+  name: Particle system
+  sources:
+    - ref: brief §11D
+      item: Particle emitters, lifetime/velocity/size/color evolution, forces, sprite/textured particles
+      category: Simulation and particles
+      checked: true
+    - ref: brief §1
+      item: Particles, smoke-like imagery, rain, snow and light travel across architectural features
+      category: What the product must enable
+      checked: true
+  artist_can: >-
+    Emit particles from points, shapes, regions, paths, text or a layer's pixels; give them lifetime, speed, and size/colour/opacity over life; push them with gravity, drag, wind, turbulence, attractors and vortices; and draw them as dots, streaks, sprites, textured cards or small 3D meshes, flat or through the 3D camera.
+  projection_example: >-
+    Embers rise from the doorways, swirl around the columns in turbulence and fade out above the roofline in time with the music.
+  controls:
+    - { name: "Emitter type (point, box/sphere, grid, path, region, text glyphs, layer pixels, layer explode)", type: enum, animatable: false }
+    - { name: "Birth rate and burst count", type: float, animatable: true }
+    - { name: "Lifetime and variance", type: float, animatable: true }
+    - { name: "Initial velocity, direction, spread, inherit velocity", type: group, animatable: true }
+    - { name: "Forces (gravity, drag, wind, curl-noise turbulence, attractors/repellers, vortex)", type: group, animatable: true }
+    - { name: "Size, opacity and color over life", type: curve, animatable: false }
+    - { name: "Rotation and spin", type: group, animatable: true }
+    - { name: "Particle look (dot, streak, sprite from layer/comp with time offset, mesh instance)", type: enum, animatable: false }
+    - { name: "Blend mode, depth sort, motion blur", type: group, animatable: false }
+    - { name: "Sub-emitters (on birth, death, collision)", type: group, animatable: false }
+    - { name: "Attribute maps (color/size/velocity from a layer)", type: layer, animatable: false }
+    - { name: "Seed, pre-roll, max particles / quality", type: group, animatable: false }
+  animation: >-
+    Emitter and force values are keyframable, expression-linkable and audio-drivable (birth rate on beats, turbulence on bass). Edits take effect from the time they apply because the simulation integrates forward.
+  dependencies: [fx.simulation.deterministic-seeds, fx.simulation.cache-checkpoints, fx.simulation.emission-masks, fx.simulation.collision-surfaces, 3d.camera, 3d.scene, expr.engine, audio.analysis, preview.cache, proj.effect-stack]
+  implementation: >-
+    WGSL compute particles in struct-of-arrays storage buffers. Each particle has a stable ID (emit frame, emitter, index), and all its random values come from a stateless counter hash of (seed, ID, attribute), never from thread or evaluation order. Integration is fixed-step semi-implicit Euler with an integer number of substeps per frame derived from flicks, with forces evaluated from keyframed values at substep times; dead particles are compacted by a deterministic prefix-sum rather than order-dependent atomics. Rendering uses instanced sprites/streaks/meshes (three.js when sharing the 3D depth buffer) with premultiplied blending and an optional bitonic depth sort; state is checkpointed through fx.simulation.cache-checkpoints, so parallel render workers resume from checkpoints instead of skipping history.
+  io: >-
+    Sim caches live with the project cache, not the project file. Exporting particle positions as point sequences (PLY/CSV) for other tools is a later consideration.
+  limitations: >-
+    Bitwise determinism holds for the same app version and GPU/driver class; across vendors it is not guaranteed (FMA and transcendental differences), so other machines use baked caches. Particle count is bounded by VRAM (target 1–2M at 1080p on the RTX 5070 Ti, to be measured). No fluid dynamics between particles.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Add particles": select a region or path, then pick a recipe (Sparks, Embers, Dust, Fireflies, Confetti, Petals); first controls are amount, speed, size, color and direction.
+    defaults: >-
+      Emit from the selection, 3 s life, gentle upward drift with turbulence, pre-roll so particles are present at the scene start, fixed seed.
+    automation: >-
+      Scales size and speed to the region's physical size, picks sprite and blend mode per recipe, simulates and caches in the background, and warns before counts exceed the preview budget.
+    usability_check: >-
+      A first-time user adds embers rising from three selected windows in under 60 s without opening More controls, and scrubbing anywhere shows the same embers.
+  acceptance: >-
+    AS-3: reproducible particles after reopening and seeking; a parallel (MFR-style) render hash-matches a sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.emission-masks
+  name: Architectural emission masks
+  sources:
+    - ref: brief §11D
+      item: Architectural emission masks
+      category: Simulation and particles
+      checked: true
+    - ref: brief §19
+      item: Particles originate from selected physical regions or follow architectural contours
+      category: Projection-specific creative tools
+      checked: true
+  artist_can: >-
+    Make particles and other generators come from chosen parts of the building (inside windows, along rooflines, from mask or text outlines, from bright areas of a video) and optionally travel along those contours.
+  projection_example: >-
+    Sparks pour only from the edges of each window frame while dust drifts along the cornice line.
+  controls:
+    - { name: "Emission source (regions, region group or role, mask, shape path, text, layer luminance/alpha, depth or object-ID pass)", type: enum, animatable: false }
+    - { name: "Emit from (area, outline, vertices)", type: enum, animatable: false }
+    - { name: "Edge offset and thickness", type: float, animatable: true }
+    - { name: "Density weighting map", type: layer, animatable: false }
+    - { name: "Distribution (random, even blue-noise, sequential along path)", type: enum, animatable: false }
+    - { name: "Follow contour strength and speed", type: float, animatable: true }
+    - { name: "Per-region order and delay", type: group, animatable: true }
+  animation: >-
+    Offsets, follow strength and per-region delays keyframable; animated masks and paths re-sample each frame.
+  dependencies: [map.region, map.surface-2d, map.model-3d, mask.bezier, shape.path, text.layer, pass.depth, tool.edge-trace, tool.sequence-light-up, fx.simulation.particle-system, fx.simulation.deterministic-seeds]
+  implementation: >-
+    The core builds emission samplers in content space: region polygons, mask/shape paths and HarfBuzz/CanvasKit glyph outlines are triangulated (area) or arc-length parameterized (outline) on the CPU and uploaded as CDF tables, while pixel sources get a GPU prefix-sum CDF over a downsampled luminance/alpha mip. Each particle picks its spawn point by hash(seed, ID) → CDF lookup, so emission is stateless and identical in preview and export. Contour following stores (path ID, arc length) per particle and advances it each step; emitting by region role keeps shows portable when bound to another venue.
+  io: >-
+    none
+  limitations: >-
+    Positions live in content/UV or audience-view space; the system knows only the venue model, not unmodelled physical detail. Rebinding to a venue with different region counts changes the distribution by design (the seed is kept).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Built into every particle recipe as "Comes from: [current selection]" with "inside", "along the edges" or "along this line".
+    defaults: >-
+      The current selection; outline mode for line-like regions (rooflines), area mode for windows and doors; emission weighted by area.
+    automation: >-
+      Converts the selection into an emitter, resolves region roles through venue bindings and keeps the link live when regions are edited.
+    usability_check: >-
+      A first-time user makes sparks come from the edges of all windows (selected as one group) in ≤3 deliberate actions without drawing a mask.
+  acceptance: >-
+    Mini scene "window-sparks", plus AS-7 rebinding: the same show bound to a second venue emits from that venue's windows with no edits.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: fx.simulation.deterministic-seeds
+  name: Deterministic seeds
+  sources:
+    - ref: brief §20
+      item: Use deterministic time and seeded randomness
+      category: Architecture and build rules
+      checked: true
+    - ref: brief §11D
+      item: Deterministic seeds
+      category: Simulation and particles
+      checked: true
+    - ref: brief §5
+      item: Random results stable between preview and export
+      category: Expressions, controllers and rigs
+      checked: true
+  artist_can: >-
+    Get the same random result every time (preview, export, after reopening, on another machine) and try other variations with a Shuffle button or seed number, either locking one variation for many regions or letting each region differ.
+  projection_example: >-
+    A window-by-window random flicker is identical every night of the show and identical in the projector export.
+  controls:
+    - { name: "Seed", type: int, animatable: false }
+    - { name: "Shuffle (new variation)", type: action, animatable: false }
+    - { name: "Per-instance variation (same for all, by index, by region)", type: enum, animatable: false }
+  animation: >-
+    Seeds are not animated; deliberate re-rolls are made by switching variations at a cut. Time-varying randomness comes from hashing time slots, not from changing the seed.
+  dependencies: [proj.project-model, expr.engine, ux.recipe-engine]
+  implementation: >-
+    A stateless counter-based RNG in the core: value = hash(project seed ⊕ item seed, stream, element ID, time slot), using a fixed u32 integer hash (PCG-style) implemented identically in TypeScript (Math.imul) and WGSL and checked against shared golden vectors on both. There is no hidden RNG state and no Math.random, and results do not depend on evaluation order, thread count or frame order, which makes them random-access and safe for parallel rendering. Recipes derive child seeds from hash(parent seed, role), so regenerating a recipe keeps its variations; u32 → [0,1) conversion uses the top 24 bits for exact f32 results.
+  io: >-
+    Seeds are saved in the project file and survive collect/relink and venue rebinding.
+  limitations: >-
+    Structural edits (particle count, emission rate, grid size) change which element IDs exist, so the same seed can look different afterwards; the UI says so. Float divergence in downstream GPU math is handled by fx.simulation.cache-checkpoints, not by seeds.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Shuffle" (dice) button on every recipe with randomness; the default is to keep the current variation.
+    defaults: >-
+      Each new random element gets a seed derived from the project seed and its ID; duplicates keep the seed unless "Make unique" is chosen.
+    automation: >-
+      Derives distinct seeds per region or instance and records seeds in recipe overrides so regeneration preserves them.
+    usability_check: >-
+      A first-time user tries three variations with Shuffle and returns to the first with undo in under 20 s; exported frames match the preview.
+  acceptance: >-
+    Determinism suite: the same project rendered twice, in preview and export, with frames in random order, gives identical hashes; feeds AS-3.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: fx.simulation.collision-surfaces
+  name: Collision and surface-following particles
+  sources:
+    - ref: brief §11D
+      item: Collision or surface-following options
+      category: Simulation and particles
+      checked: true
+    - ref: brief §19
+      item: Particles follow architectural contours
+      category: Projection-specific creative tools
+      checked: true
+  artist_can: >-
+    Make particles bounce off, slide along, stick to or die on ledges, sills, floors and the building model, or crawl over a surface following its shape.
+  projection_example: >-
+    Rain hits the window sills and splashes, while glowing beetles crawl over the facade relief following the 3D model.
+  controls:
+    - { name: "Colliders (region edges, planes, venue model, creative geometry, depth pass)", type: enum, animatable: false }
+    - { name: "Response (bounce, slide, stick, kill, spawn sub-emitter)", type: enum, animatable: false }
+    - { name: "Bounciness and friction", type: float, animatable: true }
+    - { name: "Surface-follow strength and stick distance", type: float, animatable: true }
+    - { name: "Collider thickness / offset", type: float, animatable: true }
+    - { name: "Show colliders", type: bool, animatable: false }
+  animation: >-
+    Bounciness, friction and follow strength keyframable; animated creative geometry rebuilds its collider each frame.
+  dependencies: [fx.simulation.particle-system, fx.simulation.cache-checkpoints, map.region, map.model-3d, 3d.scene, pass.depth]
+  implementation: >-
+    In 2D, region edges are rasterized into a signed distance field with a WGSL jump-flood pass, and particles test the SDF each substep, reflecting velocity with restitution and friction. In 3D, venue or creative meshes are voxelized into a 3D SDF texture in compute, with a screen-space depth-pass test for footage-derived geometry. Surface following projects particles to the SDF zero-set and removes normal velocity; static colliders are built once and cached, all within the deterministic fixed step.
+  io: >-
+    none
+  limitations: >-
+    SDF resolution limits thin features (mullions under ~2 texels can leak; thickness/offset compensates). Collisions make sims stateful, so checkpoints are required. Only Foam has particle-to-particle contact. The venue model is read-only collision geometry and is never moved (brief §9).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Toggles in particle recipes: "Bounce off the building" and "Crawl over the surface".
+    defaults: >-
+      On for rain and snow recipes, with ledges taken from region bottom edges; bounce 0.3, friction 0.5.
+    automation: >-
+      Builds colliders from the selected regions or venue model and outlines them on the canvas while the toggle is being edited.
+    usability_check: >-
+      A first-time user makes rain splash on window sills by turning on one option, in under 15 s.
+  acceptance: >-
+    Mini scene "sill-splash": rain with sill collisions; seek and reopen hash-match a sequential render.
+  status: prototype
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02: water collides with container regions (stays inside selected windows); arbitrary collision surfaces and particles not yet"
+
+- id: fx.simulation.cache-checkpoints
+  name: Cached, seekable simulation state
+  sources:
+    - ref: brief §20
+      item: Stateful simulations need seek/replay/checkpoint semantics; parallel render workers must not skip necessary simulation history
+      category: Architecture and build rules
+      checked: true
+    - ref: brief §11D
+      item: Cacheable simulation state
+      category: Simulation and particles
+      checked: true
+    - ref: brief §22
+      item: Reproducible particles and effects after reopening and seeking (show 3)
+      category: Acceptance shows
+      checked: true
+  artist_can: >-
+    Scrub, jump or loop anywhere in a simulation and see exactly what the export will contain, without waiting for the sim to run from the start, and get the same result after saving and reopening.
+  projection_example: >-
+    During rehearsal, jump straight to the 2:40 crack-and-collapse and see the exact fragments that will play in the show.
+  controls:
+    - { name: "Checkpoint interval (auto or frames)", type: int, animatable: false }
+    - { name: "Cache budget and location (RAM, disk)", type: group, animatable: false }
+    - { name: "Simulation start and pre-roll", type: group, animatable: false }
+    - { name: "Freeze / bake simulation", type: action, animatable: false }
+    - { name: "Re-simulate", type: action, animatable: false }
+  animation: >-
+    Not animatable. Keyframe edits on a simulation's inputs invalidate checkpoints from the first affected time onward.
+  dependencies: [preview.cache, render.queue, proj.project-model, proj.autosave-recovery, fx.simulation.deterministic-seeds]
+  implementation: >-
+    Every stateful pass implements init(seed, params) → state, step(state, t, dt) → state and render(state, t). The engine snapshots full state every K frames (adaptive, so replay stays under ~250 ms at the measured step cost), keyed by a hash of params, upstream inputs, seed and sim version, and a seek replays from the nearest checkpoint at or before the target. Render jobs run a sequential sim pre-pass that fills checkpoints ahead of the parallel frame workers, and workers fetch state from the store, so no worker skips history. Snapshots are held in a VRAM ring and spill to disk with zstd; dependency tracking invalidates only from the first changed time. The pass contract must be fixed in the engine API during milestone A even though the feature lands in D.
+  io: >-
+    "Bake simulation" writes caches into the project's cache folder so show machines and collected projects can play without re-simulating. Caches can always be rebuilt and are never the only source of truth.
+  limitations: >-
+    The first playback after an edit needs one sequential pass, shown as cache progress. Checkpoint memory scales with state (1M particles × ~48 B ≈ 48 MB per checkpoint). Cross-vendor GPU results can differ bitwise, so other machines verify by hash and fall back to the baked cache.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Automatic. A thin bar on the timeline shows simulated ranges, and More controls offers "Freeze simulation".
+    defaults: >-
+      Auto checkpointing on, background simulation after each edit, disk spill when RAM is low.
+    automation: >-
+      Pre-simulates in the background, invalidates on edit, manages memory and explains delays in plain words ("Preparing the bubbles… 60%").
+    usability_check: >-
+      After editing a particle recipe, a first-time user can scrub to any point and gets a correct preview-quality frame within 1 s, without knowing what a cache is.
+  acceptance: >-
+    AS-3 and AS-6: a simulation scene rendered in parallel hash-matches a sequential render; an interrupted render resumes with correct state; reopen-and-seek gives identical frames.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: fx.simulation.rigid-body-fracture
+  name: 3D fracture, collapse and rebuild
+  sources:
+    - ref: brief §19
+      item: Editable crack, fragment, disassembly and rebuilding scenes
+      category: Projection-specific creative tools
+      checked: true
+    - ref: brief §1
+      item: A wall appears to crack, separate into blocks, rotate, fall apart and rebuild
+      category: What the product must enable
+      checked: true
+    - ref: brief §22
+      item: Transformation (show 3)
+      category: Acceptance shows
+      checked: true
+  artist_can: >-
+    Crack a wall or object into 3D pieces (Voronoi, bricks matched to coursing, planks, radial impact or custom), let them fall and collide with real physics against the floor and each other, then rebuild exactly into place, controlling where cracks start, how pieces break and when.
+  projection_example: >-
+    The facade cracks from a point of impact, chunks tumble onto the plaza and pile up, then fly back and lock into the wall on the final chord.
+  controls:
+    - { name: "Fracture pattern (Voronoi, clustered Voronoi, bricks from regions, planks, radial impact, custom mesh/map)", type: enum, animatable: false }
+    - { name: "Piece count, size variation, thickness", type: group, animatable: false }
+    - { name: "Impact points and crack-line timing", type: point3d, animatable: true }
+    - { name: "Release (by time, gradient sweep, impact, region order)", type: enum, animatable: false }
+    - { name: "Physics (gravity, mass, friction, restitution, damping)", type: group, animatable: true }
+    - { name: "Colliders (floor, venue proxy, other pieces)", type: group, animatable: false }
+    - { name: "Rebuild (exact reverse, eased reassembly, mixed) with timing and stagger", type: group, animatable: true }
+    - { name: "Materials (front from content, interior and side PBR material, crack glow)", type: group, animatable: true }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Impact, release and rebuild timing are keyframable and beat-snappable. Rebuild plays recorded trajectories backwards, or blends each piece from its rest pose with an eased curve, so reassembly lands exactly.
+  dependencies: [3d.scene, 3d.material-pbr, 3d.extrude, 3d.model-import, map.model-3d, map.region, fx.simulation.cache-checkpoints, fx.simulation.deterministic-seeds, fx.simulation.shatter, fx.simulation.particle-system, anim.time-remap, audio.analysis, ux.recipe-engine]
+  implementation: >-
+    The core generates fracture geometry deterministically (seeded Voronoi cells by convex plane-clipping of the creative proxy mesh, or brick layouts from region and coursing lines), producing convex pieces that serve as Rapier convex-hull colliders and as render meshes with interior faces and UVs for three.js WebGPU. Rapier (WASM, deterministic build) steps at a fixed dt in a worker; its serialized world snapshots are the checkpoints, and per-frame piece transforms are recorded into a transform cache that preview and export both read, so rendering is random-access after the first sequential pass. Pieces are copies of ANIMATED CREATIVE GEOMETRY, never the venue geometry or calibration, and are textured by audience/projector-view projective mapping so the first frame matches the unbroken wall.
+  io: >-
+    Optional import of pre-fractured meshes (glTF/OBJ) and export of baked transform caches; a Blender handoff for very high piece counts is a later option.
+  limitations: >-
+    Rapier's cross-platform determinism assumes the same version, inputs and insertion order, which must be verified by hash tests. Piece counts in the low thousands keep stepping interactive. There is no bending or plastic deformation; dust and debris come from particle sub-emitters. The illusion holds only from the audience viewpoint, and falling pieces project onto whatever physical surface lies behind them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Crack and rebuild": select a wall, choose the recipe, adjust intensity, duration and where it starts (click on the wall).
+    defaults: >-
+      Bricks or Voronoi chosen from the region tag, 60–150 pieces scaled to wall size, impact at the clicked point, 2 s fall, 1 s hold, 2 s rebuild, floor at the region bottom, crack glow and dust on.
+    automation: >-
+      Builds proxy creative geometry from the wall region or venue model, fractures it, assigns content-front and stone-interior materials, sets the audience camera, runs and caches the physics, and generates the rebuild.
+    usability_check: >-
+      A first-time user makes a selected wall crack, collapse and rebuild in ≤3 deliberate actions and under 90 s, and the result is identical after saving, reopening and scrubbing.
+  acceptance: >-
+    AS-3 (Transformation): wall deformation, fragmentation and reassembly; frame hashes stable across reopen, seek and parallel render; the final rebuilt frame matches the unbroken wall within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.fluid-smoke
+  name: Real fluid and smoke simulation
+  sources:
+    - ref: brief §11C
+      item: These looks do not by themselves imply a physical fluid simulator
+      category: Noise and texture
+      checked: true
+    - ref: brief §11D
+      item: Liquid-like effects
+      category: Simulation and particles
+      checked: true
+    - ref: brief §1
+      item: Smoke-like imagery; brick changes into flowing water
+      category: What the product must enable
+      checked: true
+  artist_can: >-
+    Drive smoke, ink or liquid motion with an actual fluid solver, swirling around windows and columns and pushed by moving objects, instead of a noise-based look.
+  projection_example: >-
+    Ink-like smoke pours out of the windows, curls around the mullions and is pushed aside by a passing logo.
+  controls:
+    - { name: "Solver (2D GPU grid, baked 3D from Blender)", type: enum, animatable: false }
+    - { name: "Resolution", type: int, animatable: false }
+    - { name: "Viscosity, vorticity, dissipation, buoyancy", type: float, animatable: true }
+    - { name: "Sources (density, velocity, temperature) from emission masks", type: group, animatable: true }
+    - { name: "Obstacles from regions or moving layers", type: region-set, animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Source strengths and solver values keyframable and audio-drivable; changes act forward in time.
+  dependencies: [fx.simulation.cache-checkpoints, fx.simulation.emission-masks, fx.simulation.collision-surfaces, fx.simulation.deterministic-seeds, map.region]
+  implementation: >-
+    Two candidate routes. (1) A 2D stable-fluids solver in WGSL compute: semi-Lagrangian advection, Jacobi or multigrid pressure projection and vorticity confinement on r32float grids, with region-SDF obstacles, a fixed step and checkpoints. (2) Blender Mantaflow smoke or liquid baked headless and imported as image/EXR sequences or VDB renders (required-integration).
+  io: >-
+    Route 2 imports Blender bakes as EXR/PNG sequences; caches are referenced like footage.
+  limitations: >-
+    User 2026-10-02: real fluid and smoke simulation is REQUIRED alongside fast presets. Plan: in-app GPU solvers (grid smoke/ink, water surface, particle-based flowing liquid) with deterministic checkpoint caches and a separate Prepare simulation step, plus optional offline 3D smoke and liquid via Blender Mantaflow. See fx.simulation.gpu-smoke-2d and related entries.
+
+    Open question: does the show need a true fluid solver, or do simulation-like looks (fx.noise-grain.fractal-noise, fx.distort.turbulent-displace, CC Mr. Mercury, Foam, particles with curl noise) cover the useful outcomes? Decide after milestone C prototypes; if yes, prefer the 2D GPU solver for interactivity and keep Blender for hero 3D liquid.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Would be reached through the "Smoke" and "Ink" recipes ("Real fluid" quality option); until resolved those recipes use simulation-like looks and say so.
+    defaults: >-
+      2D solver at 512 cells across the region, smoke from the selection, region outlines as obstacles.
+    automation: >-
+      Builds obstacles and sources from the selection, simulates and caches in the background.
+    usability_check: >-
+      A first-time user makes smoke pour from selected windows and curl around them in ≤3 deliberate actions and under 60 s.
+  acceptance: >-
+    Mini scene "window-smoke": seek and reopen hash-match a sequential render (if adopted).
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: fx.simulation.gpu-smoke-2d
+  name: Smoke and ink simulation (GPU grid solver)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (real fluid and smoke)
+      checked: true
+  artist_can: >-
+    Make real, swirling smoke, mist or ink that rises from chosen parts of the building, drifts with wind and fades.
+  projection_example: >-
+    Smoke pours out of the windows and curls up across the facade.
+  controls:
+    - { name: "Where it starts (regions/edges)", type: region, animatable: false }
+    - { name: "Direction and wind", type: angle, animatable: true }
+    - { name: "Amount", type: float, animatable: true }
+    - { name: "Swirl, rise, fade", type: float, animatable: true }
+    - { name: "Duration", type: time, animatable: false }
+  animation: >-
+    Emission and wind keyframable; deterministic from the seed.
+  dependencies: [fx.simulation.prepare-workflow, fx.simulation.cache-checkpoints]
+  implementation: >-
+    WebGPU compute Eulerian solver (semi-Lagrangian advection, vorticity confinement, buoyancy, Jacobi pressure projection) on a grid matched to the region bounds; density/temperature fields rendered with lighting; fixed timestep, checkpointed state.
+  io: >-
+    Simulation caches stored with the project cache.
+  limitations: >-
+    2D grid in the facade plane; volumetric 3D comes from the offline integration.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select windows, then "Smoke rising".
+    defaults: >-
+      Soft white smoke, gentle wind.
+    automation: >-
+      Sizes the grid and timing to the selection.
+    usability_check: >-
+      A first-time user adds smoke to windows and changes its direction in three actions.
+  acceptance: >-
+    AS-3: identical frames after reopening and seeking; export matches preview.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: fx.simulation.water-surface-2d
+  name: Water surface and ripples (height-field solver)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (water)
+      checked: true
+  artist_can: >-
+    Turn a surface into rippling water with refraction and caustic-like light.
+  projection_example: >-
+    The wall becomes a pool surface that ripples on each beat.
+  controls:
+    - { name: "Ripple size, speed, calmness", type: float, animatable: true }
+    - { name: "Drops / beat drops", type: enum, animatable: false }
+  animation: >-
+    Drops keyframable or driven by beats.
+  dependencies: [fx.simulation.prepare-workflow]
+  implementation: >-
+    GPU wave-equation height field with damping; normals refract the underlying image; caustic approximation from surface curvature.
+  io: >-
+    Checkpointed cache.
+  limitations: >-
+    Surface waves only (no splashing).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select a wall, then "Turn into water".
+    defaults: >-
+      Gentle ripples.
+    automation: >-
+      Adapts ripple scale to the region.
+    usability_check: >-
+      A first-time user makes a wall ripple with the music without help.
+  acceptance: >-
+    Deterministic ripples across seek and export.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.liquid-2d
+  name: Flowing liquid (particle fluid)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (flowing liquids)
+      checked: true
+  artist_can: >-
+    Pour liquid that flows down and across the building, collecting on ledges.
+  projection_example: >-
+    "Fill with flowing water": water floods a window, spills over the sill and runs down the wall.
+  controls:
+    - { name: "Source, amount, thickness, duration", type: float, animatable: true }
+  animation: >-
+    Emission keyframable.
+  dependencies: [fx.simulation.prepare-workflow]
+  implementation: >-
+    GPU position-based fluid / FLIP particles with region outlines as colliders; screen-space surface rendering; fixed-step deterministic checkpoints.
+  io: >-
+    Checkpointed cache.
+  limitations: >-
+    Heavy; preview may require preparing the simulation first.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select a region, then "Fill with flowing water".
+    defaults: >-
+      Clear blue water.
+    automation: >-
+      Builds colliders from the building outline.
+    usability_check: >-
+      A first-time user fills a window with water and adjusts the amount.
+  acceptance: >-
+    Reproducible after reopening; export matches preview.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: fx.simulation.mantaflow-offline
+  name: Offline 3D smoke and liquid via Blender Mantaflow
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (evaluate established engines)
+      checked: true
+  artist_can: >-
+    Create volumetric 3D smoke, fire-like plumes and liquids for hero moments, simulated offline.
+  projection_example: >-
+    A 3D wave crashes out of the tunnel illusion.
+  controls:
+    - { name: "Preset, resolution, duration", type: enum, animatable: false }
+  animation: >-
+    Baked to image sequences or meshes.
+  dependencies: [fx.simulation.prepare-workflow]
+  implementation: >-
+    Headless Blender (GPL, allowed for personal use) driven by a generated script; results baked to EXR/PNG passes and imported as footage with depth.
+  io: >-
+    Requires Blender installed (offered on first use).
+  limitations: >-
+    Offline only; minutes to hours depending on resolution.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "3D smoke (high quality)" preset.
+    defaults: >-
+      Medium resolution.
+    automation: >-
+      Sets up the Blender scene and imports the result.
+    usability_check: >-
+      Progress and remaining time are clear.
+  acceptance: >-
+    Baked results reopen identically.
+  status: not-started
+  evidence: []
+
+- id: fx.simulation.prepare-workflow
+  name: Prepare simulation (separate from preview caching)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (simulation workflow)
+      checked: true
+  artist_can: >-
+    See when a simulation needs preparing, prepare it with progress, and know it is reused for preview and export.
+  projection_example: >-
+    Prepare the smoke once, then scrub freely.
+  controls:
+    - { name: "Prepare / re-prepare", type: action, animatable: false }
+    - { name: "Simulation quality", type: enum, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [fx.simulation.cache-checkpoints]
+  implementation: >-
+    Sequential fixed-step bake writing checkpoints keyed by (sim id, parameter hash); seeking restores the nearest checkpoint; export reuses the same checkpoints.
+  io: >-
+    Cache on disk.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Prepare simulation" bar appears when needed.
+    defaults: >-
+      Prepares automatically in the background.
+    automation: >-
+      Invalidates only when simulation settings change.
+    usability_check: >-
+      Users can tell simulation preparation apart from video caching.
+  acceptance: >-
+    Seeking anywhere after preparation gives frames identical to a sequential render.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"

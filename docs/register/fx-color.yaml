@@ -1,0 +1,2239 @@
+# Color Correction — Before Effects capability register
+# Sources: S02 effect list + support matrix (helpx, "last updated May 13, 2026", fetched 2026-10-01); S19 Color Correction effects (updated 27 Jun 2025, fetched 2026-10-01); S26 OpenColorIO and ACES (fetched 2026-10-01); S01 Cycore plugins page (CC effects); brief §0, §11I, §14, §15, §16.
+#
+# Conventions used in `implementation` below (proposals against docs/register/SCHEMA.md architecture context):
+#   - Working buffers are rgba16float, scene-linear, premultiplied. Every color op unpremultiplies, works in f32, and re-premultiplies.
+#   - "Scene-linear" ops (exposure, gains, filters, channel mixing) run directly on working values, because they model light and keep HDR values intact.
+#   - "Grading encoding" is a display-referred encoding of the working primaries used by perceptually tuned controls (curves, levels, hue/sat, tints).
+#     Default: extended sRGB transfer (values above 1.0 extend smoothly, never clip). ACES projects use ACEScct. The in/out conversion is fused into the pass.
+#   - "Auto"/statistics effects share one GPU histogram reduction (workgroup-local atomic<u32> bins merged globally; integer bins => deterministic across
+#     preview, export and parallel workers). Per-frame statistics are cached in preview.cache keyed by the upstream hash. Temporal smoothing averages
+#     statistics, not pixels, so the effect declares a dependency on neighbour frames' statistics.
+#   - Everything here is the show's ARTISTIC grade. Per-projector output correction (gamma/color matching, black level) lives in out.projector-output and is never applied here.
+
+- id: fx.color.auto-color
+  name: Auto Color
+  sources:
+    - ref: S02
+      item: Auto Color
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Auto Color
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Automatically fix contrast and remove a color cast by mapping the darkest and lightest pixels to black and white and neutralizing near-gray midtones, optionally smoothed over time.
+  projection_example: >-
+    Clean up a slightly green, flickering phone video of the venue before using it as content or as a reference plate.
+  controls:
+    - { name: "Temporal Smoothing (seconds)", type: "float", animatable: false }
+    - { name: "Scene Detect", type: "bool", animatable: false }
+    - { name: "Black Clip / White Clip", type: "percent", animatable: true }
+    - { name: "Snap Neutral Midtones", type: "bool", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Clip and blend values are keyframable and expression-linkable. The correction itself is recomputed per frame from image statistics.
+  dependencies: [proj.effect-stack, preview.cache, anim.keyframe.core, ux.operation-system]
+  implementation: >-
+    Runs a GPU histogram reduction (1024 bins per channel) in grading encoding. Prefix sums give clipped black/white points per channel, and the mean of near-neutral pixels gives the midtone gamma; the result is applied as a per-channel levels pass. Temporal Smoothing averages the cached per-frame statistics over ±N s (Scene Detect cuts the window when the histogram distance exceeds a threshold), so the effect declares a temporal dependency on neighbour-frame statistics.
+  io: >-
+    none
+  limitations: >-
+    Adobe's exact heuristics are not reproduced. Statistics cover the whole layer unless region-scoped. A cold statistics cache slows the first random-access seek, because neighbour frames must be rendered upstream first.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Fix footage color automatically" quick fix on a selected video layer → More controls.
+    defaults: >-
+      Clip 0.1 %, Snap Neutral Midtones on, Temporal Smoothing 0.5 s with Scene Detect on for video and 0 for stills.
+    automation: >-
+      Chooses smoothing from the layer type. Offers "Freeze this fix", which bakes the current result into editable Levels values.
+    usability_check: >-
+      A first-time user removes a visible color cast from a supplied clip in two actions (select, "Fix color") within 30 s and rates it improved in a side-by-side view.
+  acceptance: >-
+    Mini scene "auto-fix-flicker": a supplied cast/flicker clip shows reduced frame-to-frame mean-channel variance, and preview and export statistics match exactly.
+  status: not-started
+  evidence: []
+
+- id: fx.color.auto-contrast
+  name: Auto Contrast
+  sources:
+    - ref: S02
+      item: Auto Contrast
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Auto Contrast
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Automatically stretch overall contrast without changing color balance, because all channels share one black and white point.
+  projection_example: >-
+    Give flat archival footage, projected onto a pale wall, enough contrast to read from across the street.
+  controls:
+    - { name: "Temporal Smoothing (seconds)", type: "float", animatable: false }
+    - { name: "Scene Detect", type: "bool", animatable: false }
+    - { name: "Black Clip / White Clip", type: "percent", animatable: true }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Clip and blend values keyframable; correction recomputed per frame from statistics.
+  dependencies: [proj.effect-stack, preview.cache, anim.keyframe.core, fx.color.auto-color]
+  implementation: >-
+    Uses the same statistics pipeline as fx.color.auto-color, but on a single combined (max-RGB/luma) histogram, so one linear stretch is applied to all channels and no cast is introduced or removed. The stretch is evaluated in grading encoding, and the same temporal-statistics dependency applies.
+  io: >-
+    none
+  limitations: >-
+    Same whole-frame and seek-latency caveats as Auto Color.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Fix footage color automatically" quick fix → "Contrast only" option.
+    defaults: >-
+      Clip 0.1 %, smoothing 0.5 s for video.
+    automation: >-
+      Auto-selected instead of Auto Color when the layer is grayscale or has an intentional color look.
+    usability_check: >-
+      A novice increases the contrast of a flat supplied clip with one action in under 20 s and can undo it in one action.
+  acceptance: >-
+    Mini scene "auto-fix-flicker": output black/white points land at the requested clip percentiles within 1 histogram bin.
+  status: not-started
+  evidence: []
+
+- id: fx.color.auto-levels
+  name: Auto Levels
+  sources:
+    - ref: S02
+      item: Auto Levels
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Auto Levels
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Automatically stretch each color channel to full range independently, which can remove (or introduce) color casts and reduce exposure flicker.
+  projection_example: >-
+    Normalize a batch of found-footage clips that will play in sequence across the facade so none look muddy.
+  controls:
+    - { name: "Temporal Smoothing (seconds)", type: "float", animatable: false }
+    - { name: "Scene Detect", type: "bool", animatable: false }
+    - { name: "Black Clip / White Clip", type: "percent", animatable: true }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Clip and blend values keyframable; correction recomputed per frame from statistics.
+  dependencies: [proj.effect-stack, preview.cache, anim.keyframe.core, fx.color.auto-color]
+  implementation: >-
+    Uses the shared histogram reduction with independent per-channel percentiles feeding a per-channel levels pass in grading encoding. The temporal-statistics dependency is the same as in Auto Color.
+  io: >-
+    none
+  limitations: >-
+    Can introduce a color cast on images dominated by one hue (e.g. a red-lit stage). The preview flags this when the channel stretches differ strongly.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Fix footage color automatically" quick fix → "Stronger (per color)" option.
+    defaults: >-
+      Clip 0.1 %, smoothing 0.5 s for video.
+    automation: >-
+      Warns when the per-channel stretch would create a strong cast and suggests Auto Contrast instead.
+    usability_check: >-
+      A novice reduces exposure flicker on a supplied time-lapse in two actions in under 30 s.
+  acceptance: >-
+    Mini scene "auto-fix-flicker": per-channel percentiles map to 0/1 within 1 bin, and frame-to-frame mean variance is reduced.
+  status: not-started
+  evidence: []
+
+- id: fx.color.black-white
+  name: Black & White
+  sources:
+    - ref: S02
+      item: Black & White
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Black & White
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Convert to grayscale while choosing how light or dark each original color family becomes, with an optional single-color tint.
+  projection_example: >-
+    Turn a colorful archive photo of the building into a moody monochrome where the red brick reads light and the blue sky dark.
+  controls:
+    - { name: "Reds / Yellows / Greens / Cyans / Blues / Magentas", type: "percent[6]", animatable: true }
+    - { name: "Tint", type: "bool", animatable: false }
+    - { name: "Tint Color", type: "color", animatable: true }
+  animation: >-
+    All six weights and the tint color keyframable, so a scene can fade from color into a graded monochrome look.
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.recipe-engine]
+  implementation: >-
+    Per-pixel WGSL pass in grading encoding. Gray is computed by the Photoshop-style min/mid/max channel decomposition weighted by the hue-sector weights; the tint is applied by colorizing at preserved lightness. No bounds expansion or temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Matches Photoshop's behaviour visually, not bit-exactly.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make it black & white" — one action on the selection; the weights appear as "Color brightness" sliders under More controls.
+    defaults: >-
+      Photoshop default weights (Reds 40, Yellows 60, Greens 40, Cyans 60, Blues 20, Magentas 80), tint off.
+    automation: >-
+      Offers a "Sepia / cool / warm" tint swatch row that sets Tint and Tint Color.
+    usability_check: >-
+      A first-time user turns a selected layer black & white and makes its reds lighter in under 30 s without reading help.
+  acceptance: >-
+    Mini scene "grade-basics": golden-image match against a float reference within 1/1023 per channel in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.brightness-contrast
+  name: Brightness & Contrast
+  sources:
+    - ref: S02
+      item: Brightness & Contrast
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Brightness & Contrast
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Make the whole layer brighter or darker and add or reduce contrast in one simple step.
+  projection_example: >-
+    Add punch to a texture so it still reads on a stone facade washed by street lighting.
+  controls:
+    - { name: "Brightness", type: "float", animatable: true }
+    - { name: "Contrast", type: "float", animatable: true }
+    - { name: "Use Legacy", type: "bool", animatable: false }
+  animation: >-
+    Both sliders keyframable and expression-linkable (e.g. contrast pulsing with audio.to-keyframes data).
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.recipe-engine, ux.guided-workflow]
+  implementation: >-
+    Per-pixel pass in grading encoding. Modern mode uses a CPU-built tone curve (midpoint-pivot contrast plus brightness lift that protects black and white), uploaded as a 4096-entry r16float 1D LUT texture and extrapolated linearly above 1.0. Legacy mode is a plain linear offset and scale.
+  io: >-
+    none
+  limitations: >-
+    Gives coarse global control only. Tonal targeting needs Curves, Levels or Lumetri.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "More punch" and "Brighter / darker" sliders on the Color card of any selected layer or region.
+    defaults: >-
+      Both 0. The modern (non-legacy) curve is used.
+    automation: >-
+      Recipes that add content to dark surfaces start with a small brightness lift suggested from the region's measured surface tone, where calibration data provides one.
+    usability_check: >-
+      A first-time user makes a selected layer punchier and brighter in under 20 s without opening More controls.
+  acceptance: >-
+    Guided-path mini scene "first-surface": the adjustment survives save/reopen, and the export matches the preview within 1 code value at 10-bit.
+  status: not-started
+  evidence: []
+
+- id: fx.color.broadcast-colors
+  name: Broadcast Colors
+  sources:
+    - ref: S02
+      item: Broadcast Colors
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Broadcast Colors
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Keep composite NTSC/PAL signal amplitude under an IRE limit by reducing luminance or saturation of unsafe pixels, or key out safe/unsafe areas to see them.
+  projection_example: >-
+    A broadcast TV segment about the show needs a broadcast-safe version of the projected content.
+  controls:
+    - { name: "Broadcast Locale (NTSC / PAL)", type: "enum", animatable: false }
+    - { name: "How To Make Color Safe (Reduce Luminance / Reduce Saturation / Key Out Unsafe / Key Out Safe)", type: "enum", animatable: false }
+    - { name: "Maximum Signal Amplitude (IRE)", type: "float", animatable: true }
+  animation: >-
+    IRE limit keyframable (rarely needed).
+  dependencies: [proj.effect-stack, fx.color.video-limiter, render.encode]
+  implementation: >-
+    If retained, a per-pixel pass computes composite amplitude (Y ± chroma magnitude in Rec.601 YIQ/YUV) on display-encoded values. Unsafe pixels are scaled toward black or toward gray of equal luma, and the key modes write alpha.
+  io: >-
+    none
+  limitations: >-
+    Decision 2026-10-02: kept for After Effects import fidelity, implemented as a luminance/saturation limiter. Hidden from the beginner library.
+
+    OPEN QUESTION: does any deliverable of this projection product need NTSC/PAL composite-amplitude limiting? Projectors are driven by digital RGB, and a broadcast or streaming recap is better served by fx.color.video-limiter plus correct export range metadata (render.encode). If the answer is no, this becomes superseded by fx.color.video-limiter.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: F
+  beginner:
+    action: >-
+      Not shown in guided tools. If retained, it is reached through Export → advanced → "Make it broadcast-safe".
+    defaults: >-
+      NTSC, Reduce Luminance, 110 IRE (Adobe defaults).
+    automation: >-
+      If retained, it is applied automatically on a broadcast export preset only.
+    usability_check: >-
+      If retained: a novice produces a broadcast-safe review export by choosing one preset, with no effect added to the show.
+  acceptance: >-
+    Pending resolution; if kept, mini scene "broadcast-safe": no output pixel exceeds the IRE limit.
+  status: not-started
+  evidence: []
+
+- id: fx.color.cc-color-neutralizer
+  name: CC Color Neutralizer
+  sources:
+    - ref: S02
+      item: CC Color Neutralizer
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: CC Color Neutralizer
+      category: Color Correction
+      checked: true
+    - ref: S01
+      item: CC Color Neutralizer (Cycore plugins page)
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Remove color casts separately in shadows, midtones and highlights by picking what should be neutral in each range.
+  projection_example: >-
+    Fix footage of the venue shot at dusk, with blue shadows and orange sodium-lit highlights, so it can serve as a neutral backdrop plate.
+  controls:
+    - { name: "Shadows / Midtones / Highlights Unbalance", type: "color[3]", animatable: true }
+    - { name: "Pinning", type: "float", animatable: true }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+    - { name: "Special (skin tone / darks / midtones / lights balance)", type: "group", animatable: true }
+  animation: >-
+    Unbalance colors keyframable to follow lighting changes across a shot.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.color.color-balance]
+  implementation: >-
+    Per-pixel pass in grading encoding. Each picked "unbalanced" color yields a per-channel correction for its tonal zone. The zones are smooth luminance partitions (shared with fx.color.color-balance), and Pinning controls how strongly black and white are held.
+  io: >-
+    none
+  limitations: >-
+    Controls are listed from Cycore's documentation and general knowledge; Adobe's pages only summarize the effect. Behaviour is matched functionally, not bit-exactly.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Remove color cast" → "Pick something that should be gray or white" (eyedropper on canvas).
+    defaults: >-
+      All unbalance colors neutral gray, Pinning mid, blend 0 %.
+    automation: >-
+      A canvas click samples a 5×5 average and writes it into the matching tonal zone based on its luminance.
+    usability_check: >-
+      A novice neutralizes a blue cast by clicking a white wall area in under 20 s.
+  acceptance: >-
+    Mini scene "cast-removal": sampled neutral patches end within ΔE2000 < 2 of gray after correction.
+  status: not-started
+  evidence: []
+
+- id: fx.color.cc-color-offset
+  name: CC Color Offset
+  sources:
+    - ref: S02
+      item: CC Color Offset
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: CC Color Offset
+      category: Color Correction
+      checked: true
+    - ref: S01
+      item: CC Color Offset (Cycore plugins page)
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Rotate each color channel's values around a cycle (phase) to get psychedelic color shifts, solarized or polarized looks.
+  projection_example: >-
+    Make projected stained-glass patterns cycle through shifting colors in time with the music.
+  controls:
+    - { name: "Red Phase / Green Phase / Blue Phase", type: "angle[3]", animatable: true }
+    - { name: "Overflow (Wrap / Solarize / Polarize)", type: "enum", animatable: false }
+  animation: >-
+    Phases are keyframable and are commonly driven by time or audio expressions for continuous cycling.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, audio.to-keyframes]
+  implementation: >-
+    Per-pixel pass on grading-encoded values clamped to 0–1, using v' = fract(v + phase/360) for Wrap and triangle/abs folds for Solarize and Polarize. Over-range HDR values are clamped first, and this is stated in the effect's color-space declaration.
+  io: >-
+    none
+  limitations: >-
+    Intentionally discontinuous, so high-contrast hard edges in the cycle can alias when scaled. Exact Cycore overflow curves are matched visually.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Psychedelic color cycle" recipe → More controls.
+    defaults: >-
+      Phases 0/120/240° with Wrap, animated by the recipe at one cycle per 4 bars when music is present.
+    automation: >-
+      The recipe links phase speed to the show BPM grid.
+    usability_check: >-
+      A novice applies a cycling color look to a region and changes its speed in under 45 s.
+  acceptance: >-
+    Mini scene "color-cycle": phase animation loops seamlessly, and the exported frame at t equals the preview frame at t.
+  status: not-started
+  evidence: []
+
+- id: fx.color.cc-kernel
+  name: CC Kernel
+  sources:
+    - ref: S02
+      item: CC Kernel
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: CC Kernel
+      category: Color Correction
+      checked: true
+    - ref: S01
+      item: CC Kernel (Cycore plugins page)
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Apply a custom 3×3 convolution to make emboss, edge, sharpen or soften looks.
+  projection_example: >-
+    Emboss a brick texture so the projected mortar lines read as raised relief.
+  controls:
+    - { name: "Kernel weights (3×3)", type: "float[9]", animatable: true }
+    - { name: "Divisor / normalize", type: "float", animatable: true }
+    - { name: "Absolute Value", type: "bool", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Every weight keyframable, so the effect can morph between kernels.
+  dependencies: [proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    WGSL 3×3 neighbourhood pass that declares a 1-pixel bounds expansion and uses clamp-to-edge sampling. It runs by default on premultiplied scene-linear values (correct for blur-like kernels), with a "perceptual" option that runs in grading encoding for emboss and edge looks.
+  io: >-
+    none
+  limitations: >-
+    Kernel size is fixed at 3×3, so it is resolution-dependent: the look changes when proxy resolution changes. Preview at reduced resolution scales the result approximately, and this is flagged. Exact Cycore controls are matched from general knowledge.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only. Reached through the "Emboss / edge look" recipe → More controls → "Custom 3×3 filter", which offers a preset menu.
+    defaults: >-
+      Identity kernel; presets for emboss, edge, sharpen and soften.
+    automation: >-
+      Normalizes the divisor automatically so that brightness is preserved unless the user overrides it.
+    usability_check: >-
+      A novice picks the "Emboss" kernel preset and adjusts its strength in under 30 s.
+  acceptance: >-
+    Mini scene "kernel": golden-image match for each preset at full resolution.
+  status: not-started
+  evidence: []
+
+- id: fx.color.cc-toner
+  name: CC Toner
+  sources:
+    - ref: S02
+      item: CC Toner
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: CC Toner
+      category: Color Correction
+      checked: true
+    - ref: S01
+      item: CC Toner (Cycore plugins page)
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Map the image's brightness onto a palette of 1, 2, 3 or 5 tones (solid, duotone, tritone, pentone).
+  projection_example: >-
+    Recolor all show content to the festival's brand palette so every scene on the facade feels consistent.
+  controls:
+    - { name: "Tones (Solid / Duotone / Tritone / Pentone)", type: "enum", animatable: false }
+    - { name: "Highlights / Brights / Midtones / Darktones / Shadows", type: "color[5]", animatable: true }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Tone colors keyframable, so palettes can morph over time.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.color.tint]
+  implementation: >-
+    Uses the shared gradient-map kernel. Luminance in grading encoding indexes a 1024-entry rgba16float 1D LUT built on the CPU, with tone stops interpolated in OKLab to avoid muddy midpoints, and the result is mixed with the original. Tint and Tritone use the same kernel.
+  io: >-
+    Palettes can be saved and shared as reusable styles.
+  limitations: >-
+    Matches Cycore visually, not bit-exactly.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Duotone / tritone look" recipe → "More tones".
+    defaults: >-
+      Tritone with a warm-highlight / neutral / deep-blue-shadow palette.
+    automation: >-
+      "Use show palette" fills the tones from the project's saved brand colors.
+    usability_check: >-
+      A novice applies a five-tone brand palette to a clip in under 45 s.
+  acceptance: >-
+    Mini scene "palette-map": gray ramp input reproduces the palette stops at their luminance positions within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.change-color
+  name: Change Color
+  sources:
+    - ref: S02
+      item: Change Color
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Change Color
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Shift the hue, lightness and saturation of a range of similar colors while leaving the rest alone, with a viewable correction mask.
+  projection_example: >-
+    Turn the green foliage in a projected garden scene autumn-orange without touching the sky.
+  controls:
+    - { name: "View (Corrected Layer / Color Correction Mask)", type: "enum", animatable: false }
+    - { name: "Hue Transform", type: "angle", animatable: true }
+    - { name: "Lightness Transform", type: "float", animatable: true }
+    - { name: "Saturation Transform", type: "float", animatable: true }
+    - { name: "Color To Change", type: "color", animatable: true }
+    - { name: "Matching Tolerance / Matching Softness", type: "percent", animatable: true }
+    - { name: "Match Colors (RGB / Hue / Chroma)", type: "enum", animatable: false }
+    - { name: "Invert Color Correction Mask", type: "bool", animatable: false }
+  animation: >-
+    All transforms and the target color keyframable, so a recolor can sweep over time.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.color.change-to-color]
+  implementation: >-
+    The shared color-range key kernel computes a soft mask from distance in RGB, hue angle, or chroma (OKLab a/b) in grading encoding. The HLS transform is then scaled by that mask. The mask view outputs the matte for inspection.
+  io: >-
+    none
+  limitations: >-
+    Fine-grained selection of similar hues may need Lumetri HSL Secondary or a region mask.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Recolor this" recipe → More controls → "Shift a range of colors".
+    defaults: >-
+      Color To Change comes from an eyedropper click; tolerance 15 %, softness 0 %, matching by Hue.
+    automation: >-
+      A "Show what will change" toggle flips View to the mask temporarily.
+    usability_check: >-
+      A novice shifts the greens in a clip toward orange and verifies the mask in under 45 s.
+  acceptance: >-
+    Mini scene "recolor": pixels outside tolerance are unchanged (bit-identical), and the mask view matches the reference matte.
+  status: not-started
+  evidence: []
+
+- id: fx.color.change-to-color
+  name: Change to Color
+  sources:
+    - ref: S02
+      item: Change to Color
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Change To Color
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Replace one picked color with another chosen color, with separate hue, lightness and saturation tolerances and a feathered match.
+  projection_example: >-
+    Change a sponsor banner in supplied footage from red to the client's blue for the projection.
+  controls:
+    - { name: "From", type: "color", animatable: true }
+    - { name: "To", type: "color", animatable: true }
+    - { name: "Change (Hue / Hue & Lightness / Hue & Saturation / Hue, Lightness & Saturation)", type: "enum", animatable: false }
+    - { name: "Change By (Setting To Color / Transforming To Color)", type: "enum", animatable: false }
+    - { name: "Tolerance (Hue / Lightness / Saturation)", type: "percent[3]", animatable: true }
+    - { name: "Softness", type: "percent", animatable: true }
+    - { name: "View Correction Matte", type: "bool", animatable: false }
+  animation: >-
+    "To" color keyframable for animated recolors, as Adobe recommends.
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.recipe-engine]
+  implementation: >-
+    The shared color-range key kernel uses separate HLS tolerances to build a feathered matte. The pixel is then either set to the target HLS components or moved toward them by HLS interpolation, weighted by the matte. Runs per pixel in grading encoding.
+  io: >-
+    none
+  limitations: >-
+    Gradual color variation (shadows on a colored object) may need wider tolerance plus Softness.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Recolor this" — click a color on the canvas, then pick the new color.
+    defaults: >-
+      Changes Hue only with Transforming To Color; tolerances 10/50/50 %, softness 50 %.
+    automation: >-
+      Tolerance is auto-suggested from the variance of a 9×9 sample around the click.
+    usability_check: >-
+      A first-time user changes a red banner to blue in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "recolor": the target hue lands within 2° of the chosen color on matched pixels, and unmatched pixels are unchanged.
+  status: not-started
+  evidence: []
+
+- id: fx.color.channel-mixer
+  name: Channel Mixer
+  sources:
+    - ref: S02
+      item: Channel Mixer
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Channel Mixer
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Rebuild each output color channel as a mix of the input channels plus a constant, for custom monochrome, sepia, channel swaps or color-ID mattes.
+  projection_example: >-
+    Pull a clean matte for each colored region in an RGBCMY ID pass rendered from the venue model.
+  controls:
+    - { name: "Red-Red / Red-Green / Red-Blue / Red-Const", type: "percent[4]", animatable: true }
+    - { name: "Green-Red / Green-Green / Green-Blue / Green-Const", type: "percent[4]", animatable: true }
+    - { name: "Blue-Red / Blue-Green / Blue-Blue / Blue-Const", type: "percent[4]", animatable: true }
+    - { name: "Monochrome", type: "bool", animatable: false }
+    - { name: "Apply in (Linear / Display)", type: "enum", animatable: false }
+  animation: >-
+    All 12 coefficients keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, pass.object-id]
+  implementation: >-
+    A 3×4 affine matrix applied per pixel in f32. The default is scene-linear, because mixing light is physically linear and keeps HDR values. A Display option evaluates in grading encoding for parity with AE's working-space behaviour.
+  io: >-
+    none
+  limitations: >-
+    Linear and display modes give visibly different monochrome mixes. The mode is shown on the card to avoid surprise.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Make it black & white" → More controls → "Custom mix", and through the "Swap colors" recipe.
+    defaults: >-
+      Identity matrix, Linear mode.
+    automation: >-
+      The "Matte from color ID" helper (pass.object-id) writes the coefficients needed to isolate a picked ID color.
+    usability_check: >-
+      A novice swaps red and blue on a layer with the "Swap colors" recipe in one action.
+  acceptance: >-
+    Mini scene "id-matte": an RGBCMY ID frame produces six mattes with no cross-talk above 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.color-balance
+  name: Color Balance
+  sources:
+    - ref: S02
+      item: Color Balance
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Color Balance
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Push red/green/blue balance separately in shadows, midtones and highlights, optionally preserving brightness. This is the classic way to "tint the shadows teal, highlights orange".
+  projection_example: >-
+    Give the whole show a cinematic split-tone so cool shadows sit naturally on the night-time facade.
+  controls:
+    - { name: "Shadow Red / Green / Blue Balance", type: "float[3]", animatable: true }
+    - { name: "Midtone Red / Green / Blue Balance", type: "float[3]", animatable: true }
+    - { name: "Highlight Red / Green / Blue Balance", type: "float[3]", animatable: true }
+    - { name: "Preserve Luminosity", type: "bool", animatable: false }
+  animation: >-
+    All nine balances keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.recipe-engine]
+  implementation: >-
+    Per-pixel pass in grading encoding. Smooth tonal-zone weights computed from luma scale the per-zone RGB offsets, and Preserve Luminosity rescales the result to the original luma. The zone functions are shared with CC Color Neutralizer and Lumetri wheels.
+  io: >-
+    none
+  limitations: >-
+    Zone weights approximate Photoshop's and are not bit-exact.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Tint shadows and highlights" recipe (e.g. "Teal & orange", "Moonlight") → More controls.
+    defaults: >-
+      All balances 0, Preserve Luminosity on.
+    automation: >-
+      Recipe presets write the nine values. A single "Strength" slider scales them together.
+    usability_check: >-
+      A novice applies "Teal & orange" and halves its strength in under 30 s.
+  acceptance: >-
+    Mini scene "grade-basics": a gray ramp shows the offsets only in the intended zones, and luma is preserved within 1/1023 when the option is on.
+  status: not-started
+  evidence: []
+
+- id: fx.color.color-balance-hls
+  name: Color Balance (HLS)
+  sources:
+    - ref: S02
+      item: Color Balance (HLS)
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Color Balance (HLS)
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Rotate hue and change lightness and saturation of the whole layer (legacy compatibility effect).
+  projection_example: >-
+    Desaturate an old clip to grayscale by setting Saturation to −100.
+  controls:
+    - { name: "Hue", type: "angle", animatable: true }
+    - { name: "Lightness", type: "float", animatable: true }
+    - { name: "Saturation", type: "float", animatable: true }
+  animation: >-
+    Covered by Hue/Saturation's keyframable master controls.
+  dependencies: [fx.color.hue-saturation]
+  implementation: >-
+    No separate pass. It maps onto fx.color.hue-saturation with Channel Control = Master.
+  io: >-
+    none
+  limitations: >-
+    Superseded: Adobe states this effect exists only for old projects and recommends Hue/Saturation. Mapping: Hue → Master Hue, Lightness → Master Lightness, Saturation → Master Saturation; every useful outcome is reproduced.
+  disposition: superseded
+  superseded_by: fx.color.hue-saturation
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Not listed separately. Searching "color balance HLS" in the effect library opens Hue/Saturation with an explanation.
+    defaults: >-
+      n/a
+    automation: >-
+      The effect-library search alias redirects to Hue/Saturation.
+    usability_check: >-
+      A user searching for the legacy name reaches Hue/Saturation in one action.
+  acceptance: >-
+    Covered by the Hue/Saturation acceptance; mapping table unit test.
+  status: not-started
+  evidence: []
+
+- id: fx.color.color-link
+  name: Color Link
+  sources:
+    - ref: S02
+      item: Color Link
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Color Link
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Fill a layer with a color sampled from another layer (average, median, brightest, darkest, etc.) and blend it, so graphics automatically pick up a scene's dominant color.
+  projection_example: >-
+    Make projected text automatically take on the average color of the video currently playing on the wall beside it.
+  controls:
+    - { name: "Source Layer", type: "layer", animatable: false }
+    - { name: "Sample (Average / Median / Brightest / Darkest / Max RGB / Min RGB / alpha variants)", type: "enum", animatable: false }
+    - { name: "Clip (%)", type: "percent", animatable: true }
+    - { name: "Stencil Original Alpha", type: "bool", animatable: false }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blending Mode", type: "enum", animatable: false }
+  animation: >-
+    The sampled color updates every frame. Opacity and clip are keyframable.
+  dependencies: [proj.effect-stack, proj.layer, mask.blend-modes, preview.cache]
+  implementation: >-
+    A GPU reduction over the source layer at the current time produces a single color uniform: mean via a parallel sum, median and clip via the shared histogram, min/max via reduction. A solid of that color is then blended with the layer through mask.blend-modes kernels. Statistics are cached per frame, and the effect depends on another layer's render at the same time.
+  io: >-
+    none
+  limitations: >-
+    One color per frame. Rapidly changing sources make the color flicker, so an optional smoothing window (in seconds) is added, which reads neighbour-frame statistics.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Match the color of…" recipe → pick a layer.
+    defaults: >-
+      Average sample, Clip 0 %, Opacity 100 %, mode Normal, Stencil Original Alpha on, smoothing 0.25 s.
+    automation: >-
+      The source layer is pre-filled with the layer directly behind the selection.
+    usability_check: >-
+      A novice makes a title adopt the background video's color in under 30 s.
+  acceptance: >-
+    Mini scene "color-link": the output color equals the reference mean of the source within 1/1023, and preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.color-stabilizer
+  name: Color Stabilizer
+  sources:
+    - ref: S02
+      item: Color Stabilizer
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Color Stabilizer
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Remove brightness or color flicker by locking one, two or three sampled points to their values on a chosen reference frame.
+  projection_example: >-
+    Remove flicker from a stop-motion or time-lapse clip of the building before it is projected back onto the same facade.
+  controls:
+    - { name: "Set Frame (reference/pivot frame)", type: "time", animatable: false }
+    - { name: "Stabilize (Brightness / Levels / Curves)", type: "enum", animatable: false }
+    - { name: "Black Point / Mid Point / White Point", type: "point2d[3]", animatable: true }
+    - { name: "Sample Size (radius px)", type: "float", animatable: true }
+  animation: >-
+    Sample points are keyframable and can be driven by track.point data to follow moving objects.
+  dependencies: [proj.effect-stack, preview.cache, track.point, anim.keyframe.core]
+  implementation: >-
+    Reads the upstream image at the absolute reference time once; this is cached and declared as a temporal dependency on that frame. Small disc-average reductions run at the 1–3 points on both the reference and current frames. A per-channel correction (offset, two-point levels, or a three-point monotone curve baked into a 1D LUT) maps current samples to reference samples. Evaluated in grading encoding.
+  io: >-
+    none
+  limitations: >-
+    Works best when the sampled areas differ strongly in value, as Adobe notes. Moving points need tracking data. Changing the reference frame invalidates the cache.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Remove flicker" recipe.
+    defaults: >-
+      Curves mode. The reference is the current frame, and points are auto-placed on dark, mid and bright areas.
+    automation: >-
+      Auto-picks sample spots with stable local variance, and offers "follow the motion", which attaches a point tracker.
+    usability_check: >-
+      A novice visibly reduces flicker on a supplied time-lapse in under 1 minute with no manual point placement.
+  acceptance: >-
+    Mini scene "deflicker": the sampled-point values stay within 1/255 of the reference across all frames, and random-access export equals sequential export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.colorama
+  name: Colorama
+  sources:
+    - ref: S02
+      item: Colorama
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Colorama
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Convert a chosen color attribute to a phase and remap it through an editable cyclic palette. Used for subtle tints, psychedelic cycling, false-color looks and procedural mattes.
+  projection_example: >-
+    Run a rainbow wave across fractal-noise "water" on the facade by animating the palette phase.
+  controls:
+    - { name: "Get Phase From (intensity / hue / lightness / saturation / R / G / B / alpha / zero…)", type: "enum", animatable: false }
+    - { name: "Add Phase (layer) / Add Phase From / Add Mode (Wrap / Clamp / Average / Screen)", type: "group", animatable: false }
+    - { name: "Phase Shift", type: "angle", animatable: true }
+    - { name: "Use Preset Palette", type: "enum", animatable: false }
+    - { name: "Output Cycle (1–64 color/opacity stops)", type: "gradient", animatable: true }
+    - { name: "Cycle Repetitions", type: "int", animatable: true }
+    - { name: "Interpolate Palette", type: "bool", animatable: false }
+    - { name: "Modify / Modify Alpha / Change Empty Pixels", type: "group", animatable: false }
+    - { name: "Matching Color / Matching Tolerance / Matching Softness / Matching Mode", type: "group", animatable: true }
+    - { name: "Mask Layer / Masking Mode", type: "group", animatable: false }
+    - { name: "Composite Over Layer", type: "bool", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Phase Shift is the usual animation target. Output Cycle stops interpolate between keyframes when stop counts match; otherwise the palettes are blended in LUT space.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, ux.recipe-engine]
+  implementation: >-
+    The phase attribute is read in grading encoding and optionally combined with a second layer's attribute (wrap/clamp/average/screen). The pass then computes fract(phase·reps + shift) and samples a 1024-entry rgba16float palette LUT built on the CPU (smooth or stepped). The selected attribute or alpha is modified, gated by the shared color-range key and an optional mask layer.
+  io: >-
+    Palettes can be saved and shared as styles.
+  limitations: >-
+    Hard palette steps alias when scaled; a smooth palette is recommended for projection.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Color cycle / rainbow wave" recipe, which offers palette thumbnails and a speed control.
+    defaults: >-
+      Hue Cycle palette, phase animated at one cycle per 8 s (or per 4 bars with music), Composite Over Layer on.
+    automation: >-
+      The recipe writes the Phase Shift expression and links the speed to the BPM grid when audio exists.
+    usability_check: >-
+      A novice applies a looping rainbow cycle to a region and changes its speed in under 45 s.
+  acceptance: >-
+    Mini scene "color-cycle": loops seamlessly at the loop point, and preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.curves
+  name: Curves
+  sources:
+    - ref: S02
+      item: Curves
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Curves
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Reshape the tone response of the image or of each channel with a free curve, for precise contrast, fades and color shifts.
+  projection_example: >-
+    Crush the shadows of a texture so unlit areas stay truly dark on the facade while midtones stay bright.
+  controls:
+    - { name: "Channel (RGB / Red / Green / Blue / Alpha)", type: "enum", animatable: false }
+    - { name: "Curve per channel (Bezier points or pencil-drawn)", type: "curve[5]", animatable: true }
+    - { name: "Auto / Smooth / Reset", type: "action", animatable: false }
+    - { name: "Open / Save", type: "action", animatable: false }
+  animation: >-
+    Curves are keyframable. Interpolation is per control point when point counts match; otherwise the curves are blended in LUT space. Point values are expression-addressable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, anim.graph-editor, ux.operation-system]
+  implementation: >-
+    The CPU builds a monotone cubic (or pencil-sampled) curve per channel and composes master∘channel into one 4096-entry rgba16float 1D LUT texture, sampled with linear filtering in grading encoding. End slopes extrapolate above 1.0 so HDR values are preserved. The alpha curve applies to straight alpha. Auto is a one-shot operation that writes editable points from histogram statistics, so it adds no per-frame dependency.
+  io: >-
+    Imports and exports .acv (Photoshop curves) and .amp (arbitrary map), and can export the curve as a 1D .cube.
+  limitations: >-
+    AE's Auto uses an expert database; our Auto is a statistics-based approximation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      The "More punch" and "Softer / faded look" recipes write an S-curve or a lifted-black curve; More controls shows the curve with an on-canvas "click a tone to adjust it" picker.
+    defaults: >-
+      Identity curves. Recipe curves have three points.
+    automation: >-
+      Clicking the canvas adds a point at the sampled tone, and dragging vertically on the canvas moves it.
+    usability_check: >-
+      A novice makes footage punchier with the preset, then darkens only the shadows by dragging one point, in under 1 minute.
+  acceptance: >-
+    Mini scene "grade-basics": an 11-step gray ramp matches the analytic curve within 1/1023, and an .acv round-trip is lossless.
+  status: not-started
+  evidence: []
+
+- id: fx.color.equalize
+  name: Equalize
+  sources:
+    - ref: S02
+      item: Equalize
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Equalize
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Redistribute brightness (or RGB) so values spread evenly across the range, revealing detail in flat images. Only visible (non-transparent) pixels count.
+  projection_example: >-
+    Pull hidden texture out of a low-contrast scan of an old stone carving before projecting it at large scale.
+  controls:
+    - { name: "Equalize (RGB / Brightness / Photoshop Style)", type: "enum", animatable: false }
+    - { name: "Amount To Equalize", type: "percent", animatable: true }
+  animation: >-
+    Amount keyframable. The mapping is recomputed per frame.
+  dependencies: [proj.effect-stack, preview.cache, fx.color.auto-color]
+  implementation: >-
+    The shared GPU histogram ignores alpha=0 pixels, so masked layers equalize over the mask area. The CPU turns the cumulative distribution into a 4096-entry 1D LUT blended with identity by Amount, evaluated in grading encoding. Optional temporal smoothing of the CDF reduces flicker on video and declares a neighbour-statistics dependency.
+  io: >-
+    none
+  limitations: >-
+    Per-frame equalization flickers on video unless smoothing is on, so the card defaults smoothing on for video.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Reveal hidden detail" recipe → More controls.
+    defaults: >-
+      Photoshop Style, 100 %, smoothing 0.5 s for video.
+    automation: >-
+      Smoothing is enabled automatically for video layers.
+    usability_check: >-
+      A novice reveals detail in a flat supplied scan in one action and reduces the strength in a second.
+  acceptance: >-
+    Mini scene "equalize": the output histogram CDF is within 2 % of linear at 100 %, and preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.exposure
+  name: Exposure
+  sources:
+    - ref: S02
+      item: Exposure
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Exposure
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Brighten or darken in photographic stops, with offset and gamma, for all channels or per channel. This is the right tool for HDR footage and 3D renders.
+  projection_example: >-
+    Pull a 3D tunnel render down by one stop so it matches the brightness of the surrounding facade content.
+  controls:
+    - { name: "Channels (Master / Individual)", type: "enum", animatable: false }
+    - { name: "Exposure (stops)", type: "float", animatable: true }
+    - { name: "Offset", type: "float", animatable: true }
+    - { name: "Gamma Correction", type: "float", animatable: true }
+    - { name: "Red / Green / Blue Exposure, Offset, Gamma", type: "float[9]", animatable: true }
+    - { name: "Bypass Linear Light Conversion", type: "bool", animatable: false }
+  animation: >-
+    All values keyframable and expression-linkable, e.g. a slow fade-up in stops or exposure pumping with the beat.
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.guided-workflow, ux.recipe-engine]
+  implementation: >-
+    Runs natively in scene-linear: out = (in·2^stops + offset)^(1/gamma), with negatives mirrored as Adobe documents. Values above 1.0 are kept (f32 math, rgba16float output). Bypass applies the same math to grading-encoded values for parity with AE's raw-value mode.
+  io: >-
+    none
+  limitations: >-
+    Brightening cannot exceed the projector's physical output; values pushed above 1.0 clip at output unless compressed (see fx.utility.hdr-highlight-compression and fx.utility.clipping-gamut-diagnostics).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The "Brighter / darker" slider on the Color card for footage and 3D layers (labelled in plain words, with stops shown as a tooltip).
+    defaults: >-
+      0 stops, offset 0, gamma 1, Master.
+    automation: >-
+      The guided path warns when the slider pushes content into clipping and offers "Protect highlights".
+    usability_check: >-
+      A first-time user darkens a selected 3D render to match neighbouring content in under 20 s without opening More controls.
+  acceptance: >-
+    AS-2 depth illusion: the exposure-matched tunnel render shows preview/export parity within 1 code value at 10-bit, and HDR values above 1.0 survive to the next effect.
+  status: not-started
+  evidence: []
+
+- id: fx.color.gamma-pedestal-gain
+  name: Gamma/Pedestal/Gain
+  sources:
+    - ref: S02
+      item: Gamma/Pedestal/Gain
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Gamma/Pedestal/Gain
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Set each channel's lowest output (pedestal), highest output (gain) and midtone curve (gamma), plus a black stretch that lifts dark areas.
+  projection_example: >-
+    Raise the pedestal slightly so dark content never drops into the projector's crushed-black zone.
+  controls:
+    - { name: "Black Stretch", type: "float", animatable: true }
+    - { name: "Red / Green / Blue Gamma", type: "float[3]", animatable: true }
+    - { name: "Red / Green / Blue Pedestal", type: "float[3]", animatable: true }
+    - { name: "Red / Green / Blue Gain", type: "float[3]", animatable: true }
+  animation: >-
+    All values keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, out.projector-output]
+  implementation: >-
+    Per-channel analytic curve, out = pedestal + (gain − pedestal)·in^gamma with a black-stretch toe, evaluated in grading encoding in f32. No LUT is needed.
+  io: >-
+    none
+  limitations: >-
+    This is an ARTISTIC adjustment on show content. Compensating a specific projector's black level or gamma belongs in out.projector-output, and the card says so.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Fine-tune tones" → More controls → "Per color channel".
+    defaults: >-
+      Gamma 1, pedestal 0, gain 1, black stretch 0.
+    automation: >-
+      none
+    usability_check: >-
+      A novice lifts dark tones slightly by raising one labelled slider in under 30 s after opening More controls.
+  acceptance: >-
+    Mini scene "grade-basics": a gray ramp matches the analytic curve within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.hue-saturation
+  name: Hue/Saturation
+  sources:
+    - ref: S02
+      item: Hue/Saturation
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Hue/Saturation
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Rotate hue, change saturation and lightness globally or for one color family, or colorize to a single hue.
+  projection_example: >-
+    Desaturate everything except the blues so a water animation pops against a muted building.
+  controls:
+    - { name: "Channel Control (Master / Reds / Yellows / Greens / Cyans / Blues / Magentas)", type: "enum", animatable: false }
+    - { name: "Channel Range (range + falloff)", type: "range", animatable: false }
+    - { name: "Master Hue", type: "angle", animatable: true }
+    - { name: "Master Saturation / Master Lightness", type: "float", animatable: true }
+    - { name: "Per-range Hue / Saturation / Lightness", type: "float[18]", animatable: true }
+    - { name: "Colorize", type: "bool", animatable: false }
+    - { name: "Colorize Hue / Saturation / Lightness", type: "float[3]", animatable: true }
+  animation: >-
+    All values keyframable. Hue is a common time-expression target for slow color drifts.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, ux.guided-workflow]
+  implementation: >-
+    Per-pixel pass in grading encoding using Photoshop HSL formulas. Six hue ranges carry configurable falloff weights, and a colorize mode is included. Values above 1.0 keep their ratio, because lightness scaling is applied multiplicatively above 1.
+  io: >-
+    none
+  limitations: >-
+    HSL lightness is not perceptually uniform. Lumetri's curves give finer, smoother selective control.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The "More color / less color" slider and the "Shift colors" dial on the Color card.
+    defaults: >-
+      Master, all 0, Colorize off.
+    automation: >-
+      The "Only this color" option sets Channel Control from an eyedropper click.
+    usability_check: >-
+      A first-time user makes a layer more colorful and shifts its hue in under 20 s without opening More controls.
+  acceptance: >-
+    Guided-path mini scene "first-surface": golden-image match within 1/1023, persisting through save/reopen and export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.leave-color
+  name: Leave Color
+  sources:
+    - ref: S02
+      item: Leave Color
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Leave Color
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Desaturate everything except one chosen color ("color pop").
+  projection_example: >-
+    Show a black-and-white city film on the facade where only the red umbrellas keep their color.
+  controls:
+    - { name: "Amount To Decolor", type: "percent", animatable: true }
+    - { name: "Color To Leave", type: "color", animatable: true }
+    - { name: "Tolerance", type: "percent", animatable: true }
+    - { name: "Edge Softness", type: "percent", animatable: true }
+    - { name: "Match Colors (Using RGB / Using Hue)", type: "enum", animatable: false }
+  animation: >-
+    Amount keyframable for fade-to-gray moments.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.color.change-color]
+  implementation: >-
+    The shared color-range key kernel produces the keep-mask. Unmatched pixels are mixed toward their Rec.709/working-primaries luminance, which is computed in scene-linear so energy is preserved. The final mix is per pixel.
+  io: >-
+    none
+  limitations: >-
+    Shadows of the kept object may lose color at low tolerance; increase Edge Softness.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Keep one color" — click the color to keep on the canvas.
+    defaults: >-
+      Amount 100 %, tolerance 15 %, softness 10 %, match by Hue.
+    automation: >-
+      Tolerance is auto-suggested from the clicked sample's variance.
+    usability_check: >-
+      A novice keeps only the red in a supplied clip in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "recolor": matched pixels are unchanged and unmatched pixels' saturation is 0 at 100 %.
+  status: not-started
+  evidence: []
+
+- id: fx.color.levels
+  name: Levels
+  sources:
+    - ref: S02
+      item: Levels
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Levels
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Set black point, white point and midtone gamma for the image, each channel, or alpha (to firm up or soften a matte), with a live histogram.
+  projection_example: >-
+    Fix washed-out drone footage of the venue, and tighten a keyed performer's matte.
+  controls:
+    - { name: "Channel (RGB / Red / Green / Blue / Alpha)", type: "enum", animatable: false }
+    - { name: "Histogram", type: "display", animatable: false }
+    - { name: "Input Black / Input White", type: "float", animatable: true }
+    - { name: "Gamma", type: "float", animatable: true }
+    - { name: "Output Black / Output White", type: "float", animatable: true }
+    - { name: "Clip To Output Black / Clip To Output White", type: "bool", animatable: false }
+  animation: >-
+    Every channel's five values are stored as separate keyframable, expression-linkable properties (this is what makes Levels (Individual Controls) redundant here).
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.operation-system]
+  implementation: >-
+    Analytic per-channel remap, ((x − inB)/(inW − inB))^(1/γ)·(outW − outB) + outB, evaluated in f32 in grading encoding. With clipping off, values extend beyond the output range. Alpha mode operates on straight alpha. The histogram is a UI-only readback of the shared GPU histogram and is not a render dependency.
+  io: >-
+    none
+  limitations: >-
+    none beyond those of a global tonal tool.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Fix washed-out footage" quick fix (black and white eyedroppers) and the "Firm up the cut-out" matte fix (alpha mode).
+    defaults: >-
+      Identity (0, 1, 1.0, 0, 1). Clipping on.
+    automation: >-
+      "Auto set black & white" is a one-shot operation that writes points from 0.1 % histogram percentiles.
+    usability_check: >-
+      A novice fixes a washed-out clip using the two eyedroppers in under 30 s.
+  acceptance: >-
+    AS-4 performer composite: alpha Levels removes semi-transparent noise without edge fringes. Gray ramp matches the analytic curve within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.levels-individual-controls
+  name: Levels (Individual Controls)
+  sources:
+    - ref: S02
+      item: Levels (Individual Controls)
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Levels (Individual Controls)
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Same as Levels, but each channel's values are separate properties that can be keyframed or expression-linked independently.
+  projection_example: >-
+    Drive only the blue channel's gamma with an expression linked to an audio band.
+  controls:
+    - { name: "RGB / Red / Green / Blue / Alpha: Input Black, Input White, Gamma, Output Black, Output White", type: "float[25]", animatable: true }
+    - { name: "Clip To Output Black / White", type: "bool", animatable: false }
+  animation: >-
+    Every value independently keyframable and expression-linkable.
+  dependencies: [fx.color.levels]
+  implementation: >-
+    No separate pass. It is an import/search alias of fx.color.levels, whose property model already exposes every per-channel value as an independent animatable property.
+  io: >-
+    none
+  limitations: >-
+    Superseded: AE needs two effects only because its Levels stores the histogram parameters as one compound property. Our Levels already exposes all 25 values individually with keyframes and expressions, so every outcome is covered.
+  disposition: superseded
+  superseded_by: fx.color.levels
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Not listed separately. The search name opens Levels.
+    defaults: >-
+      n/a
+    automation: >-
+      Effect-library alias.
+    usability_check: >-
+      A user searching the legacy name reaches Levels in one action and can keyframe a single channel value.
+  acceptance: >-
+    Unit test: per-channel property keyframes on Levels animate independently.
+  status: not-started
+  evidence: []
+
+- id: fx.color.lumetri-color
+  name: Lumetri Color
+  sources:
+    - ref: S02
+      item: Lumetri Color
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Lumetri Color
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Grade in one place: white balance, exposure and tone, creative looks, RGB and hue/saturation curves, color wheels, a secondary HSL key with its own correction, and a vignette.
+  projection_example: >-
+    Give every scene in the show a consistent warm "golden hour" look, then pull the sky-blue in the video slightly toward teal.
+  controls:
+    - { name: "Basic: Input LUT, White Balance (picker, Temperature, Tint)", type: "group", animatable: true }
+    - { name: "Basic: Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Saturation", type: "float[7]", animatable: true }
+    - { name: "Creative: Look (LUT), Intensity, Faded Film, Sharpen, Vibrance, Saturation, Shadow Tint, Highlight Tint, Tint Balance", type: "group", animatable: true }
+    - { name: "Curves: RGB curves (master + R/G/B)", type: "curve[4]", animatable: true }
+    - { name: "Curves: Hue vs Sat, Hue vs Hue, Hue vs Luma, Luma vs Sat, Sat vs Sat", type: "hue-curve[5]", animatable: true }
+    - { name: "Color Wheels: Shadows / Midtones / Highlights (+ lightness)", type: "wheel[3]", animatable: true }
+    - { name: "HSL Secondary: key (H/S/L ranges, denoise, blur, show mask), correction (temperature, tint, contrast, sharpen, saturation, wheel)", type: "group", animatable: true }
+    - { name: "Vignette: Amount, Midpoint, Roundness, Feather", type: "float[4]", animatable: true }
+  animation: >-
+    All numeric, color and curve controls keyframable. Curves interpolate per point when point counts match.
+  dependencies: [proj.effect-stack, anim.keyframe.core, color.lut, color.management, fx.color.curves, fx.utility.apply-color-lut, fx.color.change-color, ux.recipe-engine, ux.effect-library]
+  implementation: >-
+    A pass graph. (1) A fused per-pixel uber-shader runs the enabled sections in AE order: Input LUT (3D texture), white balance as von Kries gains in LMS in scene-linear, then tone and the creative, curve and wheel sections in grading encoding. Tone controls are a CPU-built 1D LUT, hue curves are periodic 1D LUTs indexed by hue, and the creative look is a 3D LUT with intensity mix. Disabled sections are removed with WGSL override constants. (2) The HSL secondary key renders a mask, blurs it with a separable Gaussian, then mixes the correction. (3) Sharpen is an unsharp neighbourhood pass that declares bounds expansion. (4) Vignette is analytic.
+  io: >-
+    Input and Creative LUTs accept .cube (and OCIO-readable formats via fx.color.ocio-file-transform). Grades save as reusable style presets; Premiere .prfpset import is not promised.
+  limitations: >-
+    Matches Lumetri's controls and intent, not Adobe's exact math. Monitor preview cannot guarantee how a grade reads on a real, non-white surface (brief §14).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: C
+  beginner:
+    action: >-
+      The "Match the look" / "Film looks" library of animated thumbnails previewed on the selected surface. Picking one opens a Grade card with Warmth, Brightness, Contrast, Color and Look strength; everything else is under More controls.
+    defaults: >-
+      Neutral. Looks apply at 70 % intensity.
+    automation: >-
+      "Auto" (one-shot operation) sets exposure and white balance from statistics as editable values. Applying a look to many layers in one action adds one shared adjustment layer.
+    usability_check: >-
+      A first-time user applies a look from thumbnails, lowers its strength and warms it in under 1 minute, in at most 3 actions for the apply step.
+  acceptance: >-
+    Mini scene "lumetri-graph": each section matches a float reference within 1/1023; disabling sections changes no other pixels; preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.color.photo-filter
+  name: Photo Filter
+  sources:
+    - ref: S02
+      item: Photo Filter
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Photo Filter
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Warm or cool the image, or add a colored-gel cast, like a filter on a camera lens, while optionally keeping brightness.
+  projection_example: >-
+    Warm cold LED-lit footage so it sits well on a sandstone facade.
+  controls:
+    - { name: "Filter (Warming 85/LBA/81, Cooling 80/LBB/82, color presets, Custom)", type: "enum", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Density", type: "percent", animatable: true }
+    - { name: "Preserve Luminosity", type: "bool", animatable: false }
+  animation: >-
+    Density and color keyframable (e.g. warming as a scene moves from night to dawn).
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.guided-workflow]
+  implementation: >-
+    Runs in scene-linear like a physical gel: rgb·lerp(1, filterTransmittance, density), then an optional rescale to the original working-primaries luminance (Y). f32 math; HDR is preserved.
+  io: >-
+    none
+  limitations: >-
+    Preset colors approximate Photoshop's; exact matching to Photoshop documents is not promised.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The "Warmer / cooler" bipolar slider on the Color card. Gel colors are under More controls.
+    defaults: >-
+      Slider at 0. Warm side uses Warming (85), cool side uses Cooling (80), density follows slider distance up to 50 %, Preserve Luminosity on.
+    automation: >-
+      The slider chooses the filter preset and density automatically.
+    usability_check: >-
+      A first-time user warms a selected region's content with one slider in under 15 s.
+  acceptance: >-
+    Guided-path mini scene "first-surface": neutral gray shifts toward the filter hue with luminance preserved within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.ps-arbitrary-map
+  name: PS Arbitrary Map
+  sources:
+    - ref: S02
+      item: PS Arbitrary Map
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: PS Arbitrary Map
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Apply a Photoshop arbitrary-map (.amp) brightness remap, and cycle it with a phase control (legacy compatibility effect).
+  projection_example: >-
+    Reuse a solarize-style .amp map from an old Photoshop project on projected footage.
+  controls:
+    - { name: "Arbitrary map file (.amp)", type: "file", animatable: false }
+    - { name: "Phase", type: "float", animatable: true }
+    - { name: "Apply Phase Map To Alpha", type: "bool", animatable: false }
+  animation: >-
+    Phase was the animatable control. It maps to Colorama's Phase Shift.
+  dependencies: [fx.color.curves, fx.color.colorama]
+  implementation: >-
+    No separate pass. Static maps import into Curves (pencil mode) per channel. Phase-cycled maps become a Colorama setup (Get Phase From Intensity, Modify Intensity, the imported map as Output Cycle, Phase Shift animated).
+  io: >-
+    .amp import, through fx.color.curves.
+  limitations: >-
+    Superseded: Adobe marks this effect as compatibility-only and recommends Curves. Static remaps are covered exactly by Curves. Phase cycling is covered by Colorama, because Curves has no phase control.
+  disposition: superseded
+  superseded_by: fx.color.curves
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Not listed separately. Dropping an .amp file onto a layer opens Curves with the map loaded.
+    defaults: >-
+      n/a
+    automation: >-
+      File-drop handler and search alias.
+    usability_check: >-
+      A user applies an .amp file by drag-and-drop in one action.
+  acceptance: >-
+    Unit test: an .amp import reproduces the map's 256 values within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.selective-color
+  name: Selective Color
+  sources:
+    - ref: S02
+      item: Selective Color
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Selective Color
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Adjust the cyan/magenta/yellow/black content of one color family (reds, greens, neutrals, blacks…) without affecting the others.
+  projection_example: >-
+    Make the greens in a projected forest more yellow while leaving skin tones and sky untouched.
+  controls:
+    - { name: "Method (Relative / Absolute)", type: "enum", animatable: false }
+    - { name: "Colors (Reds / Yellows / Greens / Cyans / Blues / Magentas / Whites / Neutrals / Blacks)", type: "enum", animatable: false }
+    - { name: "Cyan / Magenta / Yellow / Black (per color; Details group shows all 36)", type: "percent[36]", animatable: true }
+  animation: >-
+    All 36 values keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    Photoshop-compatible selective color per pixel in grading encoding. Membership in each color family comes from the max/mid/min channel decomposition (whites, neutrals and blacks from the extremes), CMYK percent adjustments are applied in relative or absolute mode, and all 36 values are uniforms.
+  io: >-
+    Preserves fidelity with Photoshop Selective Color adjustment layers on PSD import when such import exists.
+  limitations: >-
+    Matched visually to Photoshop, not bit-exact. CMYK terms are unfamiliar to novices, so the card describes them as "less red / more green" equivalents.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Adjust one color family" recipe (e.g. "Greens → more yellow") → More controls.
+    defaults: >-
+      All 0, Relative.
+    automation: >-
+      The recipe chooses the color family from an eyedropper click and writes the matching CMYK values.
+    usability_check: >-
+      A novice makes the greens warmer without changing reds in under 45 s.
+  acceptance: >-
+    Mini scene "selective": color patches outside the chosen family are unchanged within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.shadow-highlight
+  name: Shadow/Highlight
+  sources:
+    - ref: S02
+      item: Shadow/Highlight
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Shadow/Highlight
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Brighten shadowed areas and recover highlights based on each pixel's surroundings (local tone mapping), with automatic amounts.
+  projection_example: >-
+    Recover detail in a backlit photo of the building's façade before it becomes a texture source.
+  controls:
+    - { name: "Auto Amounts", type: "bool", animatable: false }
+    - { name: "Shadow Amount / Highlight Amount", type: "percent", animatable: true }
+    - { name: "Temporal Smoothing (seconds) / Scene Detect", type: "group", animatable: false }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+    - { name: "Shadow / Highlight Tonal Width", type: "percent", animatable: true }
+    - { name: "Shadow / Highlight Radius", type: "float", animatable: true }
+    - { name: "Color Correction / Midtone Contrast", type: "float", animatable: true }
+    - { name: "Black Clip / White Clip", type: "percent", animatable: true }
+  animation: >-
+    Amounts and radii keyframable when Auto Amounts is off.
+  dependencies: [proj.effect-stack, preview.cache, anim.keyframe.core, fx.color.auto-color]
+  implementation: >-
+    A separable Gaussian blur of luminance (radius → bounds expansion of 3σ) gives local context. Tonal-width masks from the blurred luma drive a shadow lift and highlight compression, followed by saturation compensation and midtone contrast, all in grading encoding. Auto Amounts uses the shared histogram statistics with the same temporal-smoothing neighbour dependency as Auto Color.
+  io: >-
+    none
+  limitations: >-
+    Large amounts can produce halos at strong edges, as Adobe notes. The defaults are conservative.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Recover shadows / tame highlights" quick fix → More controls.
+    defaults: >-
+      Auto Amounts on, smoothing 0 for stills and 0.5 s for video, Adobe-like tonal widths.
+    automation: >-
+      Radius auto-scales with layer resolution so the look stays consistent across proxies.
+    usability_check: >-
+      A novice reveals detail in a backlit supplied photo in one action and judges it improved.
+  acceptance: >-
+    Mini scene "local-tone": no halos wider than the radius on a step-edge test. Preview at half-res proxy matches export within tolerance after scaling.
+  status: not-started
+  evidence: []
+
+- id: fx.color.tint
+  name: Tint
+  sources:
+    - ref: S02
+      item: Tint
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Tint
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Recolor the layer as a two-color gradient from its brightness (black → one color, white → another), with a strength control.
+  projection_example: >-
+    Turn every video in the show a monochrome gold so it matches the building's lighting design.
+  controls:
+    - { name: "Map Black To", type: "color", animatable: true }
+    - { name: "Map White To", type: "color", animatable: true }
+    - { name: "Amount To Tint", type: "percent", animatable: true }
+    - { name: "Swap Colors", type: "action", animatable: false }
+  animation: >-
+    Colors and amount keyframable, so a scene can fade into a tinted state.
+  dependencies: [proj.effect-stack, anim.keyframe.core, ux.guided-workflow, ux.recipe-engine]
+  implementation: >-
+    The two-stop case of the shared gradient-map kernel. Luminance (working-primaries weights) is computed in grading encoding, the two colors are interpolated in OKLab (an AE-parity linear mode is optional), and the result is mixed with the original by Amount.
+  io: >-
+    none
+  limitations: >-
+    none.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Make it one color" — pick a color on the Color card. It is also the default implementation of the "Color" control in animation recipes.
+    defaults: >-
+      Black → black, white → picked color, amount 100 %.
+    automation: >-
+      Recipes set Map White To from the user's chosen color, and changing the recipe color updates it without discarding overrides.
+    usability_check: >-
+      A first-time user makes a selected layer one color in at most 3 actions and under 20 s.
+  acceptance: >-
+    Guided-path mini scene "first-surface": a gray ramp maps to the two-color gradient within 1/1023, and the setting survives save/reopen.
+  status: not-started
+  evidence: []
+
+- id: fx.color.tritone
+  name: Tritone
+  sources:
+    - ref: S02
+      item: Tritone
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Tritone
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Map shadows, midtones and highlights to three chosen colors.
+  projection_example: >-
+    Give an archival film a navy / copper / cream look for a heritage-building projection.
+  controls:
+    - { name: "Highlights / Midtones / Shadows", type: "color[3]", animatable: true }
+    - { name: "Blend With Original", type: "percent", animatable: true }
+  animation: >-
+    Colors and blend keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.color.tint]
+  implementation: >-
+    The three-stop case of the shared gradient-map kernel. A 1024-entry palette LUT is built on the CPU with OKLab interpolation and evaluated in grading encoding.
+  io: >-
+    none
+  limitations: >-
+    none.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Duotone / tritone look" recipe with palette swatches.
+    defaults: >-
+      AE-like defaults (dark brown shadows, mid tan, near-white highlights), blend 0 %.
+    automation: >-
+      "Use show palette" fills the three colors from the saved brand colors.
+    usability_check: >-
+      A novice applies a tritone palette from swatches in under 30 s.
+  acceptance: >-
+    Mini scene "palette-map": gray ramp stops land on the three colors within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.vibrance
+  name: Vibrance
+  sources:
+    - ref: S02
+      item: Vibrance
+      category: Color Correction
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Vibrance
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Boost muted colors more than already-saturated ones and protect skin tones, avoiding clipped, garish color.
+  projection_example: >-
+    Make a performer video more vivid on the wall without turning faces orange.
+  controls:
+    - { name: "Vibrance", type: "float", animatable: true }
+    - { name: "Saturation", type: "float", animatable: true }
+  animation: >-
+    Both keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.color.hue-saturation]
+  implementation: >-
+    Per-pixel pass in grading encoding. The saturation gain is weighted by (1 − current saturation) and attenuated for hues between magenta and orange; plain saturation is applied uniformly. f32 math.
+  io: >-
+    none
+  limitations: >-
+    Matched to Photoshop's behaviour visually, not bit-exactly.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "More color" → More controls → "Gentle (protect skin)".
+    defaults: >-
+      Both 0.
+    automation: >-
+      When the layer contains detected faces or skin tones, the "More color" slider switches to Vibrance and tells the user.
+    usability_check: >-
+      A novice boosts color on a performer clip without visibly oversaturating skin in under 20 s.
+  acceptance: >-
+    Mini scene "grade-basics": already-saturated patches change less than muted patches, and skin-hue patches change by at most half of the others.
+  status: not-started
+  evidence: []
+
+- id: fx.color.video-limiter
+  name: Video Limiter
+  sources:
+    - ref: S02
+      item: Video Limiter
+      category: Color Correction
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S19
+      item: Video Limiter
+      category: Color Correction
+      checked: true
+  artist_can: >-
+    Keep luminance and chroma inside a chosen legal range (IRE) in the working space, compressing near the limit rather than hard clipping.
+  projection_example: >-
+    Produce a broadcast or stream recap of the projection show whose levels stay legal without regrading.
+  controls:
+    - { name: "Clip level / Luma min-max (IRE)", type: "float[2]", animatable: false }
+    - { name: "Chroma limit", type: "float", animatable: false }
+    - { name: "Limit axis (Luma / Chroma / Both)", type: "enum", animatable: false }
+    - { name: "Soft compression (amount + tonal range)", type: "group", animatable: false }
+  animation: >-
+    Not normally animated.
+  dependencies: [proj.effect-stack, render.encode, fx.utility.clipping-gamut-diagnostics]
+  implementation: >-
+    Per-pixel soft-knee limiter on Y'CbCr computed from display-encoded output-space values: luma is compressed above a knee toward the ceiling, and chroma magnitude is scaled where it exceeds the limit. Typically placed on an adjustment layer or applied automatically by a broadcast export preset.
+  io: >-
+    Pairs with export range metadata (full vs. limited) in render.encode.
+  limitations: >-
+    Adobe's page does not document the individual controls, so the control list above is the functional set rather than AE's exact UI. This is not a projector output limiter: per-projector peak or gamma limits belong in out.projector-output.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Export → "Video to share" → "Broadcast-safe" toggle (applied at export, not on the show).
+    defaults: >-
+      100 IRE luma ceiling, 0 IRE floor, chroma limited to Rec.709 legal, soft knee on.
+    automation: >-
+      Added automatically by broadcast presets; the clipping overlay shows affected areas.
+    usability_check: >-
+      A novice produces a broadcast-safe review export by flipping one toggle, with the show itself unchanged.
+  acceptance: >-
+    Mini scene "broadcast-safe": no output sample exceeds the limit, and in-range pixels below the knee are unchanged.
+  status: not-started
+  evidence: []
+
+- id: fx.color.ocio-color-space-transform
+  name: OCIO Color Space Transform
+  sources:
+    - ref: S02
+      item: OCIO Color Space Transform (not listed in the support matrix)
+      category: Color Correction
+      adobe_support:
+        gpu: null
+        bpc: []
+        mfr: null
+      checked: false
+    - ref: S19
+      item: OCIO Color Space Transform
+      category: Color Correction
+      checked: true
+    - ref: S26
+      item: OCIO Color Space Transform
+      category: Layer effects for applying OpenColorIO
+      checked: true
+  artist_can: >-
+    Convert a layer from one color space to another using an OCIO config (e.g. LogC → ACEScg), typically to apply a LUT or effect built for a different space and convert back.
+  projection_example: >-
+    Convert a camera-log clip into the show's working space so it matches the 3D renders projected next to it.
+  controls:
+    - { name: "Input Color Space", type: "enum", animatable: false }
+    - { name: "Output Color Space", type: "enum", animatable: false }
+    - { name: "Inverse", type: "bool", animatable: false }
+    - { name: "Gamut handling (Clip / Compress)", type: "enum", animatable: false }
+    - { name: "Information (config, errors)", type: "display", animatable: false }
+  animation: >-
+    Not animatable (discrete choices).
+  dependencies: [color.management, color.lut, proj.effect-stack, preview.cache]
+  implementation: >-
+    The PyOpenColorIO sidecar builds the processor from the project's config (or the bundled OCIO studio config when the project uses the analytic engine, since Adobe states project OCIO mode is not required). If the optimized processor reduces to matrix plus known transfer functions (sRGB, BT.1886, PQ, HLG, ACEScc/cct, Log camera curves), WGSL analytic parameters are emitted. Otherwise a log2 shaper 1D LUT covering about −8…+8 stops plus a 65³ rgba16float 3D LUT is baked, with tetrahedral interpolation in the shader, cached by config hash and space pair. Runs on unpremultiplied values. Optional gamut compression uses an ACES RGC-style analytic pass.
+  io: >-
+    The project stores config identity and space names, and collect-for-transfer includes the config. The baked LUT is a cache, never the source of truth.
+  limitations: >-
+    Not listed in the S02 support matrix (checked 2026-10-01), so Adobe's GPU, bit-depth and MFR support is unknown. Baked LUTs are an approximation of non-analytic transforms; extreme values outside the shaper range clamp.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only. Most users never see it, because color.management interprets footage automatically. It is reached through "This clip looks gray/flat (log footage)" → "Convert from camera log".
+    defaults: >-
+      Input = layer's interpreted space; Output = working space; Clip.
+    automation: >-
+      Suggests the input space from footage metadata (camera, gamma tag) when available.
+    usability_check: >-
+      A novice fixes a flat log clip via the plain-language prompt in under 30 s without seeing a color-space name list.
+  acceptance: >-
+    Mini scene "ocio-roundtrip": a CST A→B→A round-trip is within 1e-3 relative error for in-gamut values, and the baked path matches the OCIO CPU processor within 1/1023 at 10-bit output.
+  status: not-started
+  evidence: []
+
+- id: fx.color.ocio-file-transform
+  name: OCIO File Transform
+  sources:
+    - ref: S02
+      item: OCIO File Transform (not listed in the support matrix)
+      category: Color Correction
+      adobe_support:
+        gpu: null
+        bpc: []
+        mfr: null
+      checked: false
+    - ref: S19
+      item: OCIO File Transform
+      category: Color Correction
+      checked: true
+    - ref: S26
+      item: OCIO File Transform
+      category: Layer effects for applying OpenColorIO
+      checked: true
+  artist_can: >-
+    Apply any LUT or CDL file that OpenColorIO can read, in the color space it was built for.
+  projection_example: >-
+    Apply a colorist's .clf look delivered for the show, using the LogC space it expects.
+  controls:
+    - { name: "File (.cube, .3dl, .csp, .spi1d/.spi3d, .clf/.ctf, .cdl/.cc/.ccc, .look, .lut, .mga, .vf, .icc)", type: "file", animatable: false }
+    - { name: "CCC ID", type: "enum", animatable: false }
+    - { name: "Interpolation (Linear / Tetrahedral / Best)", type: "enum", animatable: false }
+    - { name: "Direction (Forward / Inverse)", type: "enum", animatable: false }
+    - { name: "LUT expects (color space; wraps the conversion in and out)", type: "enum", animatable: false }
+    - { name: "Intensity", type: "percent", animatable: true }
+  animation: >-
+    Only Intensity (a mix with the input) is animatable.
+  dependencies: [fx.color.ocio-color-space-transform, color.lut, color.management, proj.effect-stack]
+  implementation: >-
+    The sidecar fuses the CST sandwich Adobe describes (working → LUT space → file → working) into one processor and bakes it: 1D-only files become a 4096-entry 1D LUT texture; other files become a shaper plus 65³ 3D LUT with tetrahedral interpolation. Inverse uses OCIO's inversion where the format supports it. The result is cached by file hash.
+  io: >-
+    The referenced file is collected with the project. A missing LUT is reported with a relink action.
+  limitations: >-
+    Not listed in the S02 support matrix (checked 2026-10-01). Inverting 3D LUTs is approximate.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Apply a look (LUT)" — the same entry point as fx.utility.apply-color-lut. Formats that need OCIO route here automatically, and a "This LUT expects…" picker appears only if the file does not say.
+    defaults: >-
+      LUT expects Rec.709 display, Forward, Best interpolation, Intensity 100 %.
+    automation: >-
+      Chooses between the native LUT path and the OCIO path by file type, and reads the expected space from CLF/CTF metadata.
+    usability_check: >-
+      A novice applies a supplied .clf look by drag-and-drop and sets its strength in under 30 s.
+  acceptance: >-
+    Mini scene "ocio-roundtrip": the baked result matches the OCIO CPU processor within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.ocio-display-transform
+  name: OCIO Display Transform
+  sources:
+    - ref: S02
+      item: OCIO Display Transform (not listed in the support matrix)
+      category: Color Correction
+      adobe_support:
+        gpu: null
+        bpc: []
+        mfr: null
+      checked: false
+    - ref: S19
+      item: OCIO Display Transform
+      category: Color Correction
+      checked: true
+    - ref: S26
+      item: OCIO Display Transform
+      category: Layer effects for applying OpenColorIO
+      checked: true
+  artist_can: >-
+    Apply a display/view transform (e.g. ACES SDR Video) to a layer, or invert one to bring display-referred graphics into a scene-linear working space.
+  projection_example: >-
+    Bring sRGB motion-graphics logos into an ACEScg show using the inverse view transform so they appear unchanged on the projector.
+  controls:
+    - { name: "Input Color Space", type: "enum", animatable: false }
+    - { name: "Display Device", type: "enum", animatable: false }
+    - { name: "View Transform", type: "enum", animatable: false }
+    - { name: "Inverse Transform", type: "bool", animatable: false }
+    - { name: "Information (config, errors)", type: "display", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [color.management, fx.color.ocio-color-space-transform, out.projector-output, proj.effect-stack]
+  implementation: >-
+    The sidecar bakes an OCIO DisplayViewTransform (with its looks) to a shaper plus 65³ 3D LUT; the inverse is baked separately with an extended shaper range. Display lists are populated dynamically from the config, as Adobe describes.
+  io: >-
+    Config identity is stored in the project.
+  limitations: >-
+    Not listed in the S02 support matrix (checked 2026-10-01). HDR honesty: an HDR display or view (PQ/HLG) can be chosen for review files, but the projector path stays SDR unless the projector is declared HDR. The inverse cannot recover detail lost by tone mapping. The viewer and export transforms are owned by color.management, so applying this effect as well is flagged to prevent a double transform.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only. Reached through "Import graphics into an ACES show" (which applies the inverse automatically) or through More controls.
+    defaults: >-
+      Display and view are taken from the project display settings.
+    automation: >-
+      Detects when a layer would receive the view transform twice and warns.
+    usability_check: >-
+      A novice imports a logo into an ACES project and it previews unchanged versus the source PNG (ΔE2000 < 1) with no manual step.
+  acceptance: >-
+    Mini scene "ocio-roundtrip": inverse then forward is identity within 1/1023 for in-range sRGB input.
+  status: not-started
+  evidence: []
+
+- id: fx.color.ocio-look-transform
+  name: OCIO Look Transform
+  sources:
+    - ref: S02
+      item: OCIO Look Transform (not listed in the support matrix)
+      category: Color Correction
+      adobe_support:
+        gpu: null
+        bpc: []
+        mfr: null
+      checked: false
+    - ref: S19
+      item: OCIO Look Transform
+      category: Color Correction
+      checked: true
+    - ref: S26
+      item: OCIO Look Transform
+      category: Layer effects for applying OpenColorIO
+      checked: true
+  artist_can: >-
+    Apply one of the looks defined in the OCIO config (or its inverse) between chosen input and output spaces.
+  projection_example: >-
+    Apply the studio's shared "show look" from the pipeline config to a pre-rendered intermediate.
+  controls:
+    - { name: "Input Color Space", type: "enum", animatable: false }
+    - { name: "Look", type: "enum", animatable: false }
+    - { name: "Output Color Space", type: "enum", animatable: false }
+    - { name: "Inverse Transform", type: "bool", animatable: false }
+    - { name: "Information (config, errors)", type: "display", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [color.management, fx.color.ocio-color-space-transform, proj.effect-stack]
+  implementation: >-
+    The sidecar bakes an OCIO LookTransform (its process space comes from the config) to an analytic form or a shaper plus 3D LUT, following the same rules and cache as fx.color.ocio-color-space-transform.
+  io: >-
+    Looks resolve from the stored config, and the config is collected with the project.
+  limitations: >-
+    Not listed in the S02 support matrix (checked 2026-10-01). Only meaningful when a config defines looks.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      The "Apply a look" library lists config looks alongside LUT looks when the project has a config.
+    defaults: >-
+      Input and output = working space.
+    automation: >-
+      Hidden when the config has no looks.
+    usability_check: >-
+      A novice picks a config look from the same thumbnail library used for LUT looks in under 20 s.
+  acceptance: >-
+    Mini scene "ocio-roundtrip": matches OCIO CPU reference within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.color.ocio-cdl-transform
+  name: OCIO CDL Transform
+  sources:
+    - ref: S02
+      item: OCIO CDL Transform (not listed in the support matrix)
+      category: Color Correction
+      adobe_support:
+        gpu: null
+        bpc: []
+        mfr: null
+      checked: false
+    - ref: S19
+      item: OCIO CDL Transform
+      category: Color Correction
+      checked: true
+    - ref: S26
+      item: OCIO CDL Transform
+      category: Layer effects for applying OpenColorIO
+      checked: true
+  artist_can: >-
+    Apply an ASC CDL grade (slope, offset, power, saturation) from a .cdl/.cc/.ccc file, choose a correction from a collection by ID, or invert it.
+  projection_example: >-
+    Apply the on-set colorist's CDL to a performer plate so it matches the grade used in the show's filmed segments.
+  controls:
+    - { name: "CDL file (.cdl / .cc / .ccc)", type: "file", animatable: false }
+    - { name: "CCCID", type: "enum", animatable: false }
+    - { name: "Inverse Transform", type: "bool", animatable: false }
+    - { name: "Slope / Offset / Power (RGB)", type: "float[9]", animatable: true }
+    - { name: "Saturation", type: "float", animatable: true }
+    - { name: "Style (ASC clamp / no-clamp)", type: "enum", animatable: false }
+  animation: >-
+    The file values load into slope/offset/power/saturation properties, which are editable and keyframable; this is beyond AE's file-only effect.
+  dependencies: [color.management, proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    Analytic WGSL, with no baking needed: out = (in·slope + offset)^power, then saturation using Rec.709 luma weights, with an analytic inverse. The ASC v1.2 clamp style or OCIO no-clamp style is selectable for scene-linear use. CDL XML is parsed in TypeScript, and the OCIO sidecar is used only in tests for parity.
+  io: >-
+    Imports and exports .cdl/.cc/.ccc, preserving CCC IDs.
+  limitations: >-
+    Not listed in the S02 support matrix (checked 2026-10-01). A CDL is only correct in the color space it was authored in; the card shows the expected space and offers a CST sandwich.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail colour-correction effect or plug-in clone. Basic correction (brightness/contrast, exposure, hue/saturation, levels, curves, tint, colour balance), projection looks and per-region grading stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Use a grade from a colorist (CDL)" — drop the file and the values appear as editable sliders.
+    defaults: >-
+      Identity CDL, first CCCID, ASC style.
+    automation: >-
+      Auto-selects the CCC ID whose name matches the clip's file name or reel.
+    usability_check: >-
+      A novice applies a supplied .ccc to the matching clip by drag-and-drop in one action.
+  acceptance: >-
+    Mini scene "ocio-roundtrip": analytic CDL matches OCIO CPU within 1e-5, and the round-trip export of a .cc file is lossless.
+  status: not-started
+  evidence: []
+
+- id: fx.color.grade-per-region
+  name: Grade per region
+  sources:
+    - ref: brief §11I
+      item: Color and channels; artistic grade separate from projector output correction
+      category: Effect library
+      checked: true
+    - ref: brief §15
+      item: Named regions (windows, rooflines, columns, walls, doors)
+      category: Projection design
+      checked: true
+  artist_can: >-
+    Apply a different grade to each named region of the venue (windows, walls, columns) from one layer or adjustment layer, using the venue's region masks instead of hand-drawn masks.
+  projection_example: >-
+    Make all windows warm amber while the surrounding brick stays cool and slightly darker, from a single adjustment layer.
+  controls:
+    - { name: "Target regions (region roles, multi-select)", type: "region-set", animatable: false }
+    - { name: "Invert (everything except)", type: "bool", animatable: false }
+    - { name: "Edge feather / expansion", type: "float[2]", animatable: true }
+    - { name: "Grade (any color effect or effect group)", type: "effect-group", animatable: true }
+    - { name: "Mix", type: "percent", animatable: true }
+  animation: >-
+    Feather, expansion, mix and all grade controls keyframable. Per-region offsets can be driven by rigs (e.g. index-based delays).
+  dependencies: [map.region, proj.effect-stack, mask.bezier, ux.recipe-engine, ux.operation-system, fx.color.curves]
+  implementation: >-
+    Gives any color effect (or effect group) an effect-level region mask input. Region geometry from map.region is rasterized in content/UV space into an r16float coverage texture, with analytic anti-aliasing and feather via a signed-distance field, and used to mix graded and ungraded pixels. Because the show targets region roles, rebinding the show to another venue regenerates the masks automatically.
+  io: >-
+    Region roles are saved with the show; bindings live with the venue.
+  limitations: >-
+    These are creative masks, distinct from physical output masks (out.output-mask). Light spilling past a physical edge still needs output masking.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select one or more regions on the canvas → "Change color here", which opens the Color card scoped to that selection.
+    defaults: >-
+      Feather 2 px at output resolution, expansion 0, mix 100 %.
+    automation: >-
+      Creates the adjustment layer, region mask and grade underneath. "Same for all windows" uses the region group.
+    usability_check: >-
+      A first-time user makes all windows warmer while the walls stay unchanged in at most 3 actions and under 45 s.
+  acceptance: >-
+    AS-7 delivery/reuse: binding the show to another venue moves the per-region grade to the new regions with no manual edits; pixels outside regions are bit-identical to ungraded.
+  status: not-started
+  evidence: []
+
+- id: fx.color.match-surfaces
+  name: "Match two surfaces or projectors (artistic)"
+  sources:
+    - ref: brief §11I
+      item: Separate the show's artistic grade from each projector's output correction
+      category: Effect library
+      checked: true
+    - ref: brief §16
+      item: Gamma/color matching across projectors (output side referenced, not implemented here)
+      category: Multiple projectors
+      checked: true
+    - ref: brief §14
+      item: Real surface color and projector limitations are installation constraints
+      category: Color precision
+      checked: true
+  artist_can: >-
+    Pick a reference area and a target area (two surfaces, or the parts of the show lit by two projectors). The helper builds an editable artistic grade that makes the target read like the reference to the audience.
+  projection_example: >-
+    A sandstone tower and a white-rendered wing turn the same white content cream and blue-white; the helper warms and darkens content on the wing so the two read alike.
+  controls:
+    - { name: "Reference area / Target area", type: "region", animatable: false }
+    - { name: "Match (White balance / Tone / Both)", type: "enum", animatable: false }
+    - { name: "Strength", type: "percent", animatable: true }
+    - { name: "Sample source (camera capture of test pattern / venue photo / eyedroppers)", type: "enum", animatable: false }
+  animation: >-
+    The result is ordinary Curves/Lumetri values, so it is keyframable like any grade. Strength is keyframable.
+  dependencies: [fx.color.grade-per-region, fx.color.curves, map.region, map.calibration, map.projector, out.projector-output, ux.operation-system]
+  implementation: >-
+    A one-shot operation. A GPU reduction takes mean and 5/50/95 % percentile statistics of both samples, preferably from a fixed-exposure calibration-camera capture (map.calibration) of a projected gray-step pattern. Per-channel gains plus a 3-point tone curve are solved by least squares in scene-linear and written into a Curves or Lumetri instance scoped by fx.color.grade-per-region. The helper never writes per-projector output correction (gamma, white point, black level). It links to out.projector-output for that and says so in the UI.
+  io: >-
+    Stores the capture reference and the solved values in the show (artistic), not in the venue calibration.
+  limitations: >-
+    Cannot exceed projector headroom: a darker or colored surface can only be matched by pulling the brighter side down. Albedo varies with ambient light and viewing angle. Camera captures need locked exposure and white balance. Eyedropper-only matching (no camera) is approximate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Select two regions → "Make these match".
+    defaults: >-
+      Match Both, Strength 100 %, the newest calibration capture if one exists, otherwise eyedroppers.
+    automation: >-
+      Projects a gray-step pattern and captures it with the calibration camera when available, then solves the grade. A before/after split view is shown.
+    usability_check: >-
+      A novice reduces the measured mean color difference (ΔE2000 between the two captured regions under white content) by at least half in under 2 minutes, in at most 3 actions.
+  acceptance: >-
+    AS-5 multi-projector scene: the artistic grade and the per-projector output correction are stored and baked separately, the bundle manifest lists both stages, and neither is applied twice.
+  status: not-started
+  evidence: []

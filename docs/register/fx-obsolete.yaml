@@ -1,0 +1,531 @@
+# Obsolete — Before Effects capability register
+# Sources: S02 effect list + support matrix (Obsolete table, checked live 2026-10-01); S01 user guide → Obsolete effects page (checked live 2026-10-01; it also documents Fast Blur, which the S02 Obsolete table omits); S37 Keying (Color Key and Luma Key under Effect > Obsolete; Spill Suppressor obsolete since June 2014); brief §2, §8, §9. Shared rule: each item is superseded by a modern register entry. The legacy name stays searchable and maps to that entry, and an acceptance mini scene proves the useful outcome is still achievable.
+
+- id: fx.obsolete.basic-3d
+  name: Basic 3D
+  sources:
+    - ref: S02
+      item: Basic 3D
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Basic 3D effect
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Swivel and tilt a flat layer in perspective, with an optional specular glint.
+  projection_example: >-
+    Tilt a poster layer back as if it is hinged at the bottom of a window, then let it fall flat.
+  controls:
+    - { name: Swivel, type: angle, animatable: true }
+    - { name: Tilt, type: angle, animatable: true }
+    - { name: Distance To Image, type: number, animatable: true }
+    - { name: Specular Highlight, type: bool, animatable: false }
+    - { name: Draw Preview Wireframe, type: bool, animatable: false }
+  animation: >-
+    Legacy controls were keyframable; the equivalent 3D layer transforms are keyframable and expression-linkable.
+  dependencies: [3d.scene, 3d.camera, 3d.light, 3d.material-pbr, proj.layer, ux.effect-library]
+  implementation: >-
+    No separate engine. An alias in the effect library maps Swivel to Y rotation, Tilt to X rotation and Distance To Image to Z position under the default comp camera. The specular glint maps to a 3D light plus material specular.
+  io: >-
+    No .aep or preset import is promised (brief §2). The mapping table allows a later preset translator.
+  limitations: >-
+    Superseded by 3D layers in 3d.scene, which cover swivel, tilt, distance and lit highlights with more control. The fixed upper-left light of Basic 3D is reproduced by a recipe light preset.
+  disposition: superseded
+  superseded_by: 3d.scene
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hidden from the library. Searching "Basic 3D" offers "Tilt in 3D" (3D layer) with a note that it replaces Basic 3D.
+    defaults: >-
+      Default comp camera, no light.
+    automation: >-
+      "Tilt in 3D" enables 3D on the layer and shows rotation handles.
+    usability_check: >-
+      A user searching "Basic 3D" gets "Tilt in 3D" as the top result and tilts a layer back 30° in under 20 s.
+  acceptance: >-
+    Mini scene "legacy-basic-3d": a swivel 30° / tilt -20° look with highlight reproduced with a 3D layer and light within tolerance of the reference still.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.basic-text
+  name: Basic Text
+  sources:
+    - ref: S02
+      item: Basic Text
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Basic Text effect
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Place simple text with fill and stroke onto an existing layer.
+  projection_example: >-
+    Stamp a short title onto a video layer that already fills a door region.
+  controls:
+    - { name: Text (font / style / direction / alignment), type: text, animatable: false }
+    - { name: Position, type: point2d, animatable: true }
+    - { name: Fill and Stroke (mode / fill colour / stroke colour / stroke width), type: group, animatable: true }
+    - { name: Size / Tracking / Line Spacing, type: number, animatable: true }
+    - { name: Composite On Original, type: bool, animatable: false }
+  animation: >-
+    Equivalent text-layer properties and animators are keyframable.
+  dependencies: [text.layer, text.animator, proj.precompose, ux.effect-library]
+  implementation: >-
+    Alias to a text layer. "Composite On Original" maps to placing the text layer above the target or to an adjustment precomp when the text must sit inside the layer's effect stack.
+  io: >-
+    none
+  limitations: >-
+    Superseded by text.layer, which covers fill, stroke, size, tracking and line spacing and adds full animators. Text drawn inside a single layer's pixels is achieved by precomposing.
+  disposition: superseded
+  superseded_by: text.layer
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hidden; searching "Basic Text" offers "Add text".
+    defaults: >-
+      Text layer centred on the selected region.
+    automation: >-
+      Fits text size to the selected region.
+    usability_check: >-
+      A user searching "Basic Text" creates a styled title on a region in under 30 s.
+  acceptance: >-
+    Mini scene "legacy-basic-text": a fill and stroke title reproduced with a text layer.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.color-key
+  name: Color Key
+  sources:
+    - ref: S02
+      item: Color Key
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Color Key effect
+      category: Obsolete
+      checked: true
+    - ref: S37
+      item: Color Key effect (Effect > Obsolete > Color Key)
+      category: Keying
+      checked: true
+  artist_can: >-
+    Key out every pixel close to one colour, with edge thinning and feathering.
+  projection_example: >-
+    Remove a flat blue backdrop from a product shot before placing it in a window.
+  controls:
+    - { name: Key Color, type: color, animatable: true }
+    - { name: Color Tolerance, type: number, animatable: true }
+    - { name: Edge Thin, type: number, animatable: true }
+    - { name: Edge Feather, type: number, animatable: true }
+  animation: >-
+    Equivalent controls are keyframable.
+  dependencies: [fx.keying.linear-color-key, fx.matte.simple-choker, fx.matte.refine-hard-matte, ux.effect-library]
+  implementation: >-
+    Alias that maps Key Color and Color Tolerance to Linear Color Key (RGB match, softness 0), Edge Thin to Simple Choker and Edge Feather to Refine Hard Matte Feather.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.keying.linear-color-key plus a choke. The linear key additionally offers softness and keep-colour, so the hard single-colour key outcome is a subset.
+  disposition: superseded
+  superseded_by: fx.keying.linear-color-key
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Hidden; searching "Color Key" offers "Make a colour transparent".
+    defaults: >-
+      As fx.keying.linear-color-key.
+    automation: >-
+      none
+    usability_check: >-
+      A user searching "Color Key" removes a flat-colour background in under 30 s.
+  acceptance: >-
+    Mini scene "legacy-color-key": a hard single-colour key with thinned, feathered edge reproduced within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.fast-blur-legacy
+  name: Fast Blur (Legacy)
+  sources:
+    - ref: S01
+      item: Fast Blur effect
+      category: Obsolete
+      adobe_support:
+        gpu: null
+        bpc: [8, 16, 32]
+        mfr: null
+      checked: true
+    - ref: S02
+      item: Fast Blur (Legacy)
+      category: Obsolete
+      checked: false
+  artist_can: >-
+    Blur a layer quickly with a near-Gaussian look, horizontally, vertically or both, optionally repeating edge pixels.
+  projection_example: >-
+    Soften a background video behind a sharp title on the facade.
+  controls:
+    - { name: Blurriness, type: number, animatable: true }
+    - { name: Blur Dimensions (Horizontal and Vertical / Horizontal / Vertical), type: enum, animatable: false }
+    - { name: Repeat Edge Pixels, type: bool, animatable: false }
+  animation: >-
+    Equivalent Blurriness is keyframable.
+  dependencies: [fx.blur-sharpen.gaussian-blur, fx.blur-sharpen.fast-box-blur, ux.effect-library]
+  implementation: >-
+    Alias to Gaussian Blur with the same dimensions and edge mode. S01 notes that Fast Blur approximates Gaussian at Best quality.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.blur-sharpen.gaussian-blur; fx.blur-sharpen.fast-box-blur covers the speed-oriented use. S01 documents it but the S02 Obsolete table no longer lists it, so its Adobe GPU and MFR status is unknown and the "(Legacy)" menu label is from our own knowledge.
+  disposition: superseded
+  superseded_by: fx.blur-sharpen.gaussian-blur
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hidden; searching "Fast Blur" offers "Blur".
+    defaults: >-
+      As fx.blur-sharpen.gaussian-blur.
+    automation: >-
+      none
+    usability_check: >-
+      A user searching "Fast Blur" blurs a layer in under 15 s.
+  acceptance: >-
+    Mini scene "legacy-fast-blur": the same blurriness and dimensions match the reference within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.gaussian-blur-legacy
+  name: Gaussian Blur (Legacy)
+  sources:
+    - ref: S02
+      item: Gaussian Blur (Legacy)
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Gaussian Blur (Legacy) effect
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Blur and soften an image or remove noise with the older Gaussian algorithm.
+  projection_example: >-
+    Reopen an old show recipe that relied on the legacy blur look for soft light pools.
+  controls:
+    - { name: Blurriness, type: number, animatable: true }
+    - { name: Blur Dimensions, type: enum, animatable: false }
+  animation: >-
+    Equivalent Blurriness is keyframable.
+  dependencies: [fx.blur-sharpen.gaussian-blur, ux.effect-library]
+  implementation: >-
+    Alias to Gaussian Blur. Blurriness maps to sigma using a documented conversion so legacy values give visually equivalent radii.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.blur-sharpen.gaussian-blur. S01 states the legacy version renders slightly differently, and we do not reproduce that difference.
+  disposition: superseded
+  superseded_by: fx.blur-sharpen.gaussian-blur
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hidden; searching "Gaussian Blur (Legacy)" offers "Blur".
+    defaults: >-
+      As fx.blur-sharpen.gaussian-blur.
+    automation: >-
+      none
+    usability_check: >-
+      A user searching "Gaussian Blur" blurs a layer in under 15 s.
+  acceptance: >-
+    Mini scene "legacy-gaussian": mapped blurriness matches the reference falloff within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.lightning
+  name: Lightning
+  sources:
+    - ref: S02
+      item: Lightning
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Lightning effect
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Draw animated, branching electrical bolts between two points, including Jacob's-ladder arcs that are pulled sideways and snap back.
+  projection_example: >-
+    Arc electricity between two lightning rods on the roofline during a storm scene.
+  controls:
+    - { name: Start Point / End Point, type: point2d, animatable: true }
+    - { name: Segments / Amplitude, type: number, animatable: true }
+    - { name: Detail Level / Detail Amplitude, type: number, animatable: true }
+    - { name: Branching / Rebranching / Branch Angle / Branch Seg. Length / Branch Segments / Branch Width, type: number, animatable: true }
+    - { name: Speed / Stability / Fixed Endpoint, type: group, animatable: true }
+    - { name: Width / Width Variation / Core Width, type: number, animatable: true }
+    - { name: Outside Color / Inside Color, type: color, animatable: true }
+    - { name: Pull Force / Pull Direction, type: group, animatable: true }
+    - { name: Random Seed, type: integer, animatable: true }
+    - { name: Blending Mode, type: enum, animatable: false }
+    - { name: Rerun At Each Frame, type: bool, animatable: false }
+  animation: >-
+    Equivalent controls keyframable; seeds are deterministic.
+  dependencies: [fx.generate.advanced-lightning, expr.rigs, ux.effect-library]
+  implementation: >-
+    Alias to Advanced Lightning with a mapping for points, branching, widths, colours, seed and blend mode. Jacob's-ladder pull-and-snap is provided by a small expression rig that animates Advanced Lightning's direction with a stability spring.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.generate.advanced-lightning. Its pull force and stability have no one-to-one control, so the Jacob's-ladder look must be demonstrated in acceptance rather than assumed.
+  disposition: superseded
+  superseded_by: fx.generate.advanced-lightning
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Hidden; searching "Lightning" offers the "Electric arc" recipe, with a "Jacob's ladder" variant.
+    defaults: >-
+      Recipe defaults with endpoints snapped to selected region points.
+    automation: >-
+      Snaps endpoints to region corners or path points.
+    usability_check: >-
+      A user searching "Lightning" arcs a bolt between two roof points in three actions or fewer and under 30 s.
+  acceptance: >-
+    Mini scene "legacy-lightning": branching bolt and a Jacob's-ladder arc reproduced; output identical after reopening and seeking.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.luma-key
+  name: Luma Key
+  sources:
+    - ref: S02
+      item: Luma Key
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Luma Key effect
+      category: Obsolete
+      checked: true
+    - ref: S37
+      item: Luma Key effect (Effect > Obsolete > Luma Key)
+      category: Keying
+      checked: true
+  artist_can: >-
+    Key out brighter, darker, similar or dissimilar brightness values around a threshold, with edge thinning and feathering.
+  projection_example: >-
+    Remove the white background behind scanned musical notes so they float across the facade.
+  controls:
+    - { name: Key Type (Key Out Brighter / Key Out Darker / Key Out Similar / Key Out Dissimilar), type: enum, animatable: false }
+    - { name: Threshold, type: number, animatable: true }
+    - { name: Tolerance, type: number, animatable: true }
+    - { name: Edge Thin, type: number, animatable: true }
+    - { name: Edge Feather, type: number, animatable: true }
+  animation: >-
+    Equivalent controls keyframable.
+  dependencies: [fx.keying.extract, fx.matte.simple-choker, mask.track-matte, ux.effect-library]
+  implementation: >-
+    Alias to Extract on Luminance. Brighter or Darker map to one open end of the black/white range. Similar or Dissimilar map to a band of Threshold ± Tolerance, with Invert for Dissimilar. Edge Thin maps to Simple Choker and Edge Feather to the Extract softness values.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.keying.extract, plus luma track mattes (mask.track-matte) for layer-driven cases.
+  disposition: superseded
+  superseded_by: fx.keying.extract
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Hidden; searching "Luma Key" offers "Remove the white background" / "Remove the dark background".
+    defaults: >-
+      As fx.keying.extract.
+    automation: >-
+      none
+    usability_check: >-
+      A user searching "Luma Key" removes the white background of the supplied scan in under 20 s.
+  acceptance: >-
+    Mini scene "legacy-luma-key": all four key types reproduced with Extract within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.path-text
+  name: Path Text
+  sources:
+    - ref: S02
+      item: Path Text
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Path Text effect
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Run text along a Bezier, circle, loop, line or custom path. Characters can be revealed by count with fades, and kerning, baseline, rotation and scale can jitter randomly.
+  projection_example: >-
+    Run a line of text around the arch of a doorway, typing on letter by letter.
+  controls:
+    - { name: Shape Type (Bezier / Circle / Loop / Line) and Control Points, type: group, animatable: true }
+    - { name: Custom Path / Reverse Path, type: mask-ref, animatable: false }
+    - { name: Fill and Stroke (options / colours / width), type: group, animatable: true }
+    - { name: Character (Size / Tracking / Kerning / Orientation / Shear / Scale), type: group, animatable: true }
+    - { name: Paragraph (Alignment / Margins / Line Spacing / Baseline Shift), type: group, animatable: true }
+    - { name: Visible Characters / Fade Time, type: number, animatable: true }
+    - { name: Mode (blend), type: enum, animatable: false }
+    - { name: Jitter Settings (Baseline / Kerning / Rotation / Scale max), type: number, animatable: true }
+  animation: >-
+    Equivalent text-layer path options, range selectors and wiggly selectors are keyframable and expression-linkable.
+  dependencies: [text.layer, text.animator, mask.bezier, shape.path, ux.effect-library]
+  implementation: >-
+    Alias to a text layer on a path. Shape types become generated mask paths, Visible Characters/Fade Time map to a range selector with smoothness, and jitter maps to a seeded wiggly selector on baseline, tracking, rotation and scale.
+  io: >-
+    none
+  limitations: >-
+    Superseded by text.layer (text on a path, brief §8) with text.animator. Force alignment maps to justify-on-path, which must be verified in acceptance.
+  disposition: superseded
+  superseded_by: text.layer
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hidden; searching "Path Text" offers "Text along a path": click a region edge or draw a path, then type.
+    defaults: >-
+      Text follows the selected edge, centred, typing on over one second.
+    automation: >-
+      Uses region outlines as paths and fits size to path length.
+    usability_check: >-
+      A user searching "Path Text" puts typing-on text around the supplied arch in three actions or fewer and under 45 s.
+  acceptance: >-
+    Mini scene "legacy-path-text": circle, loop and Bezier layouts with visible-character typing and seeded jitter reproduced; identical after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.reduce-interlace-flicker
+  name: Reduce Interlace Flicker
+  sources:
+    - ref: S02
+      item: Reduce Interlace Flicker
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Reduce Interlace Flicker
+      category: Obsolete
+      checked: true
+  artist_can: >-
+    Apply a slight vertical softening that stops thin horizontal lines and fine high-contrast detail from flickering.
+  projection_example: >-
+    Calm the shimmer of thin horizontal text strokes on a low-resolution projector covering a large wall.
+  controls:
+    - { name: Softness, type: number, animatable: true }
+  animation: >-
+    Equivalent blur amount keyframable.
+  dependencies: [fx.blur-sharpen.gaussian-blur, ux.effect-library]
+  implementation: >-
+    Alias to Gaussian Blur with Blur Dimensions set to Vertical and a small radius mapped from Softness.
+  io: >-
+    none
+  limitations: >-
+    Superseded by vertical-only fx.blur-sharpen.gaussian-blur. Projector outputs are progressive, so the interlace use itself does not apply; only the anti-shimmer softening outcome is kept.
+  disposition: superseded
+  superseded_by: fx.blur-sharpen.gaussian-blur
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Hidden; searching "flicker" or "shimmer" offers "Calm fine-line shimmer" (vertical soften).
+    defaults: >-
+      0.5 px vertical softening.
+    automation: >-
+      Export checks can suggest it when fine horizontal detail falls below the projector's pixel pitch.
+    usability_check: >-
+      A user searching "flicker" applies vertical softening to the supplied fine-line clip in under 20 s.
+  acceptance: >-
+    Mini scene "legacy-flicker": the vertical-softening result matches the reference within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.obsolete.spill-suppressor
+  name: Spill Suppressor
+  sources:
+    - ref: S02
+      item: Spill Suppressor
+      category: Obsolete
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Spill Suppressor Effect
+      category: Obsolete
+      checked: true
+    - ref: S37
+      item: Spill Suppressor effect (moved to Obsolete in June 2014)
+      category: Keying
+      checked: true
+  artist_can: >-
+    Remove traces of the key colour from the edges of a keyed subject.
+  projection_example: >-
+    Remove a green edge from an old keyed clip reused in a new show.
+  controls:
+    - { name: Color To Suppress, type: color, animatable: true }
+    - { name: Color Accuracy (Faster / Better), type: enum, animatable: false }
+    - { name: Suppression, type: number, animatable: true }
+  animation: >-
+    Equivalent controls keyframable.
+  dependencies: [fx.keying.advanced-spill-suppressor, ux.effect-library]
+  implementation: >-
+    Alias to Advanced Spill Suppressor in Ultra mode, with Key Color set from Color To Suppress and Suppression mapped directly.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.keying.advanced-spill-suppressor, which Adobe recommends (S37) and which covers both primary and non-primary key colours.
+  disposition: superseded
+  superseded_by: fx.keying.advanced-spill-suppressor
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Hidden; searching "Spill Suppressor" offers "Remove the green tint".
+    defaults: >-
+      As fx.keying.advanced-spill-suppressor.
+    automation: >-
+      none
+    usability_check: >-
+      A user searching "Spill Suppressor" removes a green edge in under 20 s.
+  acceptance: >-
+    Mini scene "legacy-spill": spill removal on the reference clip matches or improves the reference edge-hue metric.
+  status: not-started
+  evidence: []

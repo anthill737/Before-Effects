@@ -1,0 +1,488 @@
+PROJECTION MAPPING STUDIO — FULL PRODUCT SCOPE AND AGENT HANDOFF
+Research date: October 1, 2026
+Purpose: Give a coding agent the product vision, researched capability requirements, implementation rules, and acceptance scenarios in one document.
+
+READ THIS FIRST
+
+Build a custom creative application inspired by After Effects, specifically optimized for authoring, animating, previewing, rendering, exporting, and playing 3D projection-mapping shows.
+
+The user's correction is explicit: the finished product must include EVERY After Effects capability that is useful for this type of projection mapping or animation. Do not quietly reduce this to a simple mapping tool, video player, timeline demo, or small selection of effects. A staged implementation is acceptable; a reduced final scope is not.
+
+EQUALLY NON-NEGOTIABLE: radically reduce the effort and expertise needed to use those capabilities. The user wants professional creative power with an exceptionally approachable experience. They must not need an After Effects course, compositing vocabulary, programming knowledge, or hours of setup to create a compelling show. Ease of use is a primary architectural and acceptance requirement, not a visual-polish task at the end. The application should perform the technical setup and repetitive work wherever it can do so reliably, while leaving the user's creative decisions easy to control.
+
+This brief supersedes the earlier abbreviated brief. It is a researched capability specification, not a claim that an exhaustive parameter-by-parameter After Effects compatibility audit has already been completed. The feature families below are required scope. During design, maintain a traceable feature inventory against Adobe's current guide and effect catalog so individually useful capabilities are not lost inside broad labels.
+
+References identify the source capabilities. Their application to this product, proposed architecture, and acceptance scenarios are our requirements and design recommendations, not claims that Adobe or the mapping vendors implement this exact combined application.
+
+0. USER EXPERIENCE: MAKE THE WORK EASY
+
+This section governs how every capability below reaches the user. Preserve all useful creative power while making the default workflow understandable to a first-time user. Functional completeness and usability are both release gates. These are explicit product requirements, not findings attributed to the research sources.
+
+0.1 Design around the result the user wants
+
+The normal interaction should be: select the thing to change, choose what it should do, adjust a few understandable controls, and see the result immediately.
+
+Examples:
+- Click a roofline, choose "Trace with light," select color and speed, and preview it.
+- Select windows, choose "Light up one after another," and adjust order and delay.
+- Select a wall, choose "Crack and rebuild," and adjust intensity and duration.
+- Add music, choose "Move with the beat," and control which elements respond and how strongly.
+- Choose "Save a video" or "Send to Google Drive," select a useful quality preset, and export.
+
+The app creates the necessary masks, paths, layers, keyframes, expressions, geometry, materials, and routing underneath these actions. The user can inspect and refine that structure, but must not assemble it manually to achieve common results.
+
+0.2 Provide a clear, flexible route through a show
+
+Organize the primary workflow around recognizable actions: Set up the space -> Add content -> Animate -> Preview -> Export or Play. Show the current result and the next useful action. Users can move freely between steps, revisit setup, or skip hardware setup when they only want to design and export content.
+
+Provide useful starter scenes and an immediately editable sample. Offer an import path for a photo/reference, venue model, or simple shape, and explain only the input needed for that path. A photo can help trace surfaces; do not pretend it automatically supplies accurate 3D geometry or projector calibration.
+
+0.3 Keep the canvas central
+
+Let users select physical regions and creative objects directly in the preview; drag to position, resize, rotate, and reshape them; draw paths directly on relevant surfaces; and preview effects before committing. Use snapping, alignment guides, readable handles, and forgiving hit targets.
+
+Show a focused contextual inspector with the controls relevant to the selection. Make the canvas and timeline easy to enlarge. Avoid forcing users through deep property trees, nested dialog chains, or a crowded screen of every available technical control.
+
+0.4 Reveal depth progressively without losing work
+
+Common actions should expose a small set of useful creative controls first, often three to five: intensity, size, speed, direction, color, timing, or depth. Provide "More controls" and "Edit animation" for detailed settings, curves, layers, and expressions.
+
+Keep one underlying project: the guided workflow and detailed tools must edit the same data without lossy conversion or duplicate versions. Advanced edits must not silently get overwritten by a preset change. Clearly show when a custom edit changes what a simplified control can safely adjust.
+
+0.5 Provide a visual library of editable outcomes
+
+Use animated thumbnails and previews on the selected surface. Organize effects by what people want to create: light, water, fire-like imagery, cracks, movement, patterns, depth, text, particles, and transitions. Search must recognize everyday descriptions such as "make this look like water" without requiring the user to know a particular effect name.
+
+Supply complete editable recipes with good defaults, not empty effect stacks. Automatically adapt scale and timing to the target region and show. Allow favorites, saved variations, reusable styles, and applying one animation across many surfaces in a single action.
+
+0.6 Automate tedious preparation and technical choices
+
+Automatically propose repeated-region groups, path snapping, beat timing, reusable animation offsets, and sensible scene lighting where feasible. Let users accept or correct suggestions directly. Give simple manual alternatives whenever automation is unavailable or inaccurate.
+
+Choose compatible output settings, handle media conversion, build proxies, manage caches, find performance bottlenecks, and pre-render expensive content in the background when appropriate. Preserve originals and make important creative changes undoable. Explain visible quality tradeoffs and offer a way to reverse them.
+
+For calibration, show numbered target points and straightforward instructions such as "Move this point to the top-left corner of the window." Visualize alignment error and save the result for reuse. The interface must guide necessary physical measurements; it must not hide them behind a false promise of effortless accuracy.
+
+0.7 Support plain-language creative assistance
+
+Design an assistant path for requests such as "Make these windows pulse blue with the music, then turn the wall into water." Translate supported requests into editable project operations, show a preview, and summarize what changed. Support follow-ups such as "slower," "only on these windows," or "keep the timing but change the color."
+
+Use the same operation system as the visual controls, with reliable undo and bounded edits to the intended selection. Do not fake unsupported requests or claim success without a changed project and a verifiable preview. During architecture selection, identify feasible model/provider options and their access, privacy, cost, and offline implications. Essential authoring and export must remain usable through the visual interface without having to write prompts or obtain an additional AI subscription.
+
+0.8 Make export a guided outcome
+
+Offer clear choices: a video to share, a high-quality master, a transparent animation, or files for my projector setup. Recommend a compatible preset and destination. Show estimated time and size when enough information is available, and distinguish rendering, encoding, and uploading using plain language.
+
+Remember sensible preferences. Put codecs, pixel formats, color transforms, and channel layouts in advanced settings unless a compatibility decision requires attention. Show the finished file and destination. If an upload fails, offer retry without asking the user to render again.
+
+0.9 Remove fear, confusion, and unnecessary interruptions
+
+Provide reliable undo/redo, autosave, recovery, visible selection, reversible previews, and a clear indication that work is saved. Use plain labels, short contextual explanations, and demonstrations directly where the task happens. Help must support discovery without making a long tutorial mandatory.
+
+Errors must say what happened, identify the affected item, and offer a practical action: relink a file, substitute a font, retry a render, or use a compatible preset. Keep raw logs and implementation terms in expandable details. Use confirmations when warranted by irreversible loss or external sharing, not for routine reversible edits.
+
+Provide readable type, adequate contrast, keyboard navigation, visible focus, large usable controls, and adjustable layout. Attractive styling does not compensate for a workflow that users cannot understand.
+
+0.10 Test ease of use as seriously as rendering
+
+Proposed initial usability targets, to validate with representative first-time users:
+- With supplied assets, create and preview an animated effect on a surface in five minutes without external instructions.
+- Assemble a short three-scene show, add music, and start a compatible export in twenty minutes using supplied assets. Measure computation and upload waiting separately.
+- Apply a common effect to an existing selection in no more than three deliberate actions, excluding optional customization.
+- Complete those common tasks without needing to edit expressions, navigate a node graph, select a codec, or understand UVs and alpha premultiplication.
+- Undo a mistaken change and find the saved/exported result without assistance.
+
+Also test physical setup separately with the actual installation and equipment; do not count a canned example as proof of easy calibration. Record completion rates, time, confusion points, required help, and recovery from mistakes. Targets are design goals, not claims of measured performance. Automated UI tests cannot establish that a novice understands the workflow.
+
+Build and test these representative journeys in the first working milestone and revisit them as features are added. If a feature works but its common use still requires specialist knowledge, that feature has not met the product requirement.
+
+1. WHAT THE PRODUCT MUST ENABLE
+
+Create original animated shows that make physical buildings, rooms, stages, props, and sculptural objects appear to change shape, material, lighting, depth, or motion. Build content from video, images, vectors, text, procedural effects, sound, and 3D scenes. Preview on a representation of the physical installation, then export or play the appropriate projector outputs.
+
+Examples of intended creative outcomes:
+- Light traces the edges of windows, doors, columns, and rooflines.
+- A wall appears to crack, separate into blocks, rotate, fall apart, and rebuild.
+- An opening appears to reveal a deep tunnel or a moving interior scene.
+- Brick changes into flowing water, metal, glass, organic growth, or glowing patterns.
+- Particles, smoke-like imagery, rain, snow, and light travel across architectural features.
+- Typography and graphics animate in coordination with music and the building's geometry.
+- A design can be reused on another installation without rebuilding its animation from scratch.
+
+Support both 2D/2.5D compositing illusions and true 3D scenes. Some looks can use several techniques; presets must remain editable combinations of real tools.
+
+2. DEFINE FEATURE COMPLETENESS BEFORE IMPLEMENTATION
+
+Create a capability register with one entry per relevant feature or effect, including bundled effects where useful. Each entry needs:
+- Stable ID and source reference.
+- What the artist can do and a projection-show example.
+- Individual controls and animation requirements.
+- Dependencies and proposed implementation or integration.
+- Import/export implications and known limitations.
+- Acceptance scene, implementation status, and verification evidence.
+- Beginner-facing action, useful defaults, automation performed, and a usability check for the common workflow.
+
+Use these dispositions: required equivalent; required through an identified integration; superseded by a demonstrated equivalent; relevance unresolved; explicitly excluded with reason and user agreement. A source feature is not covered merely because its name appears in a menu.
+
+Review every category in Adobe's effect catalog, plus non-effect tools in its user guide. A modern equivalent may cover several legacy effects, but document the mapping and show that the useful visual outcomes remain achievable. The catalog's GPU, color-depth, and multi-frame columns also identify compatibility dimensions worth recording. [S01, S02]
+
+The requirement concerns useful creative functionality. Exact Adobe branding, proprietary algorithms, .aep round-tripping, commercial plugin binary compatibility, and Adobe service integrations are separate compatibility questions. Do not promise them by implication. If an Adobe-specific implementation cannot be reused, propose a functional equivalent and preserve the requirement.
+
+3. PROJECTS, COMPOSITIONS, ASSETS, AND EDITING
+
+Provide a real project model with multiple compositions, configurable dimensions/duration/frame rates, nested compositions, reusable sequences, layer transforms, parenting, null controllers, adjustment layers, and non-destructive effect stacks. Support pre-rendering expensive nested content and replacing that cache when its dependencies change. Nesting must have defined transform and effect order. [S03]
+
+The editor needs layer trimming, splitting, slipping, ordering, grouping, duplication, solo/mute/lock, visibility, markers, work areas, snapping, search, and useful keyboard navigation. Save editable projects and reusable templates. Preserve undo/redo across normal editing operations. [S32]
+
+Additional product requirements: autosave and recovery; relink missing media; collect assets for transfer; report missing fonts/codecs; record source dimensions, timing, alpha interpretation, and color space. Provide thumbnail browsing, reusable materials/effects, project search, and a dependency view. Maintain a versioned project format that can migrate without silently discarding information.
+
+4. ANIMATION ENGINE AND GRAPH EDITOR
+
+Implement keyframe editing on all meaningful animatable properties: transforms, effect values, masks, materials, lights, cameras, text selectors, sound levels, and procedural controls.
+
+Required controls include linear and hold interpolation; Bezier, continuous, and automatic curve handling; separate incoming/outgoing handles; ease-in/out; value and speed graph editing; temporal versus spatial interpolation; motion paths; velocity adjustments; keyframe copying, scaling in time, reversing, alignment, and batch editing. Provide numeric precision and visual manipulators. [S04]
+
+Support retiming, speed ramps, reverse playback, freeze frames, loops, frame blending, and motion-estimated interpolation where appropriate. Time-remapped nested scenes must behave consistently during scrubbing and export. [S05]
+
+Examples: panels snap open then settle; a light travels around a roofline at constant speed; one architectural section follows another with a controlled delay; a collapse reverses exactly to rebuild the facade.
+
+5. EXPRESSIONS, CONTROLLERS, AND REUSABLE RIGS
+
+Provide property linking and an expression system for time-based math, looping, noise/wiggle, seeded randomness, offsets, conditional logic, vector operations, and sampling another property's value at another time. Include visual linking, expression editing, useful error messages, and controls such as sliders, angles, points, colors, checkboxes, and dropdowns. [S06]
+
+Product requirements: reusable rigs with exposed parameters; data-driven animation; save/share custom presets; scripting for repetitive scene creation. Expression failures must identify the affected property without crashing the application. Detect dependency cycles. Sandbox scripts and bound their execution time.
+
+Projection example: animate 100 windows using one rig, with each window's index determining its delay and color, while keeping all random results stable between preview and export.
+
+6. MASKS, MATTES, COMPOSITING, AND LAYER STYLES
+
+Provide animated Bezier masks with feather, expansion, opacity, inversion, and Boolean combinations. [S34] Support alpha and luminance track mattes, inverted mattes, reusable matte sources, and traveling reveals. [S07]
+
+Provide compositing blend modes, adjustment layers, channel manipulation, opacity animation, alpha interpretation, and editable effects ordering. Include shadow, glow, stroke, bevel, and overlay-style layer treatments as functional capabilities. [S33]
+
+Keep creative masks separate from physical output masks. An artistic glow may spread beyond an object within a composition, while a final installation mask still prevents that light from spilling onto an unwanted physical area.
+
+Acceptance example: a texture appears only inside selected windows, with animated soft reveals; reordering effects changes the result predictably; exported alpha produces no unexplained dark or bright fringes.
+
+7. VECTOR SHAPES, PATHS, AND DRAWING
+
+Provide editable primitive and Bezier paths; fills; gradient fills; strokes with caps, joins, dash patterns, and taper; groups with independent transforms; path animation and morphing; trim-path animation; repeaters; merge/Boolean operations; offsets; rounding; twist; pucker/bloat; and animated irregularity. [S08]
+
+Add usable vector import, path tracing, snapping, numeric editing, and conversion between compatible shape and mask representations. Paint, clone, eraser, and animated stroke functions belong in the full capability inventory for asset cleanup and drawn animation. [S01]
+
+Projection example: draw one window outline, repeat it across a facade, offset stroke timing by column, then morph the outlines into another pattern. Preserve vector sharpness at export resolution.
+
+8. TEXT AND TYPOGRAPHY
+
+Provide editable typography, paragraph layout, fill/stroke, text on paths, animators and selectors operating on characters/words/lines, character spacing, range offsets, randomized order, and per-character transforms including 3D behavior. Support reusable text-animation presets. [S09]
+
+Include variable-font axes where the font supports them, font substitution reporting, and practical extrusion/bevel for dimensional titles. [S01, S10]
+
+Projection example: words spread across architectural columns, individual letters rotate forward, and their timing stays editable from one text layer instead of many manually duplicated clips.
+
+9. TRUE 3D AND 2.5D WORKSPACE
+
+Support flat layers positioned in 3D and imported 3D geometry, with consistent transforms, hierarchy, camera control, lighting, materials, shadows, and compositing. Adobe's documented Advanced 3D capabilities include imported GLTF/GLB/OBJ/FBX models, image-based lighting, physically based materials, and extruded text/shapes. These are relevant functional reference points. [S10]
+
+Provide editable mesh primitives; units and scale; orbit/pan/dolly; orthographic and perspective views; object pivots; alignment; multiple cameras; camera paths; depth of field; motion blur; shadow catchers; transparency; emissive, roughness, metallic, normal, and texture controls. Support embedded model animation and define the limits of each supported import format. [S01, S10]
+
+Use images, videos, and animated compositions as material sources. Retain paths for importing externally authored complex geometry, rigs, simulations, and animation. Do not assume a requirement for this application to replace a full sculpting or CAD package.
+
+Maintain distinct objects for PHYSICAL INSTALLATION GEOMETRY and ANIMATED CREATIVE GEOMETRY. Moving a virtual brick for a collapse illusion must not move the measured building or its calibration.
+
+10. DEPTH AND MULTI-PASS COMPOSITING
+
+Support depth-based masks, depth fog, depth-of-field compositing, object/material selection mattes, and relevant render-pass extraction. Evaluate multi-channel EXR and Cryptomatte workflows so externally rendered content can be adjusted without rebuilding an entire shot. [S11]
+
+Expose beauty, alpha, depth, and appropriate auxiliary outputs through the renderer where supported. Specify depth units, normalization, camera association, and alpha conventions.
+
+Example: alter fog behind the facade, recolor one object, or add a glow only to selected architectural elements without affecting the rest of the image.
+
+11. EFFECT LIBRARY — REQUIRED CREATIVE FAMILIES
+
+These are capability families, not a license to ship one generic shader per family. Audit the corresponding source categories individually. Every implemented effect needs usable controls, keyframe/expression support where appropriate, saved presets, consistent alpha behavior, and verified output.
+
+A. Distortion and deformation [S12]
+Perspective/corner pinning, curved and mesh warps, displacement from another layer, turbulent displacement, wave/ripple, bulge, twirl, polar transformations, mirror/offset/tiling, liquify-like deformation, and path-based reshaping. Projection uses include breathing walls, melting facades, liquid surfaces, rippling masonry, and opening panels. Keep artistic distortion independent of final calibration warp.
+
+B. Generators and light effects [S13]
+Animated gradients, fills, grids, checkerboards, cellular/fractal patterns, beams, electrical arcs, light rays/sweeps/bursts, lens-flare-like graphics, path strokes, write-on effects, expanding waves, and audio spectra/waveforms. Use editable generator parameters rather than fixed stock videos.
+
+C. Noise and texture [S14]
+Animated fractal/turbulent noise, color noise, controllable evolution, seamless looping, and add/match/remove grain. Use these for clouds, smoke-like imagery, fire-like textures, organic growth masks, and textured reveals. These looks do not by themselves imply a physical fluid simulator.
+
+D. Simulation and particles [S15]
+Particle emitters, lifetime/velocity/size/color evolution, forces, sprite/textured particles, rain/snow/bubbles, grids of animated cards, shattering/fragments, liquid-like effects, water waves, and caustic-like lighting. Include useful outcomes of bundled simulation effects in the inventory. Product additions: architectural emission masks, deterministic seeds, collision or surface-following options where implemented, and cacheable simulation state.
+
+E. Stylization [S16]
+Glow, edge detection, roughened edges, embossing, mosaic/pixelation, posterization, thresholds, painted/cartoon looks, textures, kaleidoscopic patterns, repeated tiles, scattering, and rhythmic flashes. Use cases include neon outlines, stained-glass looks, geometric transformations, and stylized transitions.
+
+F. Time effects [S17]
+Echoes, motion trails, temporal offsets, time displacement, stepped/posterized timing, synthesized motion blur, and time-warp effects. Ensure effects that read neighboring frames behave correctly at clip boundaries and during random-access rendering.
+
+G. Transitions [S18]
+Linear/radial/iris wipes, gradient or image-driven reveals, block/grid transitions, card flips, light/glass-style reveals, and deforming transitions. Build transitions that can follow installation regions rather than always sweeping across a rectangular video frame.
+
+H. Blur and sharpness [S36]
+Gaussian/box, directional/radial, channel-based, depth/lens-style, and variable-map blurs; sharpening and unsharp masking. Define edge handling and overscan so large blurs do not clip unexpectedly.
+
+I. Color and channels [S19]
+Curves, levels, exposure, gamma, contrast, saturation, white balance, tint, color remapping, selective correction, channel mixing, inversion, and LUT-based grading. Separate the show's artistic grade from each projector's output correction.
+
+J. Keying, matte refinement, and utilities [S02, S37]
+Color/luma/difference extraction, spill cleanup, matte choke/expand/soften, channel routing, premultiplication fixes, bounds expansion, and diagnostic patterns. Preserve useful image extraction and preparation workflows, not only final visual effects.
+
+12. TRACKING, ROTOSCOPING, CLEANUP, AND PUPPET ANIMATION
+
+Include footage motion tracking and stabilization, planar attachment workflows, mask tracking, camera-motion solving, and editable tracking data for integrating filmed content. Footage tracking is a different task from calibrating a projector to a physical object. [S20]
+
+Include manually corrected object isolation, segmentation propagated across time, edge refinement, and stable mattes. Roto Brush/Object Matte-style functionality is relevant for performers, characters, and objects incorporated into the show. [S21]
+
+Include content-aware object-removal capability through an appropriate implementation/integration, plus paint/clone cleanup. No assumption that Adobe's own model or service is available for reuse. [S22]
+
+Provide pin-based mesh deformation, stiffness constraints, overlap ordering, and editable pin animation for animating drawings, figures, logos, and flexible architectural illusions. [S23]
+
+Advanced features may need separate engines or models. Record their operating requirements and fallback workflows; do not silently omit them because they are difficult.
+
+13. SOUND AND MUSIC-DRIVEN ANIMATION
+
+Include audio tracks, waveforms, trims, fades, level automation, panning/mixing, and useful filtering/EQ/delay/reverb controls. Add audio-amplitude-to-animation conversion and generated spectrum/waveform visuals. [S35, S13, S24]
+
+Projection-specific additions: beat markers, BPM grid, editable onset detection, frequency-band control signals, smoothing/attack/release, and common musical cueing. Pre-analyzed audio must drive the same frames during export as it does during preview. Live inputs need a recording/baking path if the user wants reproducible video exports.
+
+14. COLOR PRECISION AND IMAGE QUALITY
+
+Design for high-precision processing, linear-light compositing where appropriate, explicit source/working/display/output spaces, and OCIO/ACES-compatible workflows where beneficial. Support high-dynamic-range source assets without claiming an SDR projector becomes HDR. Include output transforms and correct metadata, LUT preview, and clipping/gamut diagnostics. [S25, S26]
+
+Document effect precision and conversion boundaries. Alpha, glow, and gradients must survive the complete pipeline without unexpected fringes or banding. Treat real surface color, ambient light, and projector limitations as installation constraints; a monitor preview cannot guarantee a physical match.
+
+15. PROJECTION DESIGN, SURFACES, AND CALIBRATION
+
+Provide 2D polygon/Bezier surfaces and model-based 3D alignment. Include corner and mesh adjustment, masks, projector views, test patterns, saved calibration, and region groups. These are established mapping capabilities in tools such as MadMapper and TouchDesigner. [S27, S28]
+
+Product design requirements:
+- Import a venue model or build a simple measured proxy using primitives and traced outlines.
+- Identify named regions: windows, rooflines, columns, walls, doors, and exclusions.
+- Keep editable UV/content coordinates and projector coordinates distinct.
+- Support physical projector position/orientation, field of view, lens shift or appropriate calibration parameters, aspect ratio, and output resolution.
+- Offer correspondence-point calibration with residual/error feedback and manual refinement.
+- Visualize coverage and obvious occlusion, without presenting an approximate optical preview as a surveyed lighting result.
+- Lock calibration while editing creative content; version and restore installation settings.
+- Distinguish projector camera, content camera, and audience preview camera.
+- Allow a chosen audience viewpoint for perspective-dependent illusions and preview other viewpoints to reveal their limitations.
+
+Advanced mapping scope: structured-light/camera-assisted alignment and curved/dome/panoramic surfaces, with separate hardware and mathematical validation. Record exact supported workflows; do not imply universal automatic calibration from a photograph.
+
+16. MULTIPLE PROJECTORS AND OUTPUT MANAGEMENT
+
+Provide per-projector routing, crop/orientation, warp, masks, overlap blending, gamma/color matching, and calibration profiles. Matching content and aligned geometry are prerequisites for useful edge blends. Black-level compensation must account for the residual light in overlapping projector images; it cannot create physical darkness. [S27, S29]
+
+Product requirements: installation-wide coordinates, consistent timing across outputs, numbered test patterns, output identification, monitor assignment, and export bundles. Treat surface response and optical differences as measured limitations, not something an opacity slider universally fixes.
+
+Offer optional live texture/video interchange such as Spout, Syphon, or NDI when appropriate for the chosen platform. Plan MIDI/OSC and cue controls for live work. These have precedents in mapping software, but exact SDK, platform, and licensing choices still need verification. [S27]
+
+17. RENDERING, EXPORT, AND DELIVERY
+
+Provide offline frame-accurate rendering independently of preview speed; batch queues; reusable render/output presets; multiple encodes from one suitable render; time-range exports; image sequences; audio; progress; logs; and clear failures. These are core creation-tool functions, not finishing touches. [S30]
+
+Required output types:
+- Reusable content masters in an appropriate defined layout: composition, surface atlas, or individual regions. A complex 3D show may not have one universal flat master.
+- Installation-specific video for each projector, with selected correction baked in.
+- Audience/venue preview videos for review.
+- Transparent intermediates and image sequences where supported.
+
+Specify which stages are baked and which are expected in playback software. Never apply mapping, blending, or output color correction twice.
+
+Target common delivery formats such as MP4/H.264 and MOV with suitable codecs; investigate HEVC, ProRes, DNxHR, HAP, PNG/TIFF, and EXR according to actual playback, quality, alpha, licensing, and platform needs. Containers do not guarantee codec or transparency support. Report real tested support rather than listing extensions the encoder cannot produce correctly.
+
+Additional product requirements: immutable render snapshots so editing can continue; disk-space checks; background jobs; cancel/retry; resumable image-sequence rendering; detection of missing frames; export history; and automatic verification of resolution, frame rate, frame count, duration, alpha, and sound.
+
+Multi-projector bundles must include a manifest with output identity, calibration version, timing, codec, dimensions, and correction stages. Matching video durations alone does not guarantee synchronized external playback.
+
+Save locally and upload exports to Google Drive with destination selection, clear progress, retries, and a retained local copy. Support a synced-folder route or direct authenticated integration based on the user's needs. Upload failure must not invalidate a successful render. Other cloud services remain extensible until named.
+
+18. PREVIEW, PERFORMANCE, AND SHOW OPERATION
+
+Provide responsive scrubbing, adjustable preview quality, proxies, RAM/disk caches, pre-rendered sequences, and profiling. Evaluate GPU processing and concurrent frame work where dependencies permit. Adobe's multi-frame rendering is a reference capability, not a guarantee that every effect can run in parallel. [S31]
+
+Product requirements: shared evaluation semantics for preview/export; bounded memory/VRAM use; useful out-of-memory handling; cache invalidation; and display of dropped frames. A fast but visually different preview must identify its compromises.
+
+For live operation: a separate show workspace, cue list, play/pause/seek, loop regions, transitions, master blackout, audio routing, output health, preload, and recovery. Keep control UI out of projector feeds. Validate measured output latency and sustained frame rate on the actual installation hardware.
+
+19. PROJECTION-SPECIFIC CREATIVE TOOLS
+
+These proposed additions combine the researched capabilities into workflows optimized for this product:
+- Select a building edge and create an editable tracing animation.
+- Assign a reusable animation to all windows with adjustable order and delays.
+- Construct a recess/tunnel illusion with controllable viewpoint and depth.
+- Build editable crack, fragment, disassembly, and rebuilding scenes.
+- Generate material changes, light sweeps, and apparent surface deformation.
+- Let particles originate from selected physical regions or follow architectural contours.
+- Store venue-independent show logic separately from installation bindings.
+
+Do not ship these as opaque canned movies. Make their contributing paths, rigs, geometry, materials, timing, and effects available through progressive disclosure, while presenting simple creative controls by default.
+
+20. ARCHITECTURE AND BUILD RULES
+
+No stack has been chosen. Determine OS, CPU/GPU/VRAM, RAM, projector count, resolution/frame rate, show length, and export-versus-live priorities before committing.
+
+Recommend mature components for graphics, media decoding/encoding, vector rendering, text layout, color management, and tracking. Compare an integrated application using existing engines against extending an established creative engine. Explain which approach can actually satisfy the full requirements. Native, hybrid, or another architecture is acceptable if justified; do not choose browser technology solely because it makes a quick interface easy.
+
+Keep these concerns separately testable: project/assets; time/property evaluation; compositing; 3D scene rendering; simulation; calibration/output transforms; audio; render jobs; encoders; delivery; and live show operation.
+
+Use deterministic time and seeded randomness. Stateful simulations need seek/replay/checkpoint semantics. Parallel render workers must not skip necessary simulation history. Effects need a documented coordinate space, alpha convention, color space, bounds, and temporal dependencies.
+
+A requirement is complete only when it has an understandable common workflow, useful defaults and automation, save/reopen behavior, undo where relevant, preview behavior, exported output, and meaningful technical and usability acceptance scenes. A button or stub is not implementation evidence. Build the guided operation system alongside the engine so ease of use is structural, not a later skin over specialist tools.
+
+21. BUILD ORDER WITHOUT SCOPE REDUCTION
+
+Milestone A: Architecture risks, capability inventory, and interaction design. Prototype the novice journeys in section 0 with realistic content. Demonstrate the chosen stack can compose layers, render an animated 3D scene at exact times, warp output, and encode usable video. Keep the complete feature register visible.
+
+Milestone B: One complete guided path: set up a simple physical surface; place/calibrate a projector; apply an editable animation through simple creative controls; save/reopen; export master and projector video with recommended presets; verify with real projection when hardware is available. Test the novice journey before expanding the interface.
+
+Milestone C: The creative foundation: graph editor, expressions, masks/mattes, shapes/text, effects stack, nesting, audio, and reusable rigs.
+
+Milestone D: Advanced creative functions: richer 3D, simulations, tracking/roto/cleanup, multi-pass compositing, color workflows, and the remainder of the relevant effect inventory.
+
+Milestone E: Multi-projector installation, live controls, advanced calibration, interoperable playback, and delivery integrations.
+
+Milestone F: Resolve inventory gaps and prove the target show workflows. Optimization and packaging must preserve project compatibility and exported appearance.
+
+Reorder dependencies when justified. Staging work does not remove any full-scope requirement, and a prototype must not be described as the completed product.
+
+22. ACCEPTANCE SHOWS AND QUALITY GATES
+
+1. Architectural trace: paths around windows and rooflines, timed to audio, with repeaters, glow, masks, and an editable speed graph.
+2. Depth illusion: a wall opening onto a 3D tunnel, with lights/shadows, controlled audience viewpoint, and fixed projector calibration.
+3. Transformation: apparent wall deformation followed by fragmentation and reassembly; reproducible particles and effects after reopening and seeking.
+4. Performer composite: keyed or rotoscoped footage, corrected edges, tracked attachment, and a reusable animated matte.
+5. Multi-projector scene: geometry crosses an overlap, with alignment/blend/color checked physically and matching exported output bundles.
+6. Render reliability: a long target-resolution scene continues while the editor is used; interrupted sequence rendering resumes without missing or duplicated frames; audio timing is measured.
+7. Delivery/reuse: upload an export, retry a failed transfer, move a collected project, relink it, and bind the same show to another venue.
+
+Set numeric tolerances after learning the actual hardware and target use. Record calibration residuals, drift, dropped frames, render throughput, memory/VRAM use, and preview/export differences. Do not invent universal performance guarantees.
+
+23. HOW THE AGENT SHOULD START
+
+Summarize the full product and the ease-of-use requirement, identify the few unanswered architecture-changing questions, propose the engine/stack, and provide the capability register and dependency-based build plan. Show the intended first-time experience and one common creative task before settling the application structure. Then begin implementation in reviewable increments.
+
+Do not ask the user to decide every technical detail. Research and make reasoned recommendations. Clearly identify any requirement needing additional software, licensing, training data/models, or physical equipment.
+
+The earlier model recommendation was Claude Opus 5.5 in Claude Code as the primary builder, with optional GPT-6 Astra review and Sonnet 5.5 for bounded implementation work. This was a general engineering recommendation, not a projection-software benchmark or a guarantee of autonomous completion. It does not require extra subscriptions or multiple agents.
+
+24. SOURCE REGISTER
+
+Primary documentation reviewed on October 1, 2026. Sources establish reference capabilities; the custom product requirements and acceptance scenarios above are our synthesis. A source's historical update date is not proof that every limitation remains unchanged. Recheck versions during implementation.
+
+[S01] Adobe After Effects user guide / feature navigation
+https://helpx.adobe.com/after-effects/desktop.html
+
+[S02] Adobe effect catalog and support matrix
+https://helpx.adobe.com/after-effects/desktop/apply-effects-and-animation-presets/effects-and-animation-presets/effect-list.html
+
+[S03] Precomposing, nesting, and pre-rendering
+https://helpx.adobe.com/after-effects/desktop/work-with-compositions/precomposing-and-nesting/precomposing-nesting-pre-rendering.html
+
+[S04] Keyframe interpolation; animation basics
+https://helpx.adobe.com/in/after-effects/desktop/animate-in-after-effects/animation-keyframes/keyframe-interpolation.html
+https://helpx.adobe.com/after-effects/desktop/animate-in-after-effects/animation-basics/animation-basics.html
+
+[S05] Time stretching and remapping
+https://helpx.adobe.com/au/after-effects/desktop/animate-in-after-effects/time-stretching-and-time-remapping/time-stretching-time-remapping.html
+
+[S06] Expressions
+https://helpx.adobe.com/after-effects/desktop/work-with-expressions/expression-basics/expression-basics.html
+https://helpx.adobe.com/after-effects/desktop/work-with-expressions/expression-language-reference/expression-language-reference.html
+
+[S07] Track mattes
+https://helpx.adobe.com/in/after-effects/desktop/work-with-transparency-and-compositing/work-with-track-mattes-and-traveling-mattes/track-mattes-and-traveling-mattes.html
+
+[S08] Shape attributes and path operations
+https://helpx.adobe.com/after-effects/desktop/drawing-painting-and-paths/shapes-and-shape-attributes/shape-attributes-paint-operations-path.html
+
+[S09] Text animation
+https://helpx.adobe.com/in/after-effects/desktop/animating-text/text-animation/animating-text.html
+
+[S10] Advanced 3D renderer
+https://helpx.adobe.com/after-effects/desktop/work-with-3d-composition/advanced-3d-renderer/advanced-3d-renderer.html
+
+[S11] 3D channel effects
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/3d-channel-effects.html
+
+[S12] Distortion effects
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/distort-effects.html
+
+[S13] Generators
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/generate-effects.html
+
+[S14] Noise and grain
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/noise-grain-effects.html
+
+[S15] Simulation effects
+https://helpx.adobe.com/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/simulation-effects.html
+
+[S16] Stylization
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/stylize-effects.html
+
+[S17] Time effects
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/time-effects.html
+
+[S18] Transitions
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/transition-effects.html
+
+[S19] Color correction
+https://helpx.adobe.com/in/after-effects/desktop/adjust-colors/work-with-color-correction-effects/color-correction-effects.html
+
+[S20] Tracking and stabilization
+https://helpx.adobe.com/in/after-effects/desktop/animate-in-after-effects/track-motion/tracking-stabilizing-motion-cs5.html
+
+[S21] Roto Brush / matte refinement
+https://helpx.adobe.com/be_en/after-effects/desktop/roto-brush-and-refine-matte/roto-brush/roto-brush-refine-matte.html
+
+[S22] Content-aware fill (official search result; direct page retrieval timed out)
+https://helpx.adobe.com/lt/after-effects/desktop/remove-objects-from-your-videos/content-aware-fill.html?cq_ck=1551196361388
+
+[S23] Puppet deformation
+https://helpx.adobe.com/in/after-effects/desktop/animate-in-after-effects/animate-with-puppet-tools/animating-puppet-tools.html
+
+[S24] Adobe keyframe documentation, including Convert Audio To Keyframes
+https://helpx-origin-ew1.aws116.adobeitc.com/mena_en/after-effects/desktop/animate-in-after-effects/animation-keyframes/setting-selecting-deleting-keyframes.html
+
+[S25] Color management
+https://helpx.adobe.com/after-effects/desktop/adjust-colors/color-management/color-management.html
+
+[S26] OpenColorIO and ACES
+https://helpx.adobe.com/in/after-effects/desktop/adjust-colors/opencolorio-and-aces-color-management/opencolorio-aces-color-management.html
+
+[S27] MadMapper feature specification
+https://madmapper.com/madmapper/features
+
+[S28] TouchDesigner projection mapping: 2D mapping and model-based alignment
+https://derivative.ca/UserGuide/Projection_Mapping
+
+[S29] Resolume edge blending and black-level compensation
+https://www.resolume.com/support/en/edge-blending
+
+[S30] Rendering and export
+https://helpx.adobe.com/after-effects/desktop/render-and-export/basics-of-rendering-and-exporting/basics-rendering-exporting.html
+
+[S31] Multi-frame rendering
+https://helpx.adobe.com/after-effects/desktop/render-and-export/multi-frame-rendering/multi-frame-rendering.html
+
+[S32] Layer editing
+https://helpx.adobe.com/in/after-effects/desktop/work-with-layers/select-and-arrange-layers/selecting-arranging-layers.html
+
+[S33] Blending and layer styles
+https://helpx.adobe.com/in/after-effects/desktop/work-with-layers/work-with-layer-blending-modes/blending-modes-layer-styles.html
+
+[S34] Masks
+https://helpx.adobe.com/in/after-effects/desktop/drawing-painting-and-paths/work-with-masks/create-masks.html
+
+[S35] Audio effects
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/audio-effects.html
+
+[S36] Blur and sharpening
+https://helpx.adobe.com/in/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/blur-sharpen-effects.html
+
+[S37] Keying
+https://helpx.adobe.com/in/after-effects/desktop/animate-in-after-effects/work-with-keying-effects/keying-effects.html

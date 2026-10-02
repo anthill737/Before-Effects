@@ -1,0 +1,729 @@
+# Depth and multi-pass compositing — Before Effects capability register
+# Sources: S11 (3D Channel effects incl. ProEXR EXtractoR/IDentifier, depth passes for 3D compositions; checked 2026-10-01), S01 (3D scene depth data), brief §10 (depth and multi-pass), brief architecture (OpenEXR bindings, Depth Anything). Effect entries themselves live in fx.3d-channel.*; these entries cover the pass data and workflows.
+
+- id: pass.depth
+  name: Depth pass (units, normalisation, camera association)
+  sources:
+    - ref: S11
+      item: 3D Channel Extract — Z-Depth; Black Point/White Point; Anti-alias; Clamp Output; Invert Depth Map; Depth passes for 3D compositions
+      category: 3D Channel
+      checked: true
+    - ref: S01
+      item: Work with 3D scene depth data
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §10 specify depth units, normalisation, camera association and alpha conventions
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get a depth image for any 3D scene, nested 3D composition or imported render, in real distances or normalised
+    between a near and far value, to drive fog, blur, masks and other effects.
+  projection_example: >-
+    Fade the far end of the tunnel into haze by driving fog from the tunnel's depth pass.
+  controls:
+    - { name: Encoding, type: enum(metres|normalised-near-far|inverse), animatable: false }
+    - { name: Near / far (black/white point), type: float, animatable: true }
+    - { name: Invert, type: bool, animatable: false }
+    - { name: Anti-aliased edges, type: bool, animatable: false }
+    - { name: Clamp 0–1, type: bool, animatable: false }
+    - { name: Camera, type: layer-ref, animatable: false }
+  animation: >-
+    Near/far keyframable; downstream effects read depth per frame.
+  dependencies: [3d.scene, 3d.camera, proj.precompose, 3d.units-scale]
+  implementation: >-
+    three.js renders view-space linear depth to an r32float target alongside beauty via TSL mrt(). Convention: distance
+    along the camera's forward axis in scene metres, background = +infinity, depth not premultiplied, coverage kept
+    separately; pass metadata records camera ID, near/far and units. Normalised views are derived in WGSL, so nested
+    3D precomps expose depth to downstream effects (the AE "depth from nested composition" workflow).
+  io: >-
+    Writes EXR Z (float32) via pass.exr-write; reads tagged Z/depth channels from EXR via pass.exr-read.
+  limitations: >-
+    Anti-aliased depth mixes edge depths (bad for DOF; off by default for DOF). Transparent surfaces write the nearest
+    opaque depth only. Imported renders need their camera near/far to convert normalised depth to metres.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Add depth haze" / "Blur by distance" recipes → More controls → Depth.
+    defaults: >-
+      Metres; near/far fitted to the scene bounds; no anti-aliasing for DOF, anti-aliasing for mattes.
+    automation: >-
+      Fits near/far to the visible scene automatically, replacing AE's 5000 px default guesswork.
+    usability_check: >-
+      A user adds depth haze to a 3D scene without touching near/far values and gets a visible gradient in 3 actions.
+  acceptance: >-
+    Mini scene "depth-ruler": a plane at 5 m reads 5.00 m ± 1 mm in the probe; AS-2 haze.
+  status: not-started
+  evidence: []
+
+- id: pass.normals
+  name: Normals pass and normal-based relighting
+  sources:
+    - ref: S11
+      item: Surface Normals channel (camera-relative, anti-aliased) for relighting
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Output or read surface normals and use them to relight rendered images, build edge or facing masks, and add
+    virtual light sweeps after rendering.
+  projection_example: >-
+    Add a moving rim light to a pre-rendered statue animation without re-rendering it.
+  controls:
+    - { name: Space, type: enum(camera|world), animatable: false }
+    - { name: Encoding, type: enum(signed-float|packed-0-1), animatable: false }
+    - { name: Relight direction, type: vector3, animatable: true }
+    - { name: Relight colour / intensity, type: color, animatable: true }
+  animation: >-
+    Relight direction and intensity keyframable and audio-drivable.
+  dependencies: [pass.depth, 3d.renderer, pass.exr-read]
+  implementation: >-
+    TSL mrt() normal output (rgba16float, signed); relight is a WGSL Lambert/Blinn pass over beauty using the normal pass.
+  io: >-
+    EXR N channels read/write.
+  limitations: >-
+    Relighting cannot add shadows or remove baked lighting; it is a look, not a re-render.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Add a light sweep" recipe on a 3D render layer.
+    defaults: >-
+      Soft white light sweeping left to right over 2 s.
+    automation: >-
+      Detects normal channels in imported EXRs and enables the recipe.
+    usability_check: >-
+      A user adds a light sweep to an EXR render in under 60 s.
+  acceptance: >-
+    Mini scene "rim-relight": relit EXR frames match between preview and export.
+  status: not-started
+  evidence: []
+
+- id: pass.object-id
+  name: Object ID mattes
+  sources:
+    - ref: S11
+      item: ID Matte — Aux. Channel (Object ID / Material ID), ID Selection, Feather, Invert, Use Coverage; IDentifier
+      category: 3D Channel
+      checked: true
+    - ref: brief
+      item: §10 object/material selection mattes
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Isolate any object in a 3D render by clicking it, to colour-correct, glow or mask just that object.
+  projection_example: >-
+    Add glow only to the virtual columns of the facade copy without touching the rest of the image.
+  controls:
+    - { name: Pick object, type: tool, animatable: false }
+    - { name: IDs selected, type: int-list, animatable: false }
+    - { name: Feather, type: float, animatable: true }
+    - { name: Invert, type: bool, animatable: false }
+    - { name: Use coverage (anti-aliased), type: bool, animatable: false }
+  animation: >-
+    Feather keyframable; selection is static per matte.
+  dependencies: [3d.scene, fx.3d-channel.id-matte, mask.track-matte]
+  implementation: >-
+    The renderer writes an r32uint object-ID target (stable IDs from layer and model node path) plus a supersampled
+    coverage target, so mattes are anti-aliased; mattes feed the ordinary track-matte system.
+  io: >-
+    Object IDs also exported as Cryptomatte (pass.cryptomatte) for external tools.
+  limitations: >-
+    Raw integer ID mattes are aliased without coverage; Cryptomatte is preferred for imported renders.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      "Only this object" — click the object in the viewer, then choose an effect or colour change.
+    defaults: >-
+      Coverage on, feather 0.
+    automation: >-
+      Builds the matte and the track-matte routing automatically.
+    usability_check: >-
+      A user glows one object of a 3D render in 3 actions.
+  acceptance: >-
+    Mini scene "glow-columns": no fringe above tolerance at object edges in export.
+  status: not-started
+  evidence: []
+
+- id: pass.material-id
+  name: Material ID mattes
+  sources:
+    - ref: S11
+      item: Material ID channel; ID Matte Aux. Channel Material ID
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Isolate every surface that uses a given material, even across many objects.
+  projection_example: >-
+    Recolour all glass across a rendered city scene in one step.
+  controls:
+    - { name: Pick material, type: tool, animatable: false }
+    - { name: Material IDs, type: int-list, animatable: false }
+    - { name: Feather / invert, type: float, animatable: true }
+  animation: >-
+    Feather keyframable.
+  dependencies: [pass.object-id, 3d.material-pbr]
+  implementation: >-
+    Same MRT path as object IDs with material asset IDs; coverage target shared.
+  io: >-
+    Exported via Cryptomatte material layer.
+  limitations: >-
+    Imported legacy renders need a material ID channel or Cryptomatte.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      "Everything made of this" — click a surface.
+    defaults: >-
+      Coverage on.
+    automation: >-
+      Routes the matte to the chosen effect.
+    usability_check: >-
+      A user recolours all metal in a render in 3 actions.
+  acceptance: >-
+    Mini scene "recolour-glass".
+  status: not-started
+  evidence: []
+
+- id: pass.cryptomatte
+  name: Cryptomatte read and write
+  sources:
+    - ref: brief
+      item: §10 evaluate multi-channel EXR and Cryptomatte workflows
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Pick objects, materials or assets by clicking or by name in Cryptomatte renders from other tools, and export
+    Cryptomattes from the app's own 3D scenes.
+  projection_example: >-
+    Recolour one character in a Blender-rendered fly-through without re-rendering the shot.
+  controls:
+    - { name: Layer, type: enum(object|material|asset), animatable: false }
+    - { name: Selection (names), type: string-list, animatable: false }
+    - { name: Picker add/remove, type: tool, animatable: false }
+    - { name: Matte only / preview colours, type: enum(matte|preview), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [pass.exr-read, pass.exr-write, pass.object-id, pass.material-id]
+  implementation: >-
+    Own implementation of the open Cryptomatte spec (MurmurHash3 name hashes, ranked ID/coverage pairs, JSON manifest):
+    decoding of EXR planes via OpenEXR Python bindings in the sidecar; matte extraction in WGSL. Writing ranks from the
+    supersampled ID buffer.
+  io: >-
+    Reads/writes Cryptomatte layers in multi-channel EXR with manifest metadata.
+  limitations: >-
+    Depends on correct manifests from the source renderer; hash-only files show IDs instead of names.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      Imported EXR with Cryptomatte → "Pick objects" eyedropper.
+    defaults: >-
+      Object layer; preview colours while picking.
+    automation: >-
+      Detects Cryptomatte layers on import and offers the picker.
+    usability_check: >-
+      A user isolates one object from a Blender EXR in under 30 s.
+  acceptance: >-
+    Mini scene "crypto-recolour" using Blender and the app's own exports; round trip keeps names.
+  status: not-started
+  evidence: []
+
+- id: pass.exr-read
+  name: Multi-channel and multi-part EXR read
+  sources:
+    - ref: S11
+      item: Using channels in OpenEXR files; OpenEXR_channel_map.txt; EXtractoR; ProEXR Comp Creator
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Open EXRs with many passes, see every layer and channel, extract any channel, and split a file into one layer per
+    pass for compositing.
+  projection_example: >-
+    Rebalance the specular and emission passes of a pre-rendered 3D intro to fit the facade's colour.
+  controls:
+    - { name: Layer / channel picker, type: enum(dynamic), animatable: false }
+    - { name: Split into passes (one layer each), type: action, animatable: false }
+    - { name: Channel tagging (depth/normal/ID/UV), type: mapping, animatable: false }
+    - { name: Unclamped / background / coverage channels, type: enum(dynamic), animatable: false }
+  animation: >-
+    n/a (sequence playback)
+  dependencies: [proj.project-model, color.input-interpretation]
+  implementation: >-
+    OpenEXR Python bindings in the sidecar decode parts/channels to half or float planes in shared memory → GPU
+    upload; FFmpeg remains for single-part RGBA. Channel naming conventions (Blender, Arnold, V-Ray, Redshift) map to
+    semantic tags automatically, replacing AE's channel-map text file.
+  io: >-
+    Multi-part EXR 2.0, deep data not supported; chromaticities attribute read for colour interpretation.
+  limitations: >-
+    Deep EXR and very large channel counts at 4K+ are slow; split passes are cached as derived sequences.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drop an EXR sequence → "This file has 12 passes — show them as layers?"
+    defaults: >-
+      Beauty shown, passes available in a pass picker.
+    automation: >-
+      Recognises common pass names and builds a sum-of-passes comp that reproduces the beauty.
+    usability_check: >-
+      A user finds and brightens the emission pass in under 60 s.
+  acceptance: >-
+    Mini scene "pass-split": recombined passes equal beauty within float tolerance.
+  status: not-started
+  evidence: []
+
+- id: pass.exr-write
+  name: Multi-layer EXR write
+  sources:
+    - ref: brief
+      item: §10 expose beauty, alpha, depth and auxiliary outputs; §17 EXR
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export beauty plus chosen passes (depth, normals, IDs, Cryptomatte, emission…) into one multi-layer EXR sequence.
+  projection_example: >-
+    Hand a collaborator a pass-separated EXR of the tunnel so they can grade it in another tool.
+  controls:
+    - { name: Passes to include, type: flags, animatable: false }
+    - { name: Compression, type: enum(none|zip|zips|piz|dwaa|dwab), animatable: false }
+    - { name: Precision per pass, type: enum(half|float), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.codec-exr, pass.render-passes, pass.depth, pass.cryptomatte]
+  implementation: >-
+    Frames read back from GPU per pass and written by the sidecar with OpenEXR Python bindings (multi-layer,
+    chromaticities and camera metadata); single-layer RGBA EXR can use FFmpeg's exr encoder instead.
+  io: >-
+    EXR sequences with per-frame atomic writes (render.resume-sequence).
+  limitations: >-
+    Lossy DWA compression changes values; depth/ID passes are forced to lossless.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      "High-quality master" → Advanced → "Include passes".
+    defaults: >-
+      Beauty + alpha + depth, ZIP, half (float for depth).
+    automation: >-
+      Forces lossless compression for data passes.
+    usability_check: >-
+      A user exports beauty+depth EXR without choosing compression.
+  acceptance: >-
+    Round trip: exported EXR re-imported via pass.exr-read reproduces all passes bit-exact.
+  status: not-started
+  evidence: []
+
+- id: pass.render-passes
+  name: Beauty, alpha and auxiliary render passes from the 3D renderer
+  sources:
+    - ref: brief
+      item: §10 expose beauty, alpha, depth and appropriate auxiliary outputs through the renderer
+      category: Product requirement
+      checked: true
+    - ref: S01
+      item: FAQ — "Can I access arbitrary output variables (AOV) for my models or scene?"
+      category: Import and add 3D models
+      checked: true
+  artist_can: >-
+    Pull separate emission, diffuse, specular, shadow-only and ambient-occlusion passes from the app's 3D scenes for
+    targeted adjustments.
+  projection_example: >-
+    Boost only the shadow pass of virtual pillars so their shadows read stronger on a bright stone facade.
+  controls:
+    - { name: Pass, type: enum(beauty|alpha|emission|diffuse|specular|shadow|ao|lighting), animatable: false }
+    - { name: Use as layer source, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [3d.renderer, pass.depth, 3d.shadows]
+  implementation: >-
+    TSL mrt() outputs for each pass from the same render; AO via the TSL ao node (GTAO); pass list declared so beauty
+    equals the documented sum of lighting passes.
+  io: >-
+    Passes available to compositing and pass.exr-write.
+  limitations: >-
+    Pass decomposition is approximate for transmission and environment reflections.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      On a 3D object or scene: "Adjust shadows only" / "Adjust glow only" recipes.
+    defaults: >-
+      Passes rendered only when used.
+    automation: >-
+      Enables needed MRT outputs automatically from the recipes used.
+    usability_check: >-
+      A user darkens shadows only, in 3 actions.
+  acceptance: >-
+    Mini scene "pass-sum": lighting passes recombine to beauty within tolerance.
+  status: not-started
+  evidence: []
+
+- id: pass.uv
+  name: UV (ST-map) pass retexturing
+  sources:
+    - ref: S11
+      item: Texture UV channel (red/green mapping coordinates)
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Use a UV pass from a render to swap the texture on rendered objects without re-rendering.
+  projection_example: >-
+    Change the animated graffiti on the walls of a Blender-rendered tunnel after the render is done.
+  controls:
+    - { name: UV source, type: layer-ref, animatable: false }
+    - { name: Texture source, type: layer-ref, animatable: false }
+    - { name: Filtering, type: enum(bilinear|bicubic), animatable: false }
+  animation: >-
+    Texture source may be animated.
+  dependencies: [pass.exr-read, proj.precompose]
+  implementation: >-
+    WGSL ST-map sampling pass using float UV channels; coverage-weighted to reduce edge artefacts.
+  io: >-
+    Reads UV channels from EXR.
+  limitations: >-
+    No lighting change; aliasing at UV discontinuities; requires float UV passes.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      "Replace texture" on an EXR layer that has a UV pass.
+    defaults: >-
+      Bicubic filtering.
+    automation: >-
+      Detects UV channels and wires the ST-map.
+    usability_check: >-
+      A user swaps a rendered texture in under 60 s.
+  acceptance: >-
+    Mini scene "stmap-swap".
+  status: not-started
+  evidence: []
+
+- id: pass.position
+  name: World position pass masks
+  sources:
+    - ref: brief
+      item: §10 relevant render-pass extraction; §15 installation-wide coordinates
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Select parts of a rendered scene by where they are in the venue's 3D space (e.g. "everything above 3 m" or
+    "inside this box").
+  projection_example: >-
+    Light only the virtual geometry above the first-floor line, following the real building's storeys.
+  controls:
+    - { name: Volume, type: enum(box|sphere|half-space), animatable: true }
+    - { name: Volume transform, type: transform3d, animatable: true }
+    - { name: Falloff, type: float, animatable: true }
+  animation: >-
+    Volume transform and falloff keyframable (wipes through space).
+  dependencies: [pass.depth, map.venue, 3d.units-scale]
+  implementation: >-
+    World position reconstructed from depth and camera matrices (or written via mrt()); WGSL volume test producing a soft matte.
+  io: >-
+    P pass read/write in EXR.
+  limitations: >-
+    Only works for content with known camera and depth.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Wipe through the building" recipe with a 3D wipe gizmo.
+    defaults: >-
+      Horizontal plane rising from the ground.
+    automation: >-
+      Aligns the volume to venue axes.
+    usability_check: >-
+      A user makes a bottom-to-top 3D wipe in under 60 s.
+  acceptance: >-
+    Mini scene "storey-wipe".
+  status: not-started
+  evidence: []
+
+- id: pass.depth-fog
+  name: Depth fog compositing workflow
+  sources:
+    - ref: S11
+      item: Fog 3D — Fog Start Depth, Fog End Depth, Scattering Density, Foggy Background, Gradient Layer, Layer Contribution
+      category: 3D Channel
+      checked: true
+    - ref: brief
+      item: §10 depth fog
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Add atmospheric fog that thickens with distance, optionally textured by a noise layer.
+  projection_example: >-
+    Fog rolls into the tunnel from its far end, animated by turbulent noise.
+  controls:
+    - { name: Start / end distance (m), type: float, animatable: true }
+    - { name: Density, type: float, animatable: true }
+    - { name: Fog colour, type: color, animatable: true }
+    - { name: Texture layer, type: layer-ref, animatable: false }
+  animation: >-
+    All keyframable and audio-drivable.
+  dependencies: [pass.depth, fx.3d-channel.fog-3d, fx.noise-grain.turbulent-noise]
+  implementation: >-
+    Workflow recipe around the fx.3d-channel.fog-3d pass, reading metric depth so distances are in metres.
+  io: >-
+    none
+  limitations: >-
+    Screen-space fog; no volumetric light shafts.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Add depth haze" recipe.
+    defaults: >-
+      Fog from 40% to 100% of scene depth, slight blue.
+    automation: >-
+      Fits distances to scene depth.
+    usability_check: >-
+      A user adds haze in one action and adjusts thickness with one slider.
+  acceptance: >-
+    AS-2 tunnel haze.
+  status: not-started
+  evidence: []
+
+- id: pass.depth-dof
+  name: Depth-of-field compositing workflow
+  sources:
+    - ref: S11
+      item: Depth Of Field — Focal Plane, Maximum Radius, Focal Bias
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Blur a rendered or estimated-depth image by distance after rendering.
+  projection_example: >-
+    Soften the background of a pre-rendered city flyover so the foreground statue reads clearly.
+  controls:
+    - { name: Focus distance, type: float, animatable: true }
+    - { name: Maximum blur, type: float, animatable: true }
+    - { name: Focal falloff (bias), type: float, animatable: true }
+  animation: >-
+    Focus keyframable (rack focus).
+  dependencies: [pass.depth, fx.3d-channel.depth-of-field, fx.blur-sharpen.camera-lens-blur]
+  implementation: >-
+    Recipe wiring depth to fx.3d-channel.depth-of-field / camera lens blur with non-anti-aliased depth.
+  io: >-
+    none
+  limitations: >-
+    Post DOF halo artefacts at depth discontinuities.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      "Blur by distance" recipe with "Click to focus".
+    defaults: >-
+      Moderate blur, focus at clicked point.
+    automation: >-
+      Chooses non-anti-aliased depth automatically.
+    usability_check: >-
+      A user focuses on a clicked object in 2 actions.
+  acceptance: >-
+    Mini scene "post-dof".
+  status: not-started
+  evidence: []
+
+- id: pass.depth-matte
+  name: Depth slicing and insertion workflow
+  sources:
+    - ref: S11
+      item: Depth Matte — Depth, Feather, Invert; inserting a layer into a 3D scene
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Cut a rendered scene at a distance to remove its background or to slide another layer in between near and far parts.
+  projection_example: >-
+    Insert live-action footage of a performer between the foreground arches and the background of a rendered hall.
+  controls:
+    - { name: Slice depth, type: float, animatable: true }
+    - { name: Feather, type: float, animatable: true }
+    - { name: Insert layer, type: layer-ref, animatable: false }
+  animation: >-
+    Slice depth keyframable.
+  dependencies: [pass.depth, fx.3d-channel.depth-matte]
+  implementation: >-
+    Recipe that duplicates the scene layer, applies inverted depth mattes and places the inserted layer between them
+    (the manual AE procedure, automated).
+  io: >-
+    none
+  limitations: >-
+    Hard depth edges alias; feather trades accuracy.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Put this layer inside the scene" then click the depth to insert at.
+    defaults: >-
+      Insert at clicked depth, small feather.
+    automation: >-
+      Builds the layer sandwich automatically.
+    usability_check: >-
+      A user inserts a layer between depths in under 60 s.
+  acceptance: >-
+    AS-4 performer placed between depths.
+  status: not-started
+  evidence: []
+
+- id: pass.depth-estimate
+  name: Depth estimated from footage and photos
+  sources:
+    - ref: brief
+      item: architecture — Depth Anything in the vision sidecar; §10 depth-based masks
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Generate a depth map from ordinary video or photos so depth fog, blur and masks work on 2D footage.
+  projection_example: >-
+    Add depth haze to stock drone footage of a forest playing inside a window region.
+  controls:
+    - { name: Model size, type: enum(small|base|large), animatable: false }
+    - { name: Temporal consistency (video), type: bool, animatable: false }
+    - { name: Near / far calibration, type: float, animatable: true }
+  animation: >-
+    Generated depth is a cached sequence; calibration keyframable.
+  dependencies: [pass.depth, track.matte-cache]
+  implementation: >-
+    Python sidecar (CUDA): Depth Anything V2 for stills and Video Depth Anything for temporally stable video depth;
+    output cached as float EXR sequences keyed by source hash + model version so preview and export never re-run inference.
+  io: >-
+    Model downloads: Depth Anything V2 Small ≈100 MB (Apache-2.0); Base ≈390 MB and Large ≈1.3 GB (CC-BY-NC-4.0, fine
+    for personal use). Video Depth Anything weights similarly split by licence.
+  limitations: >-
+    Relative (not metric) depth unless calibrated; flicker on long shots without the video model; slow at 4K.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Guess depth" on a footage layer, then use any depth recipe.
+    defaults: >-
+      Small model (fast, permissive licence), video mode for clips.
+    automation: >-
+      Downloads the model on first use with size shown, runs in the background, caches the result.
+    usability_check: >-
+      A user adds haze to flat footage in under 3 minutes of interaction (excluding compute).
+  acceptance: >-
+    Mini scene "drone-haze": cached depth reused for export (no inference during render).
+  status: not-started
+  evidence: []
+
+- id: pass.probe
+  name: Channel value probe
+  sources:
+    - ref: S11
+      item: Info panel display of depth/3D channel values for a pixel
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Hover or click to read depth, ID, normal, UV and colour values at a pixel, and pick values into effect controls.
+  projection_example: >-
+    Click the far wall of the tunnel to set fog start to its exact distance.
+  controls:
+    - { name: Probe readout, type: display, animatable: false }
+    - { name: Pick into property, type: tool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [pass.depth, pass.object-id]
+  implementation: >-
+    Single-pixel GPU readback from the pass targets on pointer move (throttled).
+  io: >-
+    none
+  limitations: >-
+    Values are from the viewer resolution; at reduced preview resolution they are approximate.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: D
+  beginner:
+    action: >-
+      Eyedropper next to any depth/ID control: "Pick from viewer".
+    defaults: >-
+      Shows units (m) and object names, not raw numbers.
+    automation: >-
+      Shows the object name under the cursor.
+    usability_check: >-
+      A user sets a fog distance by clicking in under 10 s.
+  acceptance: >-
+    Mini scene "depth-ruler" probe reads match analytic values.
+  status: not-started
+  evidence: []
+
+- id: pass.legacy-3d-files
+  name: Legacy 3D channel formats (RLA, RPF, Softimage PIC/ZPIC, Electric Image EI/EIZ)
+  sources:
+    - ref: S11
+      item: RLA, RPF, Softimage PIC/ZPIC, Electric Image EI/EIZ import with 3D channels
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Open old 3D renders with depth/ID channels in legacy formats.
+  projection_example: >-
+    Reuse an archived 3ds Max RPF render with object IDs.
+  controls:
+    - { name: none beyond pass.exr-read pickers, type: none, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [pass.exr-read]
+  implementation: >-
+    Candidate: convert with an external tool to EXR; no maintained open reader for RPF with all channels.
+  io: >-
+    Conversion to EXR.
+  limitations: >-
+    Decision 2026-10-02: kept for After Effects import fidelity: read RLA/RPF/PIC/EI with OpenImageIO in the sidecar when an imported project references them; otherwise the compatibility report lists a rendered fallback.
+
+    Open question: does the user have any legacy RLA/RPF/PIC/EI assets? If not, EXR covers the need.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Compositing-pass tooling for After Effects and Cryptomatte workflows. Depth, normals, position, depth fog, depth matte, depth estimation, render passes and EXR read stay required for depth illusions and Blender renders."
+  milestone: F
+  beginner:
+    action: >-
+      Import shows "Convert to EXR" if adopted.
+    defaults: >-
+      n/a
+    automation: >-
+      n/a
+    usability_check: >-
+      n/a until resolved; then a user opens an RPF and picks an object ID.
+  acceptance: >-
+    Decision recorded.
+  status: not-started
+  evidence: []

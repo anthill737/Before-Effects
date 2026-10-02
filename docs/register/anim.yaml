@@ -1,0 +1,1904 @@
+# Animation engine, graph editor and time — Before Effects capability register
+# Sources: S04 (keyframe interpolation; animation basics), S05 (time stretching and time remapping), S01 (keyframe assistants, Sequence Layers, motion blur), brief §4, §20. Adobe helpx pages returned HTTP 403 on 2026-10-01; Adobe items authored from knowledge (checked: false).
+
+- id: anim.time-model
+  name: Deterministic integer time model
+  sources:
+    - ref: "brief §20"
+      item: "Use deterministic time and seeded randomness"
+      category: "Architecture and build rules"
+      checked: true
+    - ref: "brief §4"
+      item: "Time-remapped nested scenes must behave consistently during scrubbing and export"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Work at any common frame rate (23.976, 24, 25, 29.97, 30, 50, 59.94, 60) and mix footage of different rates in one show,
+    with every keyframe landing on the same instant in preview and export.
+  projection_example: >-
+    A 25 fps show built from 30 fps stock footage and 60 fps generated content keeps every light hit on the exact beat frame
+    after a reopen, a scrub and a background export.
+  controls:
+    - { name: "Composition frame rate", type: "enum(23.976|24|25|29.97|30|48|50|59.94|60|custom)", animatable: false }
+    - { name: "Time display", type: "enum(timecode|frames|seconds)", animatable: false }
+    - { name: "Drop-frame timecode", type: "bool", animatable: false }
+    - { name: "Start frame / start timecode", type: "time", animatable: false }
+  animation: >-
+    Not animatable itself; it is the clock every keyframe, expression, simulation and render job reads.
+  dependencies: []
+  implementation: >-
+    All times stored as integer flicks (1/705,600,000 s), held as JS numbers below 2^53 (about 148 days of range) with BigInt
+    used only for serialization checks. Every supported rate is an exact integer frame length (23.976 = 29,429,400 flicks,
+    29.97 = 23,543,520, 25 = 28,224,000). Frame-to-time and time-to-frame conversions live in one core module with explicit
+    floor/round policies, and sub-frame times (motion-blur samples, time remap) stay exact flick integers.
+  io: >-
+    Project files store flicks plus the rate as a rational; import of footage records its native rate as a rational from FFmpeg
+    probe (r_frame_rate), never a rounded float.
+  limitations: >-
+    Variable-frame-rate source video is conformed to a constant rate on import (see proj.source-interpretation); the
+    original timing is kept as metadata but not edited directly.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Invisible by default — the guided "New show" step picks the frame rate from the chosen output preset or projector setup.
+    defaults: >-
+      Frame rate follows the selected projector/output preset (30 fps if none); time shown as seconds plus frames.
+    automation: >-
+      Imported footage at a different rate is conformed automatically with a plain note ("Played at 25 fps to match your show").
+    usability_check: >-
+      A first-time user creates a show and adds mixed-rate footage without ever being asked to choose a frame rate or
+      timecode format, and a preview and export of the same frame range are frame-identical.
+  acceptance: >-
+    AS-6 and mini scene "mixed-rate-beat": 24/25/30/60 fps assets keyed to one beat; exported frame N matches the preview
+    frame N hash at three rates.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe.core
+  name: Keyframes on every animatable property
+  sources:
+    - ref: S04
+      item: "Setting, selecting and deleting keyframes; stopwatch; keyframe navigation"
+      category: "Animation basics"
+      checked: false
+    - ref: "brief §4"
+      item: "Keyframe editing on all meaningful animatable properties"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Set, select, move, delete and numerically edit keyframes on any animatable property (transforms, effect values, masks,
+    materials, lights, cameras, text selectors, sound levels, procedural controls), and jump between them.
+  projection_example: >-
+    Key a window region's brightness from dark to full and back so it glows for two seconds on the chorus.
+  controls:
+    - { name: "Animate (stopwatch) toggle per property", type: "bool", animatable: false }
+    - { name: "Keyframe time", type: "time", animatable: false }
+    - { name: "Keyframe value", type: "property-ref", animatable: true }
+    - { name: "Auto-key mode", type: "bool", animatable: false }
+    - { name: "Previous / next keyframe", type: "action", animatable: false }
+    - { name: "Keyframe label colour", type: "enum(none|red|yellow|green|blue|purple)", animatable: false }
+  animation: >-
+    This is the keyframe system itself; expressions run after keyframe interpolation and can read keyframe data
+    (expr.value-at-time).
+  dependencies: [anim.time-model, ux.operation-system]
+  implementation: >-
+    Each animatable property holds a sorted array of keyframes with stable IDs (not indices), flick times, typed values and
+    in/out interpolation records; a pure evaluate(property, tFlicks, ctx) in core TS binary-searches the segment and calls
+    the interpolation kernel, memoized per (property, time, dependency hash). Add/move/delete/set-value are typed ops in the
+    operation system, applied with Immer so undo replays inverse patches.
+  io: >-
+    Keyframes serialize with the project; stable keyframe IDs let recipes track overrides and the AI assistant target edits.
+  limitations: >-
+    Properties marked non-animatable (e.g. a source file path) cannot take keyframes; they can still be swapped by ops or
+    markers.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Animate this" — select a thing, press Animate, move the playhead and change the value; the app records keyframes.
+    defaults: >-
+      Auto-key is on in the guided workspace; new keyframes use Easy Ease temporal and auto-Bezier spatial interpolation.
+    automation: >-
+      Recipes create keyframes for the user; changing a value later in time adds a keyframe instead of moving the first one.
+    usability_check: >-
+      A first-time user makes a window fade up and back down over two seconds in under 60 s with no instructions, then
+      undoes one keyframe change.
+  acceptance: >-
+    AS-1 and mini scene "window-glow": brightness keyframes on a region; reopen and seek to five random frames give
+    identical values to the pre-save evaluation.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: anim.interp.linear
+  name: Linear interpolation
+  sources:
+    - ref: S04
+      item: "Linear interpolation"
+      category: "Keyframe interpolation"
+      checked: false
+  artist_can: >-
+    Make a value change at a constant rate between two keyframes, producing mechanical, even motion.
+  projection_example: >-
+    A scanning bar sweeps across the facade at an even speed, matching a metronomic music section.
+  controls:
+    - { name: "Temporal interpolation in/out", type: "enum(linear|bezier|continuous-bezier|auto-bezier|hold)", animatable: false }
+  animation: >-
+    Applies per keyframe side (incoming and outgoing independently).
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    Linear kernel in the core evaluator: lerp for scalars and vectors, shortest-path option for angles, linear-light or
+    perceptual mixing for colours selected by the colour pipeline; segment parameter computed from exact flick ratios.
+  io: >-
+    none
+  limitations: >-
+    Linear colour interpolation is in the working colour space; perceptual mixes are available through the colour control
+    option, not by default.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Reached through the timing picker on any animation → "Steady".
+    defaults: >-
+      Not the default; offered when the user picks "Steady" or "Mechanical".
+    automation: >-
+      Recipes that need constant motion (scans, sweeps) set linear automatically.
+    usability_check: >-
+      A first-time user changes an eased move to a steady one in two actions or fewer without opening a graph.
+  acceptance: >-
+    Mini scene "steady-scan": a bar crosses 1920 px in 4 s; measured position per frame is exactly linear.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: anim.interp.hold
+  name: Hold interpolation
+  sources:
+    - ref: S04
+      item: "Hold interpolation; Toggle Hold Keyframe"
+      category: "Keyframe interpolation"
+      checked: false
+  artist_can: >-
+    Keep a value unchanged until the next keyframe and then jump, for strobes, cuts and stepped motion.
+  projection_example: >-
+    Windows switch on and off instantly in a rhythmic pattern instead of fading.
+  controls:
+    - { name: "Hold (outgoing)", type: "bool", animatable: false }
+  animation: >-
+    Hold can be set on the outgoing side of any keyframe; applies to spatial and temporal values and is the only mode for
+    non-interpolable values (enums, source text, booleans).
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    Step kernel in the evaluator returning the left keyframe value for t < next key time; non-interpolable value types are
+    forced to hold by the property type definition.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Reached through the timing picker → "Instant switch"; also the default for on/off controls.
+    defaults: >-
+      Toggles, dropdowns and text content keyframes are hold automatically.
+    automation: >-
+      "Flash on the beat" recipes write hold keyframes on beat markers.
+    usability_check: >-
+      A first-time user turns a fade into an instant on/off in two actions or fewer.
+  acceptance: >-
+    Mini scene "strobe-windows": hold keys at beat markers; no in-between values appear on any frame.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: anim.interp.bezier
+  name: Bezier interpolation with split handles
+  sources:
+    - ref: S04
+      item: "Bezier interpolation; direction handles; split in/out handles"
+      category: "Keyframe interpolation"
+      checked: false
+    - ref: "brief §4"
+      item: "Bezier curve handling; separate incoming/outgoing handles; ease-in/out"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Shape exactly how a value accelerates and decelerates into and out of each keyframe using independent incoming and
+    outgoing handles.
+  projection_example: >-
+    A facade panel slams fast into place and then decays slowly, with a sharp corner in the speed curve at impact.
+  controls:
+    - { name: "Incoming speed", type: "float", animatable: false }
+    - { name: "Incoming influence", type: "percent", animatable: false }
+    - { name: "Outgoing speed", type: "float", animatable: false }
+    - { name: "Outgoing influence", type: "percent", animatable: false }
+    - { name: "Split handles", type: "bool", animatable: false }
+  animation: >-
+    Temporal Bezier on any interpolable property; also used for spatial tangents (anim.interp.spatial-temporal).
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    AE-style speed/influence representation stored per keyframe side and converted to a cubic in (time, value) space;
+    the evaluator solves the cubic for t with Newton iteration plus bisection fallback (bounded iterations, deterministic).
+    Multi-dimensional properties without separated dimensions share one temporal curve on normalized progress.
+  io: >-
+    Speed/influence storage keeps a future AE keyframe import (proj.aep-interop) lossless where it is attempted.
+  limitations: >-
+    Influence is clamped to 0.1–100% per side as in AE so curves remain functions of time.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Edit animation" → drag the curve handles; most users only use the timing picker presets.
+    defaults: >-
+      New Bezier keys start as Easy Ease (0 speed, 33.33% influence).
+    automation: >-
+      Timing presets ("Gentle", "Snappy", "Heavy landing") write matched handle values.
+    usability_check: >-
+      A user who has completed the guided path makes a move "start fast, land gently" by choosing a preset or dragging one
+      handle, in under 45 s.
+  acceptance: >-
+    AS-1 and mini scene "panel-slam": asymmetric handles; speed graph shows the designed break; export matches preview.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: anim.interp.continuous-bezier
+  name: Continuous Bezier interpolation
+  sources:
+    - ref: S04
+      item: "Continuous Bezier interpolation"
+      category: "Keyframe interpolation"
+      checked: false
+  artist_can: >-
+    Keep motion smooth through a keyframe by locking incoming and outgoing handles together while still adjusting them.
+  projection_example: >-
+    A light orb drifts through several points on the facade without a visible kink at each keyframe.
+  controls:
+    - { name: "Continuous (locked handles)", type: "bool", animatable: false }
+    - { name: "Handle direction / speed", type: "float", animatable: false }
+  animation: >-
+    Applies to temporal and spatial interpolation; converting an auto-Bezier key by dragging its handle makes it continuous.
+  dependencies: [anim.interp.bezier]
+  implementation: >-
+    A per-keyframe flag constraining in/out speed to be equal (temporal) and spatial tangents to be collinear; enforced in
+    the keyframe-edit op so the stored data always satisfies the constraint.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Edit animation" → right-click a keyframe → "Smooth through".
+    defaults: >-
+      Dragging an automatic key's handle converts it to continuous rather than breaking it.
+    automation: >-
+      "Smooth this path" recipe step converts sharp keys to continuous.
+    usability_check: >-
+      A user removes a visible jerk at a mid keyframe in under 30 s using "Smooth through".
+  acceptance: >-
+    Mini scene "orb-drift": five keys; numerical derivative is continuous at every key within tolerance.
+  status: not-started
+  evidence: []
+
+- id: anim.interp.auto-bezier
+  name: Auto Bezier interpolation
+  sources:
+    - ref: S04
+      item: "Auto Bezier interpolation"
+      category: "Keyframe interpolation"
+      checked: false
+  artist_can: >-
+    Let the app choose smooth handles automatically that update whenever neighbouring keyframes change.
+  projection_example: >-
+    A spotlight's position path stays smooth as the artist drags waypoints to fit different window positions.
+  controls:
+    - { name: "Auto Bezier", type: "bool", animatable: false }
+  animation: >-
+    Default for spatial interpolation; available for temporal.
+  dependencies: [anim.interp.bezier]
+  implementation: >-
+    Handles recomputed from neighbour keyframes (Catmull-Rom-style tangent, AE-compatible magnitude) on every edit op, and
+    stored, so evaluation never depends on recomputation order.
+  io: >-
+    none
+  limitations: >-
+    Exact AE handle magnitudes are approximated; visual parity is the target, not bit equality.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Invisible default for paths; reachable as "Automatic smooth" in the keyframe menu.
+    defaults: >-
+      Spatial keys created on the canvas are auto Bezier.
+    automation: >-
+      Handles update automatically as keys move.
+    usability_check: >-
+      A user drags three motion-path points and never sees a kink or overshoot loop in the path without touching handles.
+  acceptance: >-
+    Mini scene "spot-waypoints": moving one key updates its neighbours' handles; reopen reproduces identical paths.
+  status: not-started
+  evidence: []
+
+- id: anim.interp.spatial-temporal
+  name: Spatial versus temporal interpolation
+  sources:
+    - ref: S04
+      item: "Spatial and temporal interpolation; Keyframe Interpolation dialog; default spatial interpolation preference"
+      category: "Keyframe interpolation"
+      checked: false
+    - ref: "brief §4"
+      item: "temporal versus spatial interpolation"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Control the shape of a moving object's path (spatial) separately from its timing along that path (temporal).
+  projection_example: >-
+    A comet follows a curved arc over the roofline (spatial Bezier) while moving at a steady pace (temporal linear).
+  controls:
+    - { name: "Spatial interpolation", type: "enum(linear|bezier|continuous-bezier|auto-bezier)", animatable: false }
+    - { name: "Temporal interpolation", type: "enum(linear|bezier|continuous-bezier|auto-bezier|hold)", animatable: false }
+    - { name: "Default spatial interpolation", type: "enum(linear|auto-bezier)", animatable: false }
+  animation: >-
+    Spatial interpolation applies to point2d/point3d properties (position, anchor, effect points); temporal applies to all.
+  dependencies: [anim.interp.bezier]
+  implementation: >-
+    Spatial segments are cubic Bezier curves in property space with stored tangents; temporal curves map time to
+    arc-length progress, computed with a cached arc-length table (Gauss-Legendre integration) so speed is distance-based.
+  io: >-
+    none
+  limitations: >-
+    3D spatial paths use the same model in 3D; quaternion orientation interpolation is handled by the 3D workspace (3d.scene).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Edit animation" → path shape (Curved / Straight) and timing picker shown as two separate choices.
+    defaults: >-
+      Curved path, eased timing.
+    automation: >-
+      Drawing a path on a surface sets spatial keys; timing presets set temporal only.
+    usability_check: >-
+      A user straightens a curved path without changing its timing, in under 30 s.
+  acceptance: >-
+    Mini scene "comet-arc": curved spatial path with linear temporal; measured screen speed is constant within 1%.
+  status: not-started
+  evidence: []
+
+- id: anim.roving-keyframes
+  name: Roving keyframes (constant speed)
+  sources:
+    - ref: S04
+      item: "Roving keyframes; Rove Across Time"
+      category: "Keyframe interpolation"
+      checked: false
+    - ref: "brief §4"
+      item: "a light travels around a roofline at constant speed"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Let intermediate keyframes slide in time so motion across several points has one smooth, even speed.
+  projection_example: >-
+    A light travels around an irregular roofline outline at constant speed even though the waypoints are unevenly spaced.
+  controls:
+    - { name: "Rove across time", type: "bool", animatable: false }
+  animation: >-
+    Applies to spatial properties; first and last keyframes stay fixed in time.
+  dependencies: [anim.interp.spatial-temporal, anim.motion-path]
+  implementation: >-
+    On each edit op, roving key times are recomputed from cumulative arc length between the fixed endpoints and stored as
+    flick times (rounded to the nearest flick); the recompute is part of the op so undo restores prior times exactly.
+  io: >-
+    none
+  limitations: >-
+    Roving keys cannot be placed on exact beats; use markers on the fixed keys instead.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Even speed" checkbox in the travel/trace recipes; advanced users toggle "Rove" per keyframe.
+    defaults: >-
+      On for "Travel along" and "Trace with light" recipes.
+    automation: >-
+      Recipes that follow a path convert intermediate keys to roving automatically.
+    usability_check: >-
+      A user makes uneven motion even with one checkbox and confirms it visually in under 20 s.
+  acceptance: >-
+    AS-1 and mini scene "roofline-runner": 12 uneven waypoints; per-frame travelled distance varies under 1%.
+  status: not-started
+  evidence: []
+
+- id: anim.separate-dimensions
+  name: Separate dimensions
+  sources:
+    - ref: S04
+      item: "Separate Dimensions"
+      category: "Graph Editor"
+      checked: false
+  artist_can: >-
+    Split a position into X, Y (and Z) properties so each axis has its own keyframes and curves.
+  projection_example: >-
+    A ball of light moves steadily across the facade while bouncing vertically on a different rhythm.
+  controls:
+    - { name: "Separate dimensions", type: "bool", animatable: false }
+    - { name: "X position", type: "float", animatable: true }
+    - { name: "Y position", type: "float", animatable: true }
+    - { name: "Z position", type: "float", animatable: true }
+  animation: >-
+    Each separated axis is an independent keyframed and expression-capable property.
+  dependencies: [anim.keyframe.core, anim.graph-editor]
+  implementation: >-
+    A property-structure op that converts one vector property into component properties, converting spatial keys to
+    per-axis temporal keys (sampling where needed) and back; conversion results are recorded as Immer patches for undo.
+  io: >-
+    none
+  limitations: >-
+    Recombining after independent per-axis edits resamples at the union of key times; spatial Bezier tangents are lost and
+    the user is told before conversion.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Edit animation" → "Move across and up/down separately".
+    defaults: >-
+      Off; "Bounce" recipes turn it on for the vertical axis only.
+    automation: >-
+      Bounce and drift recipes separate axes automatically when they need independent rhythms.
+    usability_check: >-
+      A user adds a vertical bounce to an existing horizontal move without breaking the horizontal timing, in under 60 s.
+  acceptance: >-
+    Mini scene "bouncing-orb": separated axes; recombine warning shown; undo restores original data exactly.
+  status: not-started
+  evidence: []
+
+- id: anim.easy-ease
+  name: Easy Ease, Ease In and Ease Out
+  sources:
+    - ref: S04
+      item: "Easy Ease; Easy Ease In; Easy Ease Out"
+      category: "Keyframe interpolation"
+      checked: false
+    - ref: "brief §4"
+      item: "ease-in/out"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Make motion start and stop gently with one command, on either side of a keyframe or both.
+  projection_example: >-
+    Facade panels glide open and come to rest softly instead of starting and stopping abruptly.
+  controls:
+    - { name: "Ease", type: "enum(easy-ease|ease-in|ease-out)", animatable: false }
+    - { name: "Ease strength (influence)", type: "percent", animatable: false }
+    - { name: "Timing preset", type: "enum(steady|gentle|snappy|heavy|anticipate)", animatable: false }
+  animation: >-
+    Writes temporal Bezier handle values to selected keyframes; applies to any animatable property.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    An op that sets speed 0 and influence 33.33% (or a preset's values) on the chosen keyframe sides; the temporal-Bezier
+    evaluation kernel ships in milestone B with this entry, while full manual handle editing arrives with anim.interp.bezier.
+    Timing presets are a small table of speed/influence pairs shared by the recipe engine.
+  io: >-
+    none
+  limitations: >-
+    Presets approximate named easing curves; exact CSS-style cubic-bezier curves are entered through the graph editor.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Timing picker on every animation: "Steady", "Gentle", "Snappy", "Heavy", each with an animated thumbnail.
+    defaults: >-
+      "Gentle" (Easy Ease both sides) for all new guided animations.
+    automation: >-
+      Recipes choose a timing preset per motion type; changing the preset updates every key the recipe owns.
+    usability_check: >-
+      A first-time user changes an animation's feel from steady to gentle in two actions or fewer without seeing a graph.
+  acceptance: >-
+    Mini scene "panel-glide": eased keys; speed is 0 at both keys within tolerance; preset change is one undo step.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe-velocity
+  name: Keyframe velocity dialog
+  sources:
+    - ref: S04
+      item: "Keyframe Velocity dialog (incoming/outgoing speed and influence, Continuous)"
+      category: "Keyframe interpolation"
+      checked: false
+    - ref: "brief §4"
+      item: "velocity adjustments; numeric precision"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Type exact incoming and outgoing speeds and influence percentages for one or many keyframes.
+  projection_example: >-
+    Match the exact landing speed of twenty column animations so they read as one synchronised move.
+  controls:
+    - { name: "Incoming speed (units/s)", type: "float", animatable: false }
+    - { name: "Incoming influence", type: "percent", animatable: false }
+    - { name: "Outgoing speed (units/s)", type: "float", animatable: false }
+    - { name: "Outgoing influence", type: "percent", animatable: false }
+    - { name: "Continuous", type: "bool", animatable: false }
+  animation: >-
+    Edits temporal handle data; multi-selection applies the same values to every selected key.
+  dependencies: [anim.interp.bezier]
+  implementation: >-
+    A numeric panel that issues the same set-keyframe-ease op as handle dragging, batched across the selection as one op.
+    Units display per property type (px/s, degrees/s, %/s).
+  io: >-
+    none
+  limitations: >-
+    Multi-dimensional unseparated properties show one speed value (magnitude), as in AE.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Edit animation" → keyframe → "Exact timing…".
+    defaults: >-
+      Fields pre-filled with the current values of the first selected key.
+    automation: >-
+      Applying to a multi-selection can keep relative differences or "Make all the same".
+    usability_check: >-
+      A user who knows the graph editor sets three keys to identical landing speeds in under 40 s.
+  acceptance: >-
+    Mini scene "column-sync": twenty keys set to equal speed; evaluated speeds equal within 0.1%.
+  status: not-started
+  evidence: []
+
+- id: anim.graph-editor
+  name: Graph editor
+  sources:
+    - ref: S04
+      item: "Graph Editor (show selected/animated properties, auto-zoom, snap, transform box, reference graph, show expression editor)"
+      category: "Graph Editor"
+      checked: false
+    - ref: "brief §4"
+      item: "value and speed graph editing; visual manipulators"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    See and edit animation as curves over time, choose which properties appear, zoom to fit, snap to frames and markers,
+    and scale or move many keyframes with a transform box.
+  projection_example: >-
+    Fine-tune how a wall collapse accelerates by reshaping its rotation curve while seeing the beat markers underneath.
+  controls:
+    - { name: "Graph type", type: "enum(value|speed|auto)", animatable: false }
+    - { name: "Show properties", type: "enum(selected|animated|graph-set)", animatable: false }
+    - { name: "Show reference graph", type: "bool", animatable: false }
+    - { name: "Auto-zoom graph height", type: "bool", animatable: false }
+    - { name: "Snap", type: "bool", animatable: false }
+    - { name: "Transform box", type: "bool", animatable: false }
+    - { name: "Show audio waveform and markers", type: "bool", animatable: false }
+  animation: >-
+    Edits keyframe time, value and handles for any animatable property; shows expression results as a read-only curve.
+  dependencies: [anim.keyframe.core, anim.interp.bezier]
+  implementation: >-
+    React panel drawing on a canvas that samples the core evaluator at screen resolution (memoized per property and
+    dependency hash); every drag emits coalesced keyframe-edit ops (one undo step per gesture). Expression curves come from
+    the same evaluator, so displayed values equal rendered values.
+  io: >-
+    none
+  limitations: >-
+    Curves of non-numeric properties (text, enums, paths) are shown as keyframe markers only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Edit animation" → "Curves" tab; opens focused on the selected animation with only its properties shown.
+    defaults: >-
+      Auto graph type, show selected properties, auto-zoom on, snapping on.
+    automation: >-
+      Opens zoomed to the selected keys and labels axes in plain units ("brightness %", "pixels").
+    usability_check: >-
+      A user who has finished the guided path opens the curve for a selected animation and makes it end more gently in
+      under 60 s.
+  acceptance: >-
+    AS-1 ("editable speed graph") and mini scene "collapse-curve": curve edits match exported motion frame for frame.
+  status: not-started
+  evidence: []
+
+- id: anim.graph.value
+  name: Value graph
+  sources:
+    - ref: S04
+      item: "Value graph"
+      category: "Graph Editor"
+      checked: false
+  artist_can: >-
+    Edit the actual value of a property over time as a curve, including overshoot and settle shapes that keyframe lists hide.
+  projection_example: >-
+    Push a scale curve past 100% and back so a window frame pops and settles.
+  controls:
+    - { name: "Keyframe value", type: "float", animatable: false }
+    - { name: "Bezier handles (value space)", type: "point2d", animatable: false }
+    - { name: "Show separated dimensions", type: "bool", animatable: false }
+  animation: >-
+    Edits keyframes and handles in value space; for unseparated spatial properties shows per-axis curves read-only.
+  dependencies: [anim.graph-editor]
+  implementation: >-
+    Value-space handles are converted to the stored speed/influence representation on commit, using one conversion module
+    shared with import so the value and speed views always agree.
+  io: >-
+    none
+  limitations: >-
+    As in AE, unseparated spatial properties edit timing in the speed graph; the value view is informational until
+    dimensions are separated.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Edit animation" → "Curves" → "Value" view, labelled "How much".
+    defaults: >-
+      Chosen automatically for scalar properties.
+    automation: >-
+      Handles that would push a property past its legal range are clamped visibly with a hint.
+    usability_check: >-
+      A user adds a visible overshoot to a scale animation in under 60 s using the value curve.
+  acceptance: >-
+    Mini scene "frame-pop": overshoot to 112% then settle; evaluated peak matches the curve peak within 0.5%.
+  status: not-started
+  evidence: []
+
+- id: anim.graph.speed
+  name: Speed graph
+  sources:
+    - ref: S04
+      item: "Speed graph"
+      category: "Graph Editor"
+      checked: false
+  artist_can: >-
+    Edit how fast a value changes over time, including spatial speed along a motion path.
+  projection_example: >-
+    Make light race along a cornice and brake hard at the corner by shaping its speed curve.
+  controls:
+    - { name: "Incoming / outgoing speed", type: "float", animatable: false }
+    - { name: "Influence handles", type: "percent", animatable: false }
+    - { name: "Split speed at keyframe", type: "bool", animatable: false }
+  animation: >-
+    Edits temporal ease for any property, including unseparated position (distance per second).
+  dependencies: [anim.graph-editor]
+  implementation: >-
+    Speed is the analytic derivative of the temporal curve times the arc-length rate of the spatial segment; handles drag
+    speed/influence values directly and emit the same ease op as the velocity dialog.
+  io: >-
+    none
+  limitations: >-
+    Speed is shown per segment; discontinuities at hold keys are drawn as gaps.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Edit animation" → "Curves" → "Speed" view, labelled "How fast".
+    defaults: >-
+      Chosen automatically for position and path-following animations.
+    automation: >-
+      A faint reference graph shows the value curve so the effect of each change is understandable.
+    usability_check: >-
+      A user makes a moving light slow down only at the end of its path in under 60 s.
+  acceptance: >-
+    AS-1 and mini scene "cornice-brake": designed speed profile measured from rendered frames within 2%.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe-copy-paste
+  name: Copy and paste keyframes
+  sources:
+    - ref: S04
+      item: "Copy and paste keyframes"
+      category: "Animation basics"
+      checked: false
+    - ref: "brief §4"
+      item: "keyframe copying"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Copy keyframes from one property, layer or composition and paste them at the playhead onto the same or a compatible
+    property elsewhere.
+  projection_example: >-
+    Copy a window's pulse animation and paste it onto twelve other windows, each at a different time.
+  controls:
+    - { name: "Paste at", type: "enum(playhead|original-time)", animatable: false }
+    - { name: "Paste mode", type: "enum(add|replace)", animatable: false }
+    - { name: "Target property", type: "property-ref", animatable: false }
+  animation: >-
+    Preserves interpolation, ease and roving state; values convert between compatible types (e.g. 2D to 3D point).
+  dependencies: [anim.keyframe.core, ux.operation-system]
+  implementation: >-
+    The clipboard payload is a serialized keyframe set with relative flick times and property type; paste emits one batch
+    op per target and is a single undo step. Presets and the AI assistant use the same payload format.
+  io: >-
+    Clipboard JSON pastes between projects and app instances; tab-separated text export for spreadsheets.
+  limitations: >-
+    AE clipboard keyframe text is not parsed until proj.aep-interop is decided.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Copy animation" / "Paste animation" on any animated item, or "Apply to these too" with several targets selected.
+    defaults: >-
+      Paste at playhead, add mode.
+    automation: >-
+      Pasting onto several selected layers can stagger them ("one after another") using anim.sequence-layers offsets.
+    usability_check: >-
+      A first-time user copies one window's animation to five other windows in under 45 s.
+  acceptance: >-
+    Mini scene "pulse-copy": pasted keys are identical in shape and differ only in start time; one undo removes all.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe-time-scale
+  name: Scale keyframes in time
+  sources:
+    - ref: S04
+      item: "Stretch or compress a group of keyframes in time (Alt-drag)"
+      category: "Animation basics"
+      checked: false
+    - ref: "brief §4"
+      item: "scaling in time"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Make a group of keyframes faster or slower proportionally by dragging the first or last one, keeping relative timing.
+  projection_example: >-
+    Stretch a whole crack-and-rebuild sequence from 6 s to 8 s to fit the new music edit.
+  controls:
+    - { name: "Scale factor", type: "percent", animatable: false }
+    - { name: "Anchor", type: "enum(first-key|last-key|playhead)", animatable: false }
+    - { name: "Snap result to frames", type: "bool", animatable: false }
+  animation: >-
+    Scales times of selected keys across any number of properties and layers; ease speeds rescale to keep curve shape.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    Batch op multiplying flick offsets from the anchor by a rational factor, rounding to frames when snapping is on and
+    dividing temporal speeds by the factor so the curve shape is preserved; one undo step.
+  io: >-
+    none
+  limitations: >-
+    With frame snapping, very small scales could merge keys onto one frame; the op refuses and explains instead of
+    deleting keys.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Faster / slower" control on any animation (e.g. "Duration 6 s → 8 s"), plus handles on the timeline span.
+    defaults: >-
+      Anchor at the first key; snapping on.
+    automation: >-
+      Recipe duration controls use this scaling rather than rebuilding keys, preserving custom edits.
+    usability_check: >-
+      A first-time user makes an animation take 8 s instead of 6 s in under 20 s.
+  acceptance: >-
+    Mini scene "stretch-rebuild": scaled sequence keeps relative key spacing exactly, with speeds adjusted to keep curve shape.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe-time-reverse
+  name: Time-reverse keyframes
+  sources:
+    - ref: S04
+      item: "Time-Reverse Keyframes (keyframe assistant)"
+      category: "Keyframe assistants"
+      checked: false
+    - ref: "brief §4"
+      item: "reversing; a collapse reverses exactly to rebuild the facade"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Reverse the order of selected keyframes in time so an animation plays backwards, with eases mirrored.
+  projection_example: >-
+    Duplicate a facade collapse animation and reverse its keyframes so the wall rebuilds exactly.
+  controls:
+    - { name: "Reverse selected keyframes", type: "action", animatable: false }
+  animation: >-
+    Mirrors key times within the selection span and swaps incoming/outgoing ease and spatial tangents.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    Batch op mapping t to (start + end - t) on selected keys and swapping in/out interpolation records and tangents; for
+    simulation-driven content the user is directed to anim.time-reverse-layer or a baked cache instead.
+  io: >-
+    none
+  limitations: >-
+    Reverses keyframes only; expression-driven or simulated motion must be reversed by reversing the layer's time.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Play it backwards" on any animation; the "Crack and rebuild" recipe uses it to create the rebuild half.
+    defaults: >-
+      Reverses all keys of the selected animation.
+    automation: >-
+      Recipes create the reversed copy and keep it linked so later edits to the collapse can be re-mirrored.
+    usability_check: >-
+      A first-time user turns a collapse into a rebuild in two actions or fewer.
+  acceptance: >-
+    AS-3 and mini scene "collapse-rebuild": reversed keys evaluate to the mirrored values at every frame.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe-align
+  name: Align, distribute and batch-edit keyframes
+  sources:
+    - ref: "brief §4"
+      item: "keyframe alignment and batch editing"
+      category: "Animation engine and graph editor"
+      checked: true
+    - ref: S04
+      item: "Move, nudge and edit multiple keyframes; keyframe navigator"
+      category: "Animation basics"
+      checked: false
+  artist_can: >-
+    Align selected keyframes to the playhead, a marker or each other; spread them evenly; nudge them by frames; and set one
+    value or interpolation on many keyframes at once.
+  projection_example: >-
+    Align the start keys of forty window animations to the downbeat marker, then spread their end keys evenly over a bar.
+  controls:
+    - { name: "Align to", type: "enum(playhead|marker|first-selected|last-selected)", animatable: false }
+    - { name: "Distribute evenly", type: "action", animatable: false }
+    - { name: "Nudge by frames", type: "int", animatable: false }
+    - { name: "Set value on selection", type: "property-ref", animatable: false }
+    - { name: "Set interpolation on selection", type: "enum(linear|bezier|auto-bezier|hold)", animatable: false }
+  animation: >-
+    Works across properties, layers and compositions in one selection.
+  dependencies: [anim.keyframe.core, proj.snapping, proj.markers]
+  implementation: >-
+    Batch keyframe ops over a selection addressed by stable keyframe IDs; results are quantized to frames and applied in a
+    single Immer transaction so undo restores the whole batch.
+  io: >-
+    none
+  limitations: >-
+    Collisions (two keys on one frame of one property) are rejected with a message naming the property.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Line up with the beat" and "Space out evenly" on a multi-selection of animations.
+    defaults: >-
+      Align to the nearest marker when markers exist, else the playhead.
+    automation: >-
+      Beat markers from audio analysis are offered as alignment targets automatically.
+    usability_check: >-
+      A user aligns ten animations to a beat marker in under 30 s.
+  acceptance: >-
+    AS-1 and mini scene "downbeat-align": forty keys aligned to a marker land on the marker frame exactly.
+  status: not-started
+  evidence: []
+
+- id: anim.motion-path
+  name: Motion paths
+  sources:
+    - ref: S04
+      item: "Motion paths; editing spatial keyframes in the Composition panel"
+      category: "Keyframe interpolation"
+      checked: false
+    - ref: "brief §4"
+      item: "motion paths"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    See and edit the path a moving layer or effect point follows directly on the canvas, dragging points and tangent handles.
+  projection_example: >-
+    Drag the path of a glowing orb so it curves neatly around an arched doorway in the venue preview.
+  controls:
+    - { name: "Path vertices (spatial keyframes)", type: "point2d", animatable: true }
+    - { name: "Tangent handles", type: "point2d", animatable: false }
+    - { name: "Show path and per-frame ticks", type: "bool", animatable: false }
+    - { name: "Snap path points to region edges", type: "bool", animatable: false }
+  animation: >-
+    Path vertices are the spatial keyframes of position or point properties, in 2D and 3D.
+  dependencies: [anim.interp.spatial-temporal]
+  implementation: >-
+    A canvas overlay renders the spatial Bezier from the evaluator with per-frame ticks whose spacing shows speed; handle
+    drags emit keyframe-edit ops, and snapping queries region and edge geometry from the venue model in composition space.
+  io: >-
+    none
+  limitations: >-
+    Paths are edited in composition space; editing on the 3D venue view projects onto the surface plane and needs a
+    surface with a defined content mapping.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Move along a path" — drag on the canvas to draw where it should go; the path stays editable.
+    defaults: >-
+      Smooth auto-Bezier path, even speed, duration fitted to the scene.
+    automation: >-
+      Drawn strokes are simplified to a few keyframes and snapped to nearby region edges.
+    usability_check: >-
+      A first-time user makes an object travel around a window by drawing once, in under 45 s.
+  acceptance: >-
+    AS-1 and mini scene "orb-arch": drawn path snaps to the arch; reopening preserves vertices and timing.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: anim.path-to-motion
+  name: Follow a drawn or region path
+  sources:
+    - ref: S04
+      item: "Create a motion path from a mask, shape or paint path (paste path into Position)"
+      category: "Animation basics"
+      checked: false
+    - ref: "brief §4"
+      item: "a light travels around a roofline at constant speed"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Turn any mask, shape path, region outline or traced edge into a motion path so an object travels exactly along it.
+  projection_example: >-
+    A spark travels the full outline of a roofline region at an even speed, closing the loop in exactly four bars.
+  controls:
+    - { name: "Source path", type: "path", animatable: false }
+    - { name: "Duration", type: "duration", animatable: false }
+    - { name: "Even speed", type: "bool", animatable: false }
+    - { name: "Start point and direction", type: "enum(first-vertex|nearest-to-playhead|reverse)", animatable: false }
+    - { name: "Orient along path", type: "bool", animatable: false }
+  animation: >-
+    Creates position spatial keyframes from path vertices (roving in between), or a live link that follows later path edits.
+  dependencies: [shape.path, anim.motion-path, anim.roving-keyframes]
+  implementation: >-
+    Converts the path's cubic segments one-to-one to spatial keyframes (no resampling) with roving intermediate keys; the
+    live option stores a native path-follow link evaluated by the core (arc-length lookup) so the follower updates when the
+    region or path changes.
+  io: >-
+    none
+  limitations: >-
+    Baked mode does not follow later path edits; live mode is the default for region-bound shows that must re-target other
+    venues.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Travel along this edge" — select a region edge or drawn line, then pick what travels and how long it takes.
+    defaults: >-
+      Even speed on, orient along path on, duration one bar of the current tempo or 4 s.
+    automation: >-
+      Chooses the start vertex nearest the top-left, closes loops seamlessly, and re-targets when the show is bound to
+      another venue.
+    usability_check: >-
+      A first-time user sends a light around a window outline in three actions or fewer and under 30 s.
+  acceptance: >-
+    AS-1 and mini scene "roofline-spark": closed-loop travel; first and last frame positions coincide; speed even within 1%.
+  status: not-started
+  evidence: []
+
+- id: anim.auto-orient
+  name: Auto-orient along path
+  sources:
+    - ref: S04
+      item: "Auto-Orient (Orient Along Path, Orient Towards Camera)"
+      category: "Animation basics"
+      checked: false
+  artist_can: >-
+    Make a layer rotate automatically to face its direction of travel, or face the camera for 3D layers.
+  projection_example: >-
+    A comet sprite always points forwards as it follows the curved roofline.
+  controls:
+    - { name: "Auto-orient", type: "enum(off|along-path|towards-camera|towards-point-of-interest)", animatable: false }
+    - { name: "Rotation offset", type: "angle", animatable: true }
+  animation: >-
+    Adds the path tangent angle to the layer's own rotation each frame; rotation keyframes act as an offset.
+  dependencies: [anim.motion-path, proj.layer]
+  implementation: >-
+    The evaluator computes the tangent from the spatial curve derivative at t (forward-difference fallback at stationary
+    points) and composes it into the layer transform before parenting; camera orientation uses the active camera from
+    3d.camera when present.
+  io: >-
+    none
+  limitations: >-
+    At zero velocity the last valid direction is held to avoid flipping.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Point where it's going" toggle in travel recipes.
+    defaults: >-
+      On for travel and trace recipes with directional sprites.
+    automation: >-
+      Recipes set the rotation offset so the sprite's artwork faces forwards.
+    usability_check: >-
+      A user makes a travelling arrow face forwards with one toggle.
+  acceptance: >-
+    Mini scene "comet-orient": rendered sprite angle equals the path tangent within 0.5 degrees on sampled frames.
+  status: not-started
+  evidence: []
+
+- id: anim.motion-sketch
+  name: Motion Sketch
+  sources:
+    - ref: S01
+      item: "Motion Sketch (capture speed, smoothing, show wireframe/background, start capture)"
+      category: "Keyframe assistants"
+      checked: false
+  artist_can: >-
+    Record a motion path by dragging with the mouse or pen in real time, capturing both the route and the speed.
+  projection_example: >-
+    Perform a firefly's wandering path across the facade by hand while the music plays.
+  controls:
+    - { name: "Capture speed", type: "percent", animatable: false }
+    - { name: "Smoothing", type: "float", animatable: false }
+    - { name: "Show wireframe and background", type: "bool", animatable: false }
+    - { name: "Start capture", type: "action", animatable: false }
+  animation: >-
+    Writes position keyframes at every frame of the capture, optionally simplified by anim.smoother.
+  dependencies: [anim.keyframe.core, anim.motion-path]
+  implementation: >-
+    Pointer events are timestamped against the audio clock during playback, resampled to frame times in flicks and written
+    as one batch op; an optional simplification pass fits Bezier keys within an error tolerance.
+  io: >-
+    none
+  limitations: >-
+    Capture quality depends on input device rate; real-time capture requires playback at or near real time.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Perform the movement" — press record and drag while the show plays.
+    defaults: >-
+      Real-time capture speed with medium smoothing; music plays during capture.
+    automation: >-
+      Simplifies the recorded path automatically so it remains editable.
+    usability_check: >-
+      A first-time user records a hand-drawn path in one take and replays it in under 60 s.
+  acceptance: >-
+    Mini scene "firefly-sketch": captured path replays identically after reopen; under 30 keys per 10 s after smoothing.
+  status: not-started
+  evidence: []
+
+- id: anim.wiggler
+  name: Wiggler
+  sources:
+    - ref: S01
+      item: "Wiggler (apply to spatial/temporal, noise type smooth/jagged, dimensions, frequency, magnitude)"
+      category: "Keyframe assistants"
+      checked: false
+  artist_can: >-
+    Add random, editable variation between two keyframes as real keys rather than an expression.
+  projection_example: >-
+    Give a projected neon sign a nervous flicker in brightness that can then be hand-tweaked key by key.
+  controls:
+    - { name: "Apply to", type: "enum(spatial-path|temporal-graph)", animatable: false }
+    - { name: "Noise type", type: "enum(smooth|jagged)", animatable: false }
+    - { name: "Dimension", type: "enum(one|all-independently|all-same)", animatable: false }
+    - { name: "Frequency (per second)", type: "float", animatable: false }
+    - { name: "Magnitude", type: "float", animatable: false }
+    - { name: "Seed", type: "seed", animatable: false }
+  animation: >-
+    Generates keyframes between the first and last selected keys; the result is ordinary editable keyframes.
+  dependencies: [anim.keyframe.core, expr.stable-random]
+  implementation: >-
+    Uses the core stateless seeded RNG (seed, property path, key index) to generate offsets, so re-running with the same seed
+    reproduces identical keys; the batch insert is one op.
+  io: >-
+    none
+  limitations: >-
+    For continuous, retimable noise prefer the wiggle expression (expr.wiggle-noise); Wiggler output is static keys.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Add some shake" → More controls → "Make it keyframes"; the default route uses expr.wiggle-noise.
+    defaults: >-
+      Smooth noise, 5 per second, magnitude 10% of the property range, seed taken from the layer.
+    automation: >-
+      Chooses magnitude relative to the property range so results are visible but not extreme.
+    usability_check: >-
+      A user adds a flicker to brightness and then edits one generated key in under 60 s.
+  acceptance: >-
+    AS-3 and mini scene "neon-flicker": same seed regenerates identical keys; reopen reproduces values exactly.
+  status: not-started
+  evidence: []
+
+- id: anim.smoother
+  name: Smoother
+  sources:
+    - ref: S01
+      item: "Smoother (apply to spatial/temporal, tolerance)"
+      category: "Keyframe assistants"
+      checked: false
+  artist_can: >-
+    Reduce a dense run of keyframes (from motion sketch, tracking or audio conversion) to fewer, smoother keys within a tolerance.
+  projection_example: >-
+    Clean up a hand-performed light path so it glides instead of jittering across the bricks.
+  controls:
+    - { name: "Apply to", type: "enum(spatial-path|temporal-graph)", animatable: false }
+    - { name: "Tolerance", type: "float", animatable: false }
+  animation: >-
+    Replaces selected keys with a fitted Bezier set; result is ordinary editable keyframes.
+  dependencies: [anim.keyframe.core, anim.motion-path]
+  implementation: >-
+    Schneider-style least-squares cubic curve fitting with corner detection over the selected key samples, emitted as one
+    replace-keys op; tolerance is in property units and preview updates live before commit.
+  io: >-
+    none
+  limitations: >-
+    Smoothing can soften intentional sharp accents; the original keys stay recoverable through undo only.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Smooth it out" slider on recorded, tracked or audio-generated animation.
+    defaults: >-
+      Tolerance chosen so the key count drops by about 80% with visually similar motion.
+    automation: >-
+      Offered automatically after Motion Sketch and audio-to-keyframe conversion.
+    usability_check: >-
+      A user smooths a jittery recorded path with one slider in under 20 s.
+  acceptance: >-
+    Mini scene "jitter-clean": max deviation from original samples stays within the set tolerance on all frames.
+  status: not-started
+  evidence: []
+
+- id: anim.exponential-scale
+  name: Exponential scale
+  sources:
+    - ref: S01
+      item: "Exponential Scale (keyframe assistant)"
+      category: "Keyframe assistants"
+      checked: false
+  artist_can: >-
+    Make a large zoom feel constant in speed by converting linear scale keys into an exponential curve.
+  projection_example: >-
+    A zoom from a single brick to the whole facade feels steady rather than slowing to a crawl at the end.
+  controls:
+    - { name: "Convert selected scale keys", type: "action", animatable: false }
+    - { name: "Mode", type: "enum(baked-keys|native-exponential-curve)", animatable: false }
+  animation: >-
+    Applies between two scale keyframes; baked mode writes per-frame keys, native mode stores one exponential segment.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    Native exponential (log-space) interpolation kernel in the evaluator for scale-type properties, avoiding per-frame key
+    clutter; baked mode is offered for AE parity and export to other tools.
+  io: >-
+    Native exponential segments bake to per-frame keys if exported to formats without the curve type.
+  limitations: >-
+    Defined only for positive scale values; zero or negative endpoints fall back to linear with a note.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Even zoom" checkbox on any zoom animation.
+    defaults: >-
+      On for "Zoom into" recipes.
+    automation: >-
+      Zoom recipes pick exponential interpolation automatically when the scale ratio exceeds 4x.
+    usability_check: >-
+      A user fixes a zoom that slows at the end with one checkbox.
+  acceptance: >-
+    Mini scene "brick-to-facade": log(scale) is linear in time within 0.5%.
+  status: not-started
+  evidence: []
+
+- id: anim.sequence-layers
+  name: Sequence layers
+  sources:
+    - ref: S01
+      item: "Sequence Layers (overlap, duration, transition: off / dissolve front layer / cross dissolve)"
+      category: "Keyframe assistants"
+      checked: false
+    - ref: "brief §4"
+      item: "one architectural section follows another with a controlled delay"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Arrange selected layers one after another in time, with optional overlap and automatic dissolve transitions.
+  projection_example: >-
+    Twelve window layers light up one after another, each starting 0.25 s after the previous.
+  controls:
+    - { name: "Order", type: "enum(selection|layer-order|left-to-right|top-to-bottom|random)", animatable: false }
+    - { name: "Overlap / delay", type: "duration", animatable: false }
+    - { name: "Transition", type: "enum(off|dissolve-front|cross-dissolve)", animatable: false }
+    - { name: "Random order seed", type: "seed", animatable: false }
+  animation: >-
+    Moves layer start times (not trims) and optionally writes opacity keys for dissolves.
+  dependencies: [proj.layer-trim, anim.keyframe.core, expr.stable-random]
+  implementation: >-
+    One batch op shifting layer in/out points in flicks by index times the delay; spatial orders sort by layer bounds
+    centroids in composition space; random order uses the seeded RNG so it is reproducible.
+  io: >-
+    none
+  limitations: >-
+    Produces static offsets; for an editable rule that updates when layers are added use tool.sequence-light-up or an
+    index-driven rig (expr.index-rig).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "One after another" on a multi-selection, with order (left to right, top to bottom, random) and delay.
+    defaults: >-
+      Left-to-right order, 0.25 s delay, no transition.
+    automation: >-
+      Sorts by on-canvas position and previews the order with numbered badges before committing.
+    usability_check: >-
+      A first-time user staggers ten selected windows left to right in three actions or fewer.
+  acceptance: >-
+    Mini scene "window-stagger": start times differ by exactly the delay in the chosen order; random order is identical after reopen.
+  status: not-started
+  evidence: []
+
+- id: anim.settle-bounce
+  name: Snap open and settle
+  sources:
+    - ref: "brief §4"
+      item: "panels snap open then settle"
+      category: "Animation engine and graph editor"
+      checked: true
+    - ref: S04
+      item: "Overshoot via Bezier handles and keyframes"
+      category: "Keyframe interpolation"
+      checked: false
+  artist_can: >-
+    Make any motion overshoot its target and settle with a controllable bounce, as editable keyframes rather than a hidden effect.
+  projection_example: >-
+    Facade panels snap open, overshoot slightly and settle like heavy hinged shutters.
+  controls:
+    - { name: "Bounciness", type: "percent", animatable: false }
+    - { name: "Number of bounces", type: "int", animatable: false }
+    - { name: "Settle time", type: "duration", animatable: false }
+    - { name: "Style", type: "enum(spring|bounce-floor|elastic)", animatable: false }
+  animation: >-
+    Writes overshoot and settle keyframes after the target key (bounce-floor never passes the target); keys remain editable
+    and are owned by the recipe instance.
+  dependencies: [anim.easy-ease, anim.interp.bezier, ux.recipe-engine]
+  implementation: >-
+    A recipe step that samples a damped-spring (or bounce) solution analytically and fits a minimal set of Bezier keyframes
+    to it; regenerating after parameter changes merges with any user-edited keys tracked as overrides (proj.recipe-override).
+  io: >-
+    none
+  limitations: >-
+    Keyframe-based, so it does not react to later value changes made by expressions; an expression-based inertia variant
+    is available through expr.rigs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make it bounce" / "Snap and settle" on any selected animation.
+    defaults: >-
+      Spring style, 15% overshoot, two bounces, settle in 0.6 s.
+    automation: >-
+      Scales overshoot to the size of the move and fits keys so the graph stays tidy.
+    usability_check: >-
+      A first-time user makes a panel snap open and settle in three actions or fewer and under 30 s.
+  acceptance: >-
+    Mini scene "shutter-settle": overshoot peak equals the set percentage within 1%; edited key survives a bounciness change.
+  status: not-started
+  evidence: []
+
+- id: anim.follow-delay
+  name: Follow with a delay
+  sources:
+    - ref: "brief §4"
+      item: "one architectural section follows another with a controlled delay"
+      category: "Animation engine and graph editor"
+      checked: true
+    - ref: S06
+      item: "valueAtTime-based offsets"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Make one element repeat another element's animation after a set delay, staying linked when the leader's animation changes.
+  projection_example: >-
+    The second column section copies the first column's lift 0.3 s later, and the third 0.6 s later, so a wave rolls across.
+  controls:
+    - { name: "Leader", type: "property-ref", animatable: false }
+    - { name: "Delay", type: "duration", animatable: true }
+    - { name: "Strength / mix", type: "percent", animatable: true }
+    - { name: "Offset value", type: "float", animatable: true }
+  animation: >-
+    The follower evaluates the leader at (t - delay); delay can be multiplied by index for chains.
+  dependencies: [expr.value-at-time, ux.recipe-engine]
+  implementation: >-
+    A native link type in the core evaluator (property link with time offset, mix and value offset) that needs no script
+    execution; "Show as expression" reveals the equivalent valueAtTime expression for editing. Cycle detection shares the
+    expression dependency graph.
+  io: >-
+    none
+  limitations: >-
+    Delayed links read the leader's evaluated value, so a stateful simulation leader must be cached for random-access time.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Follow this, a little later" — pick a leader, set the delay.
+    defaults: >-
+      0.25 s delay, full strength; multi-selection chains delays by order.
+    automation: >-
+      Chains followers automatically in on-canvas order when several are selected.
+    usability_check: >-
+      A first-time user makes three sections follow one leader in a rolling wave in under 60 s.
+  acceptance: >-
+    AS-1 and mini scene "column-wave": follower value at t equals leader value at t minus delay on every frame.
+  status: not-started
+  evidence: []
+
+- id: anim.loop
+  name: Loop and cycle animation
+  sources:
+    - ref: "brief §4"
+      item: "loops"
+      category: "Animation engine and graph editor"
+      checked: true
+    - ref: S06
+      item: "loopIn / loopOut (cycle, pingpong, offset, continue)"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Repeat keyframed animation before or after its keys as a cycle, ping-pong, accumulating offset or continued motion,
+    without writing an expression.
+  projection_example: >-
+    A three-second shimmer on each window loops seamlessly for the whole six-minute show.
+  controls:
+    - { name: "After last key", type: "enum(none|cycle|ping-pong|offset|continue)", animatable: false }
+    - { name: "Before first key", type: "enum(none|cycle|ping-pong|offset|continue)", animatable: false }
+    - { name: "Loop the last N keys", type: "int", animatable: false }
+  animation: >-
+    Extends the keyframe evaluation outside the keyed range; applies to any interpolable property.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    Native pre/post-infinity modes in the core evaluator using exact flick modulo arithmetic, so loops never drift over long
+    shows; loopIn/loopOut expressions (expr.time-loops) compile to the same evaluator path.
+  io: >-
+    Exports to formats without loop modes bake keys over the layer duration.
+  limitations: >-
+    Loops whose duration is not a whole number of frames repeat exactly in time but sample different sub-frame phases.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Repeat" toggle on any animation, with "Back and forth" and "Keep going" options.
+    defaults: >-
+      Cycle after the last key.
+    automation: >-
+      Recipes make loopable animations whose first and last keys match, so the loop is seamless.
+    usability_check: >-
+      A first-time user makes an animation repeat for the rest of the show with one action.
+  acceptance: >-
+    Mini scene "shimmer-loop": value at t equals value at t plus period for 1000 sampled frames over six minutes.
+  status: not-started
+  evidence: []
+
+- id: anim.time-stretch
+  name: Time stretch
+  sources:
+    - ref: S05
+      item: "Time Stretch (stretch factor, new duration, hold in place: layer in-point / current frame / layer out-point)"
+      category: "Time stretching and time remapping"
+      checked: false
+    - ref: "brief §4"
+      item: "retiming"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Play a whole layer (footage, nested composition, and its keyframes) faster or slower by a constant factor.
+  projection_example: >-
+    Slow a stock water clip to 150% duration so ripples across the wall feel heavier.
+  controls:
+    - { name: "Stretch factor", type: "percent", animatable: false }
+    - { name: "New duration", type: "duration", animatable: false }
+    - { name: "Hold in place", type: "enum(in-point|current-frame|out-point)", animatable: false }
+  animation: >-
+    Layer keyframes stretch with the layer; for a variable speed use anim.time-remap.
+  dependencies: [proj.layer, anim.time-model]
+  implementation: >-
+    Stored as an exact rational on the layer; source time = (comp time - start) / factor in flicks, and an op updates
+    in/out points and keyframe times together so undo is exact.
+  io: >-
+    Audio on stretched layers is resampled without pitch correction unless audio settings say otherwise (audio.track).
+  limitations: >-
+    Footage slowed below its frame rate repeats frames unless anim.frame-blending or anim.pixel-motion is enabled.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Speed" control on any clip: slower / faster with a percentage.
+    defaults: >-
+      Hold at in-point; frame blending turned on automatically when slowed below 80%.
+    automation: >-
+      Suggests frame blending when slowing footage and explains the trade-off.
+    usability_check: >-
+      A first-time user plays a clip at half speed in two actions or fewer.
+  acceptance: >-
+    Mini scene "slow-water": 200% stretch; frame N of output shows source frame N/2 as specified.
+  status: not-started
+  evidence: []
+
+- id: anim.time-reverse-layer
+  name: Reverse layer playback
+  sources:
+    - ref: S05
+      item: "Time-Reverse Layer"
+      category: "Time stretching and time remapping"
+      checked: false
+    - ref: "brief §4"
+      item: "reverse playback"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Play footage or a nested composition backwards, including expression-driven and simulated content inside it.
+  projection_example: >-
+    Reverse a nested collapse composition so fragments fly back into place and the facade rebuilds.
+  controls:
+    - { name: "Reverse", type: "action", animatable: false }
+  animation: >-
+    Implemented as a stretch factor of -100%; layer keyframes are reversed too, as in AE.
+  dependencies: [anim.time-stretch]
+  implementation: >-
+    Negative rational stretch in the layer time mapping; stateful content (particles, physics) inside a reversed nest is
+    served from its checkpointed cache (preview.cache) so random-access backwards evaluation is exact.
+  io: >-
+    Reversed long-GOP video decodes backwards through FFmpeg with GOP caching; a proxy is suggested for smooth preview.
+  limitations: >-
+    Reversed simulations require a completed cache; until then preview shows a progress note instead of wrong frames.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Play it backwards" on a clip or scene.
+    defaults: >-
+      Keeps the layer's position in the timeline.
+    automation: >-
+      Builds the needed cache and proxy in the background.
+    usability_check: >-
+      A first-time user reverses a scene with one action and sees it play backwards within 5 s on supplied assets.
+  acceptance: >-
+    AS-3 and mini scene "rebuild-reverse": reversed nested simulation frame N equals forward frame (end - N).
+  status: not-started
+  evidence: []
+
+- id: anim.freeze-frame
+  name: Freeze frame
+  sources:
+    - ref: S05
+      item: "Freeze Frame (Layer > Time > Freeze Frame); Freeze on Last Frame"
+      category: "Time stretching and time remapping"
+      checked: false
+    - ref: "brief §4"
+      item: "freeze frames"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Hold a layer on one frame, or extend a clip by holding its last frame.
+  projection_example: >-
+    Freeze the cracked-wall frame for two bars while the music breaks down.
+  controls:
+    - { name: "Freeze at", type: "time", animatable: false }
+    - { name: "Mode", type: "enum(freeze-at-current|freeze-on-last-frame)", animatable: false }
+  animation: >-
+    Implemented with a hold time-remap keyframe, so it can later be animated like any remap.
+  dependencies: [anim.time-remap]
+  implementation: >-
+    An op that enables time remapping with a single hold keyframe (or a hold after the last source frame); no separate
+    data model.
+  io: >-
+    none
+  limitations: >-
+    Freezing a simulated layer requires its cache at that frame.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Hold this moment" at the playhead.
+    defaults: >-
+      Freeze at the current frame for the rest of the layer.
+    automation: >-
+      Extends the layer out-point when holding the last frame.
+    usability_check: >-
+      A first-time user freezes a clip on the current frame in one action.
+  acceptance: >-
+    Mini scene "crack-hold": frames across the freeze span are bit-identical.
+  status: not-started
+  evidence: []
+
+- id: anim.time-remap
+  name: Time remapping
+  sources:
+    - ref: S05
+      item: "Time Remapping (Enable Time Remapping, Time Remap keyframes, graph editing)"
+      category: "Time stretching and time remapping"
+      checked: false
+    - ref: "brief §4"
+      item: "speed ramps; time-remapped nested scenes behave consistently during scrubbing and export"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Animate which source frame a layer shows at each moment, for speed ramps, holds, reverses and loops within one layer.
+  projection_example: >-
+    A nested facade-collapse scene ramps into slow motion at the impact and snaps back to full speed for the rebuild.
+  controls:
+    - { name: "Enable time remap", type: "bool", animatable: false }
+    - { name: "Time remap (source time)", type: "time", animatable: true }
+    - { name: "Speed ramp preset", type: "enum(none|slow-in|slow-out|slow-middle|reverse)", animatable: false }
+  animation: >-
+    The source-time property is keyframed and expression-capable and is edited in the value or speed graph like any property.
+  dependencies: [anim.keyframe.core, anim.graph.value, proj.layer]
+  implementation: >-
+    Source time is a flick-valued property evaluated by the core; nested compositions are evaluated at the remapped
+    arbitrary flick time (not frame-quantized) with the same evaluator in preview and export, so scrubbing and rendering
+    match. Footage is sampled per the frame-quantization policy unless frame blending is on.
+  io: >-
+    Audio follows remapped time; varispeed audio is rendered by the offline mixdown so export matches preview.
+  limitations: >-
+    Stateful simulations inside a remapped nest require a cache; remapping beyond the source duration holds the last frame.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Speed ramp" — drag a speed curve under the clip, or pick "Slow motion here" at the playhead.
+    defaults: >-
+      Slow-middle ramp to 25% speed around the playhead, frame blending on.
+    automation: >-
+      Creates the remap keys and eases them; turns on frame blending and caching where needed.
+    usability_check: >-
+      A first-time user adds a slow-motion moment to a scene in under 60 s.
+  acceptance: >-
+    AS-3 and mini scene "impact-ramp": remapped nested scene; scrub, preview and export frames are hash-identical.
+  status: not-started
+  evidence: []
+
+- id: anim.frame-blending
+  name: Frame blending (frame mix)
+  sources:
+    - ref: S05
+      item: "Frame blending: Frame Mix"
+      category: "Time stretching and time remapping"
+      checked: false
+    - ref: "brief §4"
+      item: "frame blending"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Smooth slowed or frame-rate-converted footage by cross-fading neighbouring source frames.
+  projection_example: >-
+    A 24 fps flame clip conformed into a 60 fps show avoids visible judder on a large wall.
+  controls:
+    - { name: "Frame blending", type: "enum(off|frame-mix|pixel-motion)", animatable: false }
+    - { name: "Composition frame blending enabled", type: "bool", animatable: false }
+  animation: >-
+    Not animatable; applies wherever source time falls between source frames.
+  dependencies: [proj.layer, anim.time-model]
+  implementation: >-
+    WGSL pass mixing the two nearest decoded frames in scene-linear premultiplied space, weighted by the exact fractional
+    source position from flick arithmetic; declares a temporal dependency on frames n and n+1.
+  io: >-
+    none
+  limitations: >-
+    Produces ghosting on fast motion; pixel motion (anim.pixel-motion) reduces this at a computation cost.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Smooth slow motion" toggle on retimed clips.
+    defaults: >-
+      Frame mix on automatically when a clip is slowed or its rate does not divide the show rate.
+    automation: >-
+      Turns on when needed and explains the ghosting trade-off in one line.
+    usability_check: >-
+      A user turns smoothing on and off and sees the difference within one preview of the clip.
+  acceptance: >-
+    Mini scene "flame-conform": blended frame equals the analytic weighted mix of source frames within 1/1024.
+  status: not-started
+  evidence: []
+
+- id: anim.pixel-motion
+  name: Pixel motion (motion-estimated interpolation)
+  sources:
+    - ref: S05
+      item: "Frame blending: Pixel Motion"
+      category: "Time stretching and time remapping"
+      checked: false
+    - ref: "brief §4"
+      item: "motion-estimated interpolation where appropriate"
+      category: "Animation engine and graph editor"
+      checked: true
+  artist_can: >-
+    Create new in-between frames by estimating motion, for smoother slow motion than frame mixing.
+  projection_example: >-
+    Slow drone footage of waves to 25% speed for a flowing-water facade without ghosting.
+  controls:
+    - { name: "Quality", type: "enum(draft|best)", animatable: false }
+    - { name: "Vector detail", type: "percent", animatable: false }
+  animation: >-
+    Not animatable; applies wherever source time falls between frames.
+  dependencies: [anim.frame-blending, preview.cache]
+  implementation: >-
+    Optical flow computed by the vision sidecar (OpenCV DIS optical flow, optional RAFT on CUDA), cached per source frame
+    pair on disk; the WGSL warp-and-blend pass consumes the flow fields so preview and export use identical cached vectors.
+  io: >-
+    Flow caches are derived data stored in the project cache folder and regenerated if missing.
+  limitations: >-
+    Occlusions and thin structures can tear; the comparison view helps choose frame mix instead. Requires the Python sidecar.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Smooth slow motion" → More controls → "Best (motion-estimated)".
+    defaults: >-
+      Draft quality in preview, best in export only after the user approves a sample frame.
+    automation: >-
+      Computes flow in the background and shows progress; falls back to frame mix while it runs.
+    usability_check: >-
+      A user switches a slowed clip to motion-estimated smoothing and compares it with frame mix in under 60 s.
+  acceptance: >-
+    Mini scene "wave-slowmo": interpolated frames' error against held-out real frames is lower than frame mix.
+  status: not-started
+  evidence: []
+
+- id: anim.motion-blur
+  name: Layer motion blur
+  sources:
+    - ref: S01
+      item: "Motion blur switch; Composition Settings shutter angle, shutter phase, samples per frame, adaptive sample limit"
+      category: "Animation basics"
+      checked: false
+  artist_can: >-
+    Blur fast-moving layers in the direction of motion, with control over shutter angle and quality.
+  projection_example: >-
+    Fragments of a collapsing wall streak naturally instead of strobing on a 60 Hz projector.
+  controls:
+    - { name: "Motion blur (per layer)", type: "bool", animatable: false }
+    - { name: "Enable for composition", type: "bool", animatable: false }
+    - { name: "Shutter angle", type: "angle", animatable: false }
+    - { name: "Shutter phase", type: "angle", animatable: false }
+    - { name: "Samples per frame", type: "int", animatable: false }
+    - { name: "Adaptive sample limit", type: "int", animatable: false }
+  animation: >-
+    Uses sub-frame evaluation of transforms, masks, shapes and effects within the shutter interval.
+  dependencies: [proj.layer, proj.composition, anim.time-model]
+  implementation: >-
+    Multi-sample temporal supersampling: the compositor evaluates the layer at exact sub-frame flick times across the
+    shutter interval and accumulates in rgba16float; adaptive sample count from screen-space motion; 3D-scene blur is
+    handled by the 3D renderer (3d.scene).
+  io: >-
+    none
+  limitations: >-
+    Costs one evaluation per sample; preview may use fewer samples and labels the compromise as required by brief §18.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects keyframe or time-tool parity detail that no projection workflow needs now. Basic keyframes, easing, graph editing, looping and time stretch stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Natural motion blur" toggle; on automatically in fast-motion recipes.
+    defaults: >-
+      180-degree shutter, -90-degree phase, 16 samples, adaptive limit 128.
+    automation: >-
+      Recipes for fast movement enable blur; preview uses reduced samples with a visible "draft blur" badge.
+    usability_check: >-
+      A user turns on motion blur for a fast move with one toggle and sees it in preview within 2 s.
+  acceptance: >-
+    AS-3 and mini scene "fragment-streaks": export blur matches the reference accumulation at 64 samples within tolerance.
+  status: not-started
+  evidence: []
+
+- id: anim.keyframe-lanes
+  name: Keyframe lanes under each timeline clip
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Timeline editing with keyframe lanes"
+      category: "Timeline editing"
+      checked: true
+  artist_can: >-
+    Expand any clip on the timeline to see lanes for the properties that are animated (position, scale, opacity,
+    effect settings). Add, move, copy and delete keyframes right on the lane, with beats and markers visible behind
+    them.
+  projection_example: >-
+    Open the glow clip, drag its opacity keyframes to land on the snare hits and copy the pair to the next bar.
+  controls:
+    - { name: "Show animated properties only", type: "bool", animatable: false }
+    - { name: "Lane keyframe edit (add, move, copy, delete)", type: "action", animatable: false }
+    - { name: "Interpolation icon per key", type: "enum", animatable: false }
+  animation: >-
+    Every lane edit is a keyframe operation on the property.
+  dependencies: [anim.keyframe.core, anim.keyframe-copy-paste, anim.keyframe-time-scale, proj.layer, audio.beat-markers, proj.snapping]
+  implementation: >-
+    Timeline rows expand into per-property lanes, collapsed to animated properties by default. Drags emit coalesced
+    keyframe operations (one undo step per gesture). Keys snap to beats, markers and the playhead. Double-clicking a
+    lane opens the curve editor on that property (anim.curve-editing-progressive).
+  io: >-
+    None.
+  limitations: >-
+    Non-numeric properties show key markers only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Click the arrow beside a clip to see its animation, then drag the diamonds.
+    defaults: >-
+      Only animated properties are shown, with beats as faint lines.
+    automation: >-
+      Snaps keys to beats and reports timing.
+    usability_check: >-
+      A first-time user moves a keyframe onto a beat in under 15 s.
+  acceptance: >-
+    Mini scene "lane-edit": keyframes edited on lanes for position and opacity; undo and export agree.
+  status: not-started
+  evidence: []
+
+- id: anim.easing-presets
+  name: Easing preset library
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Easing presets"
+      category: "Timeline editing"
+      checked: true
+  artist_can: >-
+    Apply a named easing to a keyframe or a whole segment from a visual library (gentle, snappy, heavy, back, bounce,
+    elastic), and save your own favourites.
+  projection_example: >-
+    The collapsing panel uses "Heavy in" and the rebuild uses "Snappy out".
+  controls:
+    - { name: "Preset (steady, gentle, snappy, heavy, sine, quad, cubic, expo, back, elastic, bounce)", type: "enum", animatable: false }
+    - { name: "Direction (in, out, in-out)", type: "enum", animatable: false }
+    - { name: "Apply to (key, segment, selection)", type: "enum", animatable: false }
+    - { name: "Save as favourite", type: "action", animatable: false }
+  animation: >-
+    Presets write ordinary Bezier handles, or a sampled curve for bounce and elastic.
+  dependencies: [anim.easy-ease, anim.interp.bezier, anim.graph-editor, anim.keyframe.core, expr.presets]
+  implementation: >-
+    A preset table of cubic-Bezier handles (and baked sample sets for bounce and elastic) applied by an operation to
+    the chosen keys. Animated thumbnails come from the same evaluator. The shared timing picker of the recipe engine
+    uses the same table.
+  io: >-
+    Favourites are stored in user presets.
+  limitations: >-
+    Sampled bounce and elastic are editable only as keyframes, not as handles.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Right-click keyframes: Easing, then pick a thumbnail.
+    defaults: >-
+      Gentle in and out.
+    automation: >-
+      Shows each curve animated on the actual property before applying.
+    usability_check: >-
+      A first-time user changes the feel of a motion in under 15 s.
+  acceptance: >-
+    Mini scene "easing-library": presets on position, scale and opacity; preview and export match.
+  status: not-started
+  evidence: []
+
+- id: anim.curve-editing-progressive
+  name: Progressive curve editing
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Progressive curve editing"
+      category: "Timeline editing"
+      checked: true
+  artist_can: >-
+    Edit a motion at the level you need: pick an easing, then drag two handles on a small curve, then open the full
+    graph editor for fine control, without ever having to leave the animation you are editing.
+  projection_example: >-
+    Soften the start of a slide with the preset, tweak the overshoot with two handles, and finally reshape the speed
+    curve against the beat markers.
+  controls:
+    - { name: "Easing preset", type: "enum", animatable: false }
+    - { name: "Mini curve handles", type: "bezier handles", animatable: true }
+    - { name: "Open in graph editor", type: "action", animatable: false }
+  animation: >-
+    All three levels edit the same keyframe handles.
+  dependencies: [anim.easing-presets, anim.easy-ease, anim.graph-editor, anim.interp.bezier, anim.interp.auto-bezier, anim.keyframe-lanes]
+  implementation: >-
+    Three views over the same keyframe data: preset picker, inline mini curve in the inspector or lane, and the full
+    graph editor (anim.graph-editor). Each emits the same keyframe-edit operations, so changes in one are visible in
+    the others.
+  io: >-
+    None.
+  limitations: >-
+    Expression-driven properties show the evaluated curve as read-only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Edit animation" shows the easing picker first, then "Fine tune", then "Curves".
+    defaults: >-
+      Opens at the simplest level that matches the animation.
+    automation: >-
+      Keeps all levels consistent and returns to presets when a curve still matches one.
+    usability_check: >-
+      A first-time user goes from a preset to a hand-tuned curve without losing their place.
+  acceptance: >-
+    Mini scene "curve-levels": the same animation edited at each level; values match in the graph editor.
+  status: not-started
+  evidence: []

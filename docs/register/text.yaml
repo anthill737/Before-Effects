@@ -1,0 +1,1401 @@
+# Text and typography — Before Effects capability register
+# Sources: S09 (text animation), S01 (user guide: text layers, Character/Paragraph panels, fonts), S10 (Advanced 3D extruded text), brief §8. Adobe helpx pages returned HTTP 403 on 2026-10-01; Adobe items authored from knowledge (checked: false).
+
+- id: text.layer
+  name: Text layer and point text
+  sources:
+    - ref: S01
+      item: "Text layers; point text; Horizontal Type tool"
+      category: "Creating and editing text layers"
+      checked: false
+    - ref: "brief §8"
+      item: "editable typography"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Type directly on the canvas to create a live text layer that stays editable, stays sharp at any size,
+    and can be restyled, retimed and animated without re-rendering anything by hand.
+  projection_example: >-
+    Type the venue name across the cornice and fix a spelling mistake minutes before the show without
+    redoing its fly-in animation.
+  controls:
+    - { name: "Source text", type: "string", animatable: true }
+    - { name: "Text type", type: "enum(point|paragraph)", animatable: false }
+    - { name: "Anchor point grouping", type: "enum(character|word|line|all)", animatable: false }
+    - { name: "Grouping alignment", type: "point2d", animatable: true }
+    - { name: "Fill and stroke order", type: "enum(per-character|all-fills-over-strokes|all-strokes-over-fills)", animatable: false }
+    - { name: "Inter-character blending", type: "enum(normal|add|screen|multiply|overlay)", animatable: false }
+  animation: >-
+    Source Text takes hold keyframes (text.source-text-animation); grouping alignment and every layer
+    transform are keyframable and expression-linkable; per-glyph motion comes from animators (text.animator).
+  dependencies: [proj.layer, anim.keyframe.core, text.fonts, ux.operation-system]
+  implementation: >-
+    Text document (runs of characters plus style attributes) stored in the versioned project model and edited
+    only through typed ops (insert/delete/restyle range) so undo works per keystroke batch. Layout is a pure
+    core-TS function of (document, font hashes, time): HarfBuzz (harfbuzzjs) shaping produces glyph records whose
+    outlines become CanvasKit paths, rasterized on the GPU at render resolution.
+  io: >-
+    Saved as structured text plus font descriptors (PostScript name, file hash, axes); plain text can be pasted
+    in and copied out. Fonts are bundled by proj.collect-files.
+  limitations: >-
+    Layout will not be glyph-for-glyph identical to After Effects; line breaks may differ where engines differ.
+    Live on-canvas editing of very long paragraphs is bounded by per-keystroke relayout cost.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Add words" — click on the canvas or a region and start typing; the text appears in the preview at once.
+    defaults: >-
+      Bold, legible sans font at a size of roughly one tenth of the target region's height, white fill,
+      centered on the clicked point or region.
+    automation: >-
+      Sizes and centers new text to the selected region, picks a contrasting color against the surface
+      preview, and bundles the chosen font into the project.
+    usability_check: >-
+      A first-time user adds a two-word title to a selected wall and corrects a typo in under 45 s without
+      opening the inspector.
+  acceptance: >-
+    Mini scene "facade-title": a title typed on a wall region is edited, saved, reopened and exported; export
+    matches preview and text edges stay sharp at output resolution.
+  status: prototype
+  evidence:
+    - "journey: text-on-window (text added to a window and edited; font, size, colour, fades). Per-character animators, paragraph boxes and font substitution reports are not built yet."
+
+- id: text.paragraph
+  name: Paragraph text and paragraph layout
+  sources:
+    - ref: S01
+      item: "Paragraph text; Paragraph panel (alignment, indents, spacing, hyphenation, composers)"
+      category: "Formatting paragraphs and the Paragraph panel"
+      checked: false
+    - ref: "brief §8"
+      item: "paragraph layout"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Drag a text box and let the words wrap inside it, with alignment, justification, indents, paragraph
+    spacing and hyphenation controls; convert between point text and box text at any time.
+  projection_example: >-
+    Fit a short dedication paragraph into the rectangular panel above a doorway so it wraps cleanly to the
+    panel width.
+  controls:
+    - { name: "Alignment", type: "enum(left|center|right|justify-last-left|justify-last-center|justify-last-right|justify-all)", animatable: false }
+    - { name: "Text box size", type: "size2d", animatable: false }
+    - { name: "Indent left / right / first line", type: "float", animatable: false }
+    - { name: "Space before / after paragraph", type: "float", animatable: false }
+    - { name: "Hyphenation", type: "bool", animatable: false }
+    - { name: "Composer", type: "enum(single-line|every-line)", animatable: false }
+    - { name: "Fit text to box", type: "enum(off|shrink-to-fit|grow-and-shrink)", animatable: false }
+  animation: >-
+    Paragraph settings change through Source Text hold keyframes; line spacing and per-line motion are animated
+    with animators (text.anim.spacing, text.anim.transform).
+  dependencies: [text.layer, text.character-formatting]
+  implementation: >-
+    Core-TS line breaker using UAX #14 break opportunities, greedy for the single-line composer and a
+    Knuth-Plass-style optimal fit for the every-line composer; hyphenation from TeX pattern dictionaries.
+    Lines are shaped with HarfBuzz and justified by distributing word and letter spacing within limits.
+  io: >-
+    Box geometry and paragraph attributes saved in the text document; point/box conversion is a lossless op.
+  limitations: >-
+    Line breaks can differ from After Effects for the same text. Fit-to-box is a product addition and is
+    evaluated per frame only when the text changes.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Fill this panel with text" — select a region and type; the text wraps to the region's shape bounds.
+    defaults: >-
+      Box sized to the selected region with a small inner margin, centered alignment, shrink-to-fit on.
+    automation: >-
+      Creates the box from the region bounds and shrinks the font size so the paragraph never overflows,
+      flagging any overflow it cannot resolve.
+    usability_check: >-
+      A first-time user fits a 25-word paragraph inside a selected panel with no overflow in under 60 s.
+  acceptance: >-
+    Mini scene "door-dedication": paragraph wraps inside a region, survives save/reopen with identical line
+    breaks, and exports sharp.
+  status: not-started
+  evidence: []
+
+- id: text.character-formatting
+  name: Character formatting (size, tracking, kerning, leading, baseline)
+  sources:
+    - ref: S01
+      item: "Character panel (font size, leading, kerning, tracking, baseline shift, scale, tsume, faux styles, caps)"
+      category: "Formatting characters and the Character panel"
+      checked: false
+    - ref: "brief §8"
+      item: "character spacing"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Set font size, letter spacing, kerning, line spacing, baseline shift, horizontal and vertical scale,
+    faux bold/italic, all caps or small caps, and superscript/subscript on any range of characters.
+  projection_example: >-
+    Open up the tracking of a title so its letters line up with the rhythm of the window bays below it.
+  controls:
+    - { name: "Font size", type: "float", animatable: false }
+    - { name: "Tracking", type: "float", animatable: false }
+    - { name: "Kerning", type: "enum(metrics|optical|manual)", animatable: false }
+    - { name: "Leading", type: "float", animatable: false }
+    - { name: "Baseline shift", type: "float", animatable: false }
+    - { name: "Horizontal / vertical scale", type: "percent", animatable: false }
+    - { name: "Tsume", type: "percent", animatable: false }
+    - { name: "Faux bold / faux italic", type: "bool", animatable: false }
+    - { name: "Caps", type: "enum(normal|all-caps|small-caps)", animatable: false }
+    - { name: "Position", type: "enum(normal|superscript|subscript)", animatable: false }
+  animation: >-
+    Panel values change via Source Text hold keyframes; smooth tracking, scale and baseline animation is done
+    with animators so a single setting can ramp over time per character.
+  dependencies: [text.layer, text.fonts]
+  implementation: >-
+    Style runs in the text document; HarfBuzz returns advances and GPOS kerning (metrics), optical kerning is
+    computed in core TS from glyph outline side-bearings; tracking, scale and baseline are applied in the layout
+    pass in font units so results are resolution-independent.
+  io: >-
+    Stored per character run; pasted rich text from other apps keeps size and font where available.
+  limitations: >-
+    Optical kerning will not match Adobe's proprietary algorithm exactly. Faux bold/italic are synthetic and
+    look worse than real bold/italic styles; the inspector suggests the real style when the family has one.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Size and spacing handles on the canvas — drag the corner to resize, drag the side to spread letters;
+      exact values under "More controls".
+    defaults: >-
+      Metrics kerning, auto leading at 120 % of size, zero tracking.
+    automation: >-
+      "Match spacing to the windows" spreads letters so their centers land on selected regions.
+    usability_check: >-
+      A first-time user widens a title's letter spacing and enlarges it by dragging in under 20 s without
+      typing a number.
+  acceptance: >-
+    Mini scene "spaced-title": tracking and size edits survive save/reopen; layout is identical in preview and
+    export.
+  status: not-started
+  evidence: []
+
+- id: text.fonts
+  name: Fonts, font browser and project font bundling
+  sources:
+    - ref: S01
+      item: "Fonts; Character panel font menu; Adobe Fonts"
+      category: "Creating and editing text layers"
+      checked: false
+    - ref: "brief §8"
+      item: "editable typography"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Browse installed and project fonts with live previews of the actual text, favorite fonts, and keep the
+    exact font files with the project so it opens and renders the same on another machine.
+  projection_example: >-
+    Pick a condensed display face for a tall narrow facade by previewing the show title in each candidate
+    directly on the wall.
+  controls:
+    - { name: "Font family", type: "font", animatable: false }
+    - { name: "Font style", type: "string", animatable: false }
+    - { name: "Bundle font with project", type: "bool", animatable: false }
+    - { name: "Favorites / recent filter", type: "enum(all|favorites|recent|in-project)", animatable: false }
+    - { name: "Preview text", type: "string", animatable: false }
+  animation: >-
+    Font changes are hold changes through Source Text keyframes.
+  dependencies: [proj.project-model, proj.asset-browser]
+  implementation: >-
+    Main process enumerates OS font directories and parses name/fvar tables (fontkit-style parser); a used font's
+    file is SHA-256 hashed and copied into the project fonts folder, and layout is keyed by that hash so preview,
+    background render and another machine shape identical glyphs. HarfBuzz faces are created from the bundled
+    bytes; WOFF/WOFF2 are decompressed on import.
+  io: >-
+    TTF, OTF (CFF and CFF2), TTC and WOFF/WOFF2 import; bundled font files travel with proj.collect-files.
+  limitations: >-
+    Adobe Fonts cloud activation is not available; the user needs font files. Legacy Type 1 PostScript fonts are
+    unsupported. Some font licences restrict embedding; acceptable for personal use, but the app shows the licence
+    flag (OS/2 fsType).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Change the font" — a visual list showing the user's own words in each font, filtered by mood
+      (bold, elegant, handwritten, technical).
+    defaults: >-
+      A small curated starter set of open-licence display fonts ships with the app.
+    automation: >-
+      Bundles every used font automatically and warns only when a font cannot be bundled.
+    usability_check: >-
+      A first-time user finds and applies a handwritten-style font to a title in under 30 s.
+  acceptance: >-
+    AS-7 (collect, move, reopen on another machine) shows identical text layout with bundled fonts.
+  status: prototype
+  evidence:
+    - "journey: text-on-window (text added to a window and edited; font, size, colour, fades). Per-character animators, paragraph boxes and font substitution reports are not built yet."
+
+- id: text.variable-fonts
+  name: Variable font axes
+  sources:
+    - ref: S01
+      item: "Variable fonts (axis sliders)"
+      category: "Formatting characters and the Character panel"
+      checked: false
+    - ref: "brief §8"
+      item: "variable-font axes where the font supports them"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Adjust weight, width, slant, optical size and custom axes of variable fonts continuously, and animate them
+    over time or per character with an animator.
+  projection_example: >-
+    Letters swell from hairline to black weight in time with the bass, rippling across the word from left to
+    right.
+  controls:
+    - { name: "Axis values (wght, wdth, slnt, ital, opsz, custom)", type: "float", animatable: true }
+    - { name: "Named instance", type: "string", animatable: false }
+    - { name: "Automatic optical size", type: "bool", animatable: false }
+    - { name: "Font axis animator property", type: "float", animatable: true }
+  animation: >-
+    Axis values are keyframable at layer level and as an animator property weighted per character by selectors;
+    expression-linkable, so audio.to-keyframes or a beat signal can drive weight.
+  dependencies: [text.fonts, text.character-formatting, text.animator, anim.keyframe.core]
+  implementation: >-
+    hb_font_set_variations per glyph run; per-character axis values split runs and reshape because advances change,
+    so layout reruns per frame when axes animate. Outlines are cached by (font hash, glyph id, axis coordinates
+    quantized to 0.01) to keep scrubbing responsive.
+  io: >-
+    Axis coordinates saved by axis tag; a substituted non-variable font reports the axes it ignores.
+  limitations: >-
+    Only fonts with an fvar table qualify. Per-character axis animation is a product addition beyond After
+    Effects' character-panel axes and costs relayout every frame.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Make it breathe" / "Pulse the weight" — for variable fonts, a Weight and Width slider appears next to the
+      font; the recipe animates weight across the letters.
+    defaults: >-
+      Shows only the axes the font has, with plain names (Weight, Width, Slant) instead of tags.
+    automation: >-
+      Hides axis controls for static fonts and suggests a variable font when the user picks a weight-pulse recipe.
+    usability_check: >-
+      A first-time user makes a word pulse from thin to bold in under 60 s with at most 3 actions.
+  acceptance: >-
+    Mini scene "breathing-word": per-character weight animation renders identically in preview, export and after
+    reopen.
+  status: not-started
+  evidence: []
+
+- id: text.opentype-features
+  name: OpenType features (ligatures, alternates, numerals)
+  sources:
+    - ref: S01
+      item: "OpenType font features (ligatures, stylistic alternates, swash, fractions, numeral styles)"
+      category: "Formatting characters and the Character panel"
+      checked: false
+  artist_can: >-
+    Turn on ligatures, discretionary ligatures, stylistic sets, swashes, contextual alternates, fractions and
+    numeral styles that a font provides.
+  projection_example: >-
+    Use a script font's swash capitals and contextual alternates so a wedding-night projection title looks
+    hand-lettered rather than typed.
+  controls:
+    - { name: "Standard ligatures", type: "bool", animatable: false }
+    - { name: "Discretionary ligatures", type: "bool", animatable: false }
+    - { name: "Stylistic set", type: "enum(none|ss01|ss02|ss03|ss04|ss05|ss06|ss07|ss08|ss09|ss10|ss11|ss12|ss13|ss14|ss15|ss16|ss17|ss18|ss19|ss20)", animatable: false }
+    - { name: "Swash / stylistic alternates", type: "bool", animatable: false }
+    - { name: "Contextual alternates", type: "bool", animatable: false }
+    - { name: "Numerals", type: "enum(default|lining|oldstyle|tabular|proportional)", animatable: false }
+    - { name: "Fractions", type: "bool", animatable: false }
+  animation: >-
+    Feature changes are hold changes via Source Text keyframes.
+  dependencies: [text.fonts, text.character-formatting]
+  implementation: >-
+    Feature flags per style run passed to HarfBuzz (liga, dlig, ss01–ss20, salt, swsh, calt, lnum, onum, tnum,
+    pnum, frac); the font's GSUB table is read to list only the features it actually has.
+  io: >-
+    Feature tags stored per run.
+  limitations: >-
+    Ligatures merge characters into one glyph, so per-character animators treat the ligature as one unit;
+    the inspector warns when a selector animates characters inside a ligature.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Fancier letters" toggle in More controls, with a strip of visual previews of each alternate set.
+    defaults: >-
+      Standard ligatures and contextual alternates on, as the font designer intended.
+    automation: >-
+      Shows only features present in the chosen font, previewed on the user's own text.
+    usability_check: >-
+      A first-time user switches a script title to its swash alternates in under 30 s using the previews.
+  acceptance: >-
+    Mini scene "swash-title": selected OpenType features persist through save/reopen and render in export.
+  status: not-started
+  evidence: []
+
+- id: text.fill-stroke
+  name: Text fill and stroke
+  sources:
+    - ref: S01
+      item: "Fill and stroke for text (stroke width, stroke over fill, line join)"
+      category: "Formatting characters and the Character panel"
+      checked: false
+    - ref: "brief §8"
+      item: "fill/stroke"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Give characters a fill color, an outline stroke of any width, choose whether the stroke sits over or under
+    the fill, and choose the corner join; fill or stroke can be switched off for outline-only text.
+  projection_example: >-
+    Outline-only neon lettering on a dark brick wall, later filled in as the music builds.
+  controls:
+    - { name: "Fill color", type: "color", animatable: false }
+    - { name: "Stroke color", type: "color", animatable: false }
+    - { name: "Stroke width", type: "float", animatable: false }
+    - { name: "Stroke position", type: "enum(fill-over-stroke|stroke-over-fill)", animatable: false }
+    - { name: "Line join", type: "enum(miter|round|bevel)", animatable: false }
+    - { name: "Fill on / stroke on", type: "bool", animatable: false }
+  animation: >-
+    Base fill and stroke change via Source Text keyframes; continuous color and width animation, per character,
+    is done with text.anim.color.
+  dependencies: [text.layer, text.character-formatting]
+  implementation: >-
+    Fill rasterizes the glyph path; stroke uses CanvasKit stroke-to-path with the chosen join so it stays a
+    vector outline at any scale; both are drawn with GPU analytic AA in scene-linear premultiplied buffers.
+  io: >-
+    Colors saved in the project working color space (color.management).
+  limitations: >-
+    Gradient fills on text are achieved with mask.style.gradient-overlay or a track matte, as in After Effects,
+    not as a native text attribute.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Color and outline swatches directly in the text toolbar; "Outline only" one-click style.
+    defaults: >-
+      White fill, no stroke; adding a stroke defaults to 4 % of font size with round joins.
+    automation: >-
+      Proposes a contrasting stroke when the fill and the projected surface preview have low contrast.
+    usability_check: >-
+      A first-time user makes outline-only text in a chosen color in under 20 s.
+  acceptance: >-
+    Mini scene "neon-outline": stroke-only title renders without fringes in export with alpha.
+  status: not-started
+  evidence: []
+
+- id: text.on-path
+  name: Text on a path
+  sources:
+    - ref: S09
+      item: "Path Options (Path, Reverse Path, Perpendicular To Path, Force Alignment, First Margin, Last Margin)"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "text on paths"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Run text along any mask or shape path, reverse its direction, keep letters perpendicular to the curve,
+    force-justify between margins, and slide the text along the path over time.
+  projection_example: >-
+    A phrase travels around the curve of an arched gateway, entering at one foot of the arch and leaving at
+    the other.
+  controls:
+    - { name: "Path", type: "path", animatable: true }
+    - { name: "Reverse path", type: "bool", animatable: true }
+    - { name: "Perpendicular to path", type: "bool", animatable: true }
+    - { name: "Force alignment", type: "bool", animatable: true }
+    - { name: "First margin", type: "float", animatable: true }
+    - { name: "Last margin", type: "float", animatable: true }
+  animation: >-
+    Margins keyframable for sliding text; switches take hold keyframes; the path itself can be animated
+    (mask.path-animation) and the text follows it every frame.
+  dependencies: [text.layer, shape.path, mask.bezier]
+  implementation: >-
+    Arc-length parameterization of the path (CanvasKit ContourMeasure getPosTan); each glyph is placed at the
+    point under its advance center and rotated to the tangent when perpendicular is on; force alignment
+    distributes glyph spacing between margins in the layout pass.
+  io: >-
+    Path referenced by mask/shape ID; region edges from map.region can be copied in as paths.
+  limitations: >-
+    Glyphs stay rigid (not bent) along tight curves, as in After Effects; very tight curves can overlap letters.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Write along this edge" — click an arch, roofline or drawn line, then type; "Make it travel" slides it along.
+    defaults: >-
+      Perpendicular on, text starts at the beginning of the path, travel speed matched to the section duration.
+    automation: >-
+      Copies the selected region edge into a path on the text layer and keyframes the first margin for travel.
+    usability_check: >-
+      A first-time user makes a phrase travel around an arch in under 60 s with at most 4 actions.
+  acceptance: >-
+    AS-1 variant and mini scene "arch-ticker": text travels an arch path at constant speed in preview and export.
+  status: not-started
+  evidence: []
+
+- id: text.source-text-animation
+  name: Source Text animation (text and style changes over time)
+  sources:
+    - ref: S09
+      item: "Animating source text (Source Text keyframes)"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "editable typography"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Change what the text says, or its font and style, at chosen moments on the timeline — counters, changing
+    names, switching languages — all on one layer.
+  projection_example: >-
+    A countdown on the clock tower face switches from 10 to 0 on the beat, then changes to "HAPPY NEW YEAR".
+  controls:
+    - { name: "Source text (text + style document)", type: "string", animatable: true }
+    - { name: "Data link (CSV/JSON field or expression)", type: "property-ref", animatable: true }
+  animation: >-
+    Hold-only keyframes on Source Text; expression-driven text via expr.text-expressions; can align keyframes to
+    beat markers.
+  dependencies: [text.layer, anim.interp.hold]
+  implementation: >-
+    Source Text is a property whose value is an immutable text document; keyframes store whole documents and
+    evaluate with hold interpolation; layout results are memoized by document hash so switching back and forth
+    costs nothing.
+  io: >-
+    Text documents saved inline; data-linked text reads from expr.data-driven sources where present.
+  limitations: >-
+    No interpolation between different strings; morphing between words is done with animators or
+    text.create-shapes plus shape.path-morph.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Change the words here" — at the playhead, click the text and type the new words; a step marker appears on
+      the timeline.
+    defaults: >-
+      New text inherits the current style; changes snap to the nearest beat marker when present.
+    automation: >-
+      "Count down/up" recipe generates the numbers on each beat without manual keyframes.
+    usability_check: >-
+      A first-time user makes a word change to another word at a chosen time in under 30 s.
+  acceptance: >-
+    Mini scene "tower-countdown": source text changes land on exact frames in preview and export after reopen.
+  status: not-started
+  evidence: []
+
+- id: text.animator
+  name: Text animators
+  sources:
+    - ref: S09
+      item: "Text animator groups (Animate menu, Add property, Add selector)"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "animators and selectors operating on characters/words/lines"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Add animator groups that offset position, rotation, scale, color, spacing and other properties of selected
+    characters, words or lines, with selectors deciding which characters are affected and by how much.
+  projection_example: >-
+    The show title builds letter by letter, each letter dropping from above the parapet and settling into place,
+    all driven by one animator on one layer.
+  controls:
+    - { name: "Add property", type: "action", animatable: false }
+    - { name: "Add selector", type: "enum(range|wiggly|expression)", animatable: false }
+    - { name: "Animator enabled", type: "bool", animatable: false }
+    - { name: "Animator name", type: "string", animatable: false }
+    - { name: "Animator order", type: "action", animatable: false }
+  animation: >-
+    Animator property values and selector parameters are keyframable and expression-linkable; multiple
+    animators stack in order, each contributing a weighted offset.
+  dependencies: [text.layer, anim.keyframe.core, ux.recipe-engine]
+  implementation: >-
+    Layout yields glyph records (cluster, character/word/line index, origin, advance, outline hash). The animator
+    stage in core TS evaluates each animator's selectors to a per-glyph weight, multiplies the property offsets,
+    and composes per-glyph matrices and attributes; the GPU draws glyph outlines as instanced paths at render
+    resolution. The stage is pure and runs identically headless for export.
+  io: >-
+    Animators saved as a property group tree; reusable via text.presets and expr.presets.
+  limitations: >-
+    Thousands of glyphs each with expression selectors are costly; the profiler identifies the slow animator.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Animate the words" — choose an outcome (Drop in letter by letter, Fade up word by word, Typewriter,
+      Words across the columns) and adjust Order, Speed and Delay.
+    defaults: >-
+      One animator with a range selector keyframed over 1 s from the layer start, ease-out timing.
+    automation: >-
+      Recipes build animators, selectors and keyframes; "Edit animation" opens the generated animator with
+      recipe-owned values marked so custom edits are flagged, not overwritten (proj.recipe-override).
+    usability_check: >-
+      A first-time user makes a title appear letter by letter in at most 3 deliberate actions, under 30 s.
+  acceptance: >-
+    Mini scene "parapet-drop": one text layer, one animator; changing the text keeps the animation; preview and
+    export match after reopen and random seek.
+  status: not-started
+  evidence: []
+
+- id: text.anim.transform
+  name: Animator transform properties (anchor, position, scale, skew, rotation, opacity)
+  sources:
+    - ref: S09
+      item: "Animator properties: Anchor Point, Position, Scale, Skew, Skew Axis, Rotation, Opacity, All Transform Properties"
+      category: "Animating text"
+      checked: false
+  artist_can: >-
+    Move, scale, skew, rotate and fade individual characters, words or lines relative to their resting place.
+  projection_example: >-
+    Each word of a slogan drops onto its window sill and bounces slightly, with lower opacity before landing.
+  controls:
+    - { name: "Anchor point", type: "point3d", animatable: true }
+    - { name: "Position", type: "point3d", animatable: true }
+    - { name: "Scale", type: "percent", animatable: true }
+    - { name: "Skew", type: "float", animatable: true }
+    - { name: "Skew axis", type: "angle", animatable: true }
+    - { name: "Rotation (Z, plus X/Y with per-character 3D)", type: "angle", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+  animation: >-
+    All values keyframable and expression-linkable; the selector weights them per glyph, so usually only the
+    selector offset is keyframed.
+  dependencies: [text.animator, text.selector.range]
+  implementation: >-
+    Per-glyph 2D or 3D affine composed as anchor → scale → skew → rotation → position in the animator stage;
+    opacity multiplies the glyph's premultiplied color; bounds per glyph are expanded so motion never clips.
+  io: >-
+    none
+  limitations: >-
+    Anchor point grouping (character/word/line/all) defines the pivot; results differ from After Effects only
+    where layout differs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Drop in", "Rise up", "Spin in" and "Fade up" text recipes → More controls.
+    defaults: >-
+      Recipe-specific offsets scaled to font size (for example a drop of 2 × font size).
+    automation: >-
+      Offsets are scaled to the text's size and target region so recipes look right on any facade.
+    usability_check: >-
+      A first-time user changes a drop-in to come from the left instead of above in under 20 s.
+  acceptance: >-
+    Mini scene "sill-drop": per-word transforms render identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: text.anim.color
+  name: Animator fill and stroke color properties
+  sources:
+    - ref: S09
+      item: "Animator properties: Fill Color (RGB, Hue, Saturation, Brightness, Opacity), Stroke Color, Stroke Width"
+      category: "Animating text"
+      checked: false
+  artist_can: >-
+    Change fill and stroke color, hue, saturation, brightness and opacity, and stroke width per character,
+    for color waves and highlight sweeps across a word.
+  projection_example: >-
+    A warm-to-cool color wave rolls across the letters of the venue name in time with the music.
+  controls:
+    - { name: "Fill color", type: "color", animatable: true }
+    - { name: "Fill hue / saturation / brightness", type: "float", animatable: true }
+    - { name: "Fill opacity", type: "percent", animatable: true }
+    - { name: "Stroke color", type: "color", animatable: true }
+    - { name: "Stroke hue / saturation / brightness / opacity", type: "float", animatable: true }
+    - { name: "Stroke width", type: "float", animatable: true }
+  animation: >-
+    All keyframable and expression-linkable; selector weights blend from the base color toward the animator
+    color per glyph.
+  dependencies: [text.animator, text.fill-stroke, text.selector.range, color.management]
+  implementation: >-
+    Per-glyph color attributes computed in the animator stage; RGB mixing happens in the scene-linear working
+    space, while hue/saturation/brightness offsets are computed on display-referred values and converted back so
+    they behave as artists expect.
+  io: >-
+    none
+  limitations: >-
+    Hue/saturation math is perceptual-ish rather than identical to After Effects' 8-bit behavior.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Color wave" and "Highlight sweep" text recipes → More controls.
+    defaults: >-
+      Wave color complementary to the base color, one sweep per bar when music is present.
+    automation: >-
+      Times the sweep to beat markers from audio.analysis when available.
+    usability_check: >-
+      A first-time user adds a color sweep across a word and changes the sweep color in under 30 s.
+  acceptance: >-
+    Mini scene "color-wave": color sweep matches between preview and export with no banding in 10-bit output.
+  status: not-started
+  evidence: []
+
+- id: text.anim.spacing
+  name: Animator tracking, line anchor and line spacing
+  sources:
+    - ref: S09
+      item: "Animator properties: Tracking (Type, Amount), Line Anchor, Line Spacing"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "character spacing, range offsets"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Animate letter spacing per character (expanding or collapsing words), shift where lines are anchored, and
+    animate the distance between lines.
+  projection_example: >-
+    A title starts tightly packed in the center of the facade and expands its tracking until the letters reach
+    the outer pilasters.
+  controls:
+    - { name: "Tracking type", type: "enum(before-and-after|before|after)", animatable: false }
+    - { name: "Tracking amount", type: "float", animatable: true }
+    - { name: "Line anchor", type: "percent", animatable: true }
+    - { name: "Line spacing", type: "point2d", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable; selector-weighted per glyph.
+  dependencies: [text.animator, text.character-formatting, text.selector.range]
+  implementation: >-
+    Tracking adds per-glyph advance in the layout pass without reshaping, so animated tracking stays cheap; line
+    spacing offsets lines by line index; layout is recomputed per frame only when these values change.
+  io: >-
+    none
+  limitations: >-
+    Animated tracking reflows box text only within the line; it never re-wraps lines (matching After Effects).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Expand across the wall" and "Tighten together" text recipes → More controls.
+    defaults: >-
+      Expansion target is the width of the selected region.
+    automation: >-
+      Computes the tracking amount that makes the text exactly span the chosen region.
+    usability_check: >-
+      A first-time user makes a word expand to the edges of a selected wall in at most 3 actions.
+  acceptance: >-
+    Mini scene "pilaster-expand": tracking animation ends exactly at the region edges in export.
+  status: not-started
+  evidence: []
+
+- id: text.anim.character-value
+  name: Animator character offset, value and range (scramble and decode)
+  sources:
+    - ref: S09
+      item: "Animator properties: Character Offset, Character Value, Character Range, Character Alignment"
+      category: "Animating text"
+      checked: false
+  artist_can: >-
+    Shift selected characters through the alphabet or replace them with a fixed character, so text can
+    scramble, decode, count or cycle letters before resolving to the final words.
+  projection_example: >-
+    The festival name appears as flickering random letters across the departure-board-style window grid and
+    resolves left to right into the real name.
+  controls:
+    - { name: "Character alignment", type: "enum(left|center|right|adjust-kerning)", animatable: false }
+    - { name: "Character range", type: "enum(preserve-case-and-digits|full-unicode)", animatable: false }
+    - { name: "Character value", type: "int", animatable: true }
+    - { name: "Character offset", type: "int", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable; combined with a range or wiggly selector for decode and scramble
+    looks; random selector order uses the stable seeded order.
+  dependencies: [text.animator, text.selector.range, expr.stable-random]
+  implementation: >-
+    Code points are substituted per glyph before shaping, so affected clusters are reshaped with HarfBuzz each
+    frame; the shaped result is cached by (document hash, substitution vector) so scrubbing back is free.
+  io: >-
+    none
+  limitations: >-
+    Substituted characters may be missing from the font; missing glyphs fall back to a visible placeholder and
+    are reported. Joined scripts (Arabic, Indic) lose correct joining while scrambled.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Scramble and reveal" / "Decode" text recipe → More controls.
+    defaults: >-
+      Preserve case and digits, 1.5 s decode, left-to-right resolve.
+    automation: >-
+      The recipe sets up the animator, selector, seed and keyframes; the result is identical on every playback.
+    usability_check: >-
+      A first-time user makes a title decode from random letters in at most 3 actions, under 30 s.
+  acceptance: >-
+    AS-3-style determinism and mini scene "decode-name": scrambled frames are identical after reopen and random
+    seek, and in export.
+  status: not-started
+  evidence: []
+
+- id: text.anim.blur
+  name: Animator per-character blur
+  sources:
+    - ref: S09
+      item: "Animator property: Blur"
+      category: "Animating text"
+      checked: false
+  artist_can: >-
+    Blur individual characters horizontally and vertically by different amounts, for soft focus-in reveals.
+  projection_example: >-
+    Letters drift into focus one after another as they settle onto the frieze.
+  controls:
+    - { name: "Blur (horizontal, vertical)", type: "point2d", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable; selector-weighted per glyph.
+  dependencies: [text.animator, text.selector.range, fx.blur-sharpen.gaussian-blur]
+  implementation: >-
+    Glyphs are grouped by quantized blur radius and drawn into padded tiles with declared bounds expansion;
+    each group runs the separable Gaussian blur WGSL pass, then tiles composite back premultiplied, so a sharp
+    glyph never pays for blur.
+  io: >-
+    none
+  limitations: >-
+    Very large per-character blur on thousands of glyphs is expensive; radius quantization can cause tiny steps
+    in slow animations, mitigated by fine quantization at final quality.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Focus in" text recipe → More controls.
+    defaults: >-
+      Blur starts at 20 % of font size and clears over 0.8 s per letter.
+    automation: >-
+      Scales blur to font size and output resolution so the look is the same at any export size.
+    usability_check: >-
+      A first-time user applies "Focus in" and lengthens it in under 20 s.
+  acceptance: >-
+    Mini scene "frieze-focus": blur reveal shows no clipped edges or dark fringes in alpha export.
+  status: not-started
+  evidence: []
+
+- id: text.per-character-3d
+  name: Per-character 3D
+  sources:
+    - ref: S09
+      item: "Enable Per-character 3D; 3D text animator properties (X/Y Rotation, Z Position, 3D Scale)"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "per-character transforms including 3D behavior"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Give every character its own 3D position, rotation and scale so letters can rotate forward, flip like cards
+    or fly through depth, lit and seen through the scene camera.
+  projection_example: >-
+    Individual letters across the columns rotate forward out of the facade toward the audience, then fall back
+    flat.
+  controls:
+    - { name: "Enable per-character 3D", type: "bool", animatable: false }
+    - { name: "Position Z", type: "float", animatable: true }
+    - { name: "Rotation X / Y / Z", type: "angle", animatable: true }
+    - { name: "Scale Z", type: "percent", animatable: true }
+    - { name: "Anchor point Z", type: "float", animatable: true }
+    - { name: "Accepts lights and shadows", type: "bool", animatable: false }
+  animation: >-
+    All 3D animator properties keyframable and expression-linkable; selector-weighted per glyph; follows camera
+    animation from 3d.camera.
+  dependencies: [text.anim.transform, 3d.scene, 3d.camera, 3d.light]
+  implementation: >-
+    When enabled, each glyph becomes a planar node in the three.js WebGPU scene with its own matrix from the
+    animator stage; glyphs are rendered as GPU vector quads (analytic coverage from the outline) so they stay sharp
+    at any angle, or as extruded meshes when text.extrusion is on.
+  io: >-
+    Exports through the normal 3D render path; depth pass available for pass.depth.
+  limitations: >-
+    Flat glyphs viewed edge-on disappear (no thickness) unless extrusion is enabled; audience-viewpoint
+    illusions depend on the chosen viewpoint (map.*), not on the text system.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Letters turn toward the audience" / "Flip in like cards" — text recipes that enable 3D automatically.
+    defaults: >-
+      Rotation forward of 90° around each letter's baseline, staggered left to right, lights accepted.
+    automation: >-
+      Enables per-character 3D, sets the anchor to each letter's baseline, and adds a default camera matching the
+      audience preview if none exists.
+    usability_check: >-
+      A first-time user makes letters rotate forward one after another in at most 3 actions and under 45 s,
+      without touching camera or 3D settings.
+  acceptance: >-
+    Mini scene "columns-rotate-forward" (brief §8 example): letters across columns rotate forward; preview and
+    export match from the audience camera.
+  status: not-started
+  evidence: []
+
+- id: text.selector.range
+  name: Range selector
+  sources:
+    - ref: S09
+      item: "Range Selector (Start, End, Offset, Units, Based On, Mode, Amount, Shape, Smoothness, Ease High, Ease Low, Randomize Order, Random Seed)"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "range offsets, randomized order"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Choose which characters, words or lines an animator affects and how strongly, then sweep that range across
+    the text with offset keyframes, shaped falloff, easing and an optional random order.
+  projection_example: >-
+    Window-letters light up in a random but repeatable order across the facade, with each letter fading in
+    softly as the range passes.
+  controls:
+    - { name: "Start", type: "percent", animatable: true }
+    - { name: "End", type: "percent", animatable: true }
+    - { name: "Offset", type: "percent", animatable: true }
+    - { name: "Units", type: "enum(percentage|index)", animatable: false }
+    - { name: "Based on", type: "enum(characters|characters-excluding-spaces|words|lines)", animatable: false }
+    - { name: "Mode", type: "enum(add|subtract|intersect|min|max|difference)", animatable: false }
+    - { name: "Amount", type: "percent", animatable: true }
+    - { name: "Shape", type: "enum(square|ramp-up|ramp-down|triangle|round|smooth)", animatable: false }
+    - { name: "Smoothness", type: "percent", animatable: true }
+    - { name: "Ease high / ease low", type: "percent", animatable: true }
+    - { name: "Randomize order", type: "bool", animatable: false }
+    - { name: "Random seed", type: "seed", animatable: true }
+  animation: >-
+    Start, end, offset, amount, smoothness and easing keyframable and expression-linkable; typically only Offset
+    is keyframed.
+  dependencies: [text.animator, anim.keyframe.core, expr.stable-random]
+  implementation: >-
+    Pure core-TS weight function of (glyph unit index, unit count, selector params) implementing each shape;
+    selectors combine in stack order by mode. Randomize order applies a Fisher–Yates permutation from the stateless
+    seeded RNG keyed by (project seed, layer id, animator id, selector id, random seed), so the order is identical in
+    preview, export and after reopen.
+  io: >-
+    none
+  limitations: >-
+    Shape curves aim to match After Effects visually, not to the decimal; the AE random order for a given seed is
+    not reproduced.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "One after another" controls on any text recipe: Order (left to right, right to left, from the center,
+      random), Unit (letters, words, lines) and Overlap.
+    defaults: >-
+      Letters, left to right, smooth shape, 50 % overlap.
+    automation: >-
+      Maps plain Order choices to start/end/offset keyframes, reverse direction or random order with a fixed seed;
+      "Shuffle" picks a new seed in one click.
+    usability_check: >-
+      A first-time user switches a reveal from left-to-right to random word order in under 15 s.
+  acceptance: >-
+    AS-3 determinism: random-order reveal is identical after reopen, random seek and export.
+  status: not-started
+  evidence: []
+
+- id: text.selector.wiggly
+  name: Wiggly selector
+  sources:
+    - ref: S09
+      item: "Wiggly Selector (Mode, Max/Min Amount, Based On, Wiggles/Second, Correlation, Temporal/Spatial Phase, Lock Dimensions, Random Seed)"
+      category: "Animating text"
+      checked: false
+  artist_can: >-
+    Make the animator's effect vary randomly and continuously over time and across characters, for jittering,
+    flickering or nervous text.
+  projection_example: >-
+    Letters of a horror-night title flicker in brightness like failing neon tubes on the brick.
+  controls:
+    - { name: "Mode", type: "enum(add|subtract|intersect|min|max|difference)", animatable: false }
+    - { name: "Max amount", type: "percent", animatable: true }
+    - { name: "Min amount", type: "percent", animatable: true }
+    - { name: "Based on", type: "enum(characters|characters-excluding-spaces|words|lines)", animatable: false }
+    - { name: "Wiggles per second", type: "float", animatable: true }
+    - { name: "Correlation", type: "percent", animatable: true }
+    - { name: "Temporal phase", type: "angle", animatable: true }
+    - { name: "Spatial phase", type: "angle", animatable: true }
+    - { name: "Lock dimensions", type: "bool", animatable: false }
+    - { name: "Random seed", type: "seed", animatable: true }
+  animation: >-
+    All numeric parameters keyframable; time-varying by nature; evaluates purely from time so any frame can be
+    rendered in isolation.
+  dependencies: [text.selector.range, expr.wiggle-noise, expr.stable-random]
+  implementation: >-
+    Per-unit 1D gradient noise evaluated at (time × wiggles/s + temporal phase, unit index + spatial phase),
+    blended with a shared noise channel by correlation; seeded by the stateless RNG, never Math.random, so preview
+    and export agree.
+  io: >-
+    none
+  limitations: >-
+    Noise character matches the intent of After Effects' wiggly selector, not its exact values.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Flicker" and "Jitter" text recipes → More controls.
+    defaults: >-
+      2 wiggles per second, 50 % correlation, fixed seed.
+    automation: >-
+      Recipes add the wiggly selector to an existing animator with plain controls (Amount, Speed, Togetherness).
+    usability_check: >-
+      A first-time user makes a title flicker and slows the flicker in under 30 s.
+  acceptance: >-
+    Mini scene "neon-flicker": flicker pattern identical across two exports and after reopen.
+  status: not-started
+  evidence: []
+
+- id: text.selector.expression
+  name: Expression selector
+  sources:
+    - ref: S09
+      item: "Expression Selector (Based On, Amount expression; textIndex, textTotal, selectorValue)"
+      category: "Animating text"
+      checked: false
+  artist_can: >-
+    Write a small expression that computes the amount for each character, word or line, using its index, the
+    total count and the incoming selector value, for patterns selectors alone cannot express.
+  projection_example: >-
+    Every third letter lights up in sequence like a marquee chase around a theatre facade's lettering.
+  controls:
+    - { name: "Based on", type: "enum(characters|characters-excluding-spaces|words|lines)", animatable: false }
+    - { name: "Amount (expression)", type: "string", animatable: true }
+  animation: >-
+    The Amount expression runs per unit per frame with textIndex (1-based), textTotal and selectorValue, and can
+    read time, other properties and controllers.
+  dependencies: [text.animator, expr.engine]
+  implementation: >-
+    The Amount expression is compiled once in the QuickJS-WASM sandbox and evaluated for all units in a single
+    sandbox call (loop inside the VM) to avoid per-glyph boundary crossings; the interrupt-based time budget
+    covers the whole batch; failures fall back to the last good value and are flagged per expr.errors.
+  io: >-
+    Expressions saved as source text; imported AE text-selector expressions run where the API subset matches.
+  limitations: >-
+    Heavy expressions over thousands of glyphs can exceed the frame budget; the user is told which selector is
+    slow.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Advanced tool; novices reach its common uses through "Chase lights", "Every other letter" and "Alternate
+      words" recipes, which generate the expression.
+    defaults: >-
+      Generated expressions carry plain-language comments and expose spacing and speed as sliders.
+    automation: >-
+      Recipe-generated expressions are tracked by the recipe engine; hand edits are flagged as custom.
+    usability_check: >-
+      A first-time user applies a marquee chase to a word and changes its speed without seeing code, in under 30 s.
+  acceptance: >-
+    Mini scene "marquee-chase": expression-selector chase matches between preview and export; a deliberately
+    broken expression names the text layer and selector without crashing.
+  status: not-started
+  evidence: []
+
+- id: text.presets
+  name: Text animation presets
+  sources:
+    - ref: S09
+      item: "Text animation presets (Animate In, Animate Out, Blurs, Tracking, 3D Text, Fill and Stroke, Paths, Mechanical, Multi-Line, Organic, Rotation, Scale)"
+      category: "Animating text"
+      checked: false
+    - ref: "brief §8"
+      item: "reusable text-animation presets"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Browse a visual library of text animations, apply one to any text layer, adjust it, and save one's own
+    animators as reusable presets.
+  projection_example: >-
+    Apply the same "words drop onto sills" animation to the title of every scene in the show, then tweak
+    timing per scene.
+  controls:
+    - { name: "Preset", type: "string", animatable: false }
+    - { name: "Placement", type: "enum(in|out|in-and-out)", animatable: false }
+    - { name: "Duration", type: "duration", animatable: false }
+    - { name: "Save animators as preset", type: "action", animatable: false }
+  animation: >-
+    A preset inserts animators, selectors, keyframes and expressions positioned relative to the layer in-point or
+    out-point; everything inserted remains editable.
+  dependencies: [text.animator, expr.presets, ux.effect-library]
+  implementation: >-
+    A preset is a serialized animator subtree plus keyframes in relative time, stored as JSON in the user library;
+    applying it is one undoable op batch that rescales keyframe times to the chosen duration (as in
+    anim.keyframe-time-scale) and records a recipe instance so later preset changes respect overrides.
+  io: >-
+    Presets export/import as single files for sharing between projects and machines.
+  limitations: >-
+    Adobe .ffx preset files are not read; equivalent presets ship with the app.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Animate the words" library with animated thumbnails rendered with the user's own text; hover to preview on
+      the canvas, click to apply.
+    defaults: >-
+      In-animation at the layer start, duration adapted to the scene length and font size.
+    automation: >-
+      Adapts distances to text size and region, duration to section timing, and snaps start to beat markers.
+    usability_check: >-
+      A first-time user finds and applies a text animation by browsing thumbnails in at most 3 actions and under
+      30 s.
+  acceptance: >-
+    Mini scene "scene-titles": one saved preset applied to three titles; edits to one do not alter the others.
+  status: not-started
+  evidence: []
+
+- id: text.font-substitution
+  name: Missing font detection and substitution reporting
+  sources:
+    - ref: S01
+      item: "Missing fonts (Resolve Fonts dialog, missing font reporting)"
+      category: "Creating and editing text layers"
+      checked: false
+    - ref: "brief §8"
+      item: "font substitution reporting"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    See which fonts are missing when a project opens, which text layers use them, and choose a substitute or
+    locate the font file, without the text silently changing.
+  projection_example: >-
+    On the venue laptop, the app reports that the title font is missing on three scenes and offers the bundled copy
+    or a similar font before the show export.
+  controls:
+    - { name: "Missing font list", type: "action", animatable: false }
+    - { name: "Substitute font", type: "font", animatable: false }
+    - { name: "Apply to all affected layers", type: "bool", animatable: false }
+    - { name: "Locate font file", type: "file", animatable: false }
+  animation: >-
+    none (project-level resolution; substitution is an undoable op).
+  dependencies: [text.fonts]
+  implementation: >-
+    Each text layer stores a font descriptor (PostScript name, family, style, file hash, axes). On open, the
+    resolver tries the bundled file, then an installed file with the same hash, then a name match (flagged as
+    "different version"); unresolved layers render with a visible missing-font marker, keep their original
+    descriptor, and are listed in proj.missing-report. Substitution is an explicit op, so nothing reflows silently.
+  io: >-
+    Missing state is recorded in render logs; exports with unresolved fonts require explicit confirmation.
+  limitations: >-
+    A name match with a different font version can change metrics; the app reports this rather than hiding it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A banner reads "2 fonts are missing. They affect 'Title' and 'Credits'", with "Use a similar font" and
+      "Find the font file" buttons.
+    defaults: >-
+      Suggests the closest installed font by classification and metrics, previewed before applying.
+    automation: >-
+      Restores fonts automatically from the project bundle; asks only when no exact copy exists.
+    usability_check: >-
+      A first-time user resolves a missing font and confirms which layers changed in under 60 s without help.
+  acceptance: >-
+    AS-7: a collected project opened without the original fonts reports and resolves them; layout is unchanged
+    when the bundled font is used.
+  status: not-started
+  evidence: []
+
+- id: text.extrusion
+  name: Extruded and beveled 3D text
+  sources:
+    - ref: S10
+      item: "Extruded text and shapes; Extrusion Depth, Bevel Style, Bevel Depth, Hole Bevel Depth (Advanced 3D renderer)"
+      category: "Advanced 3D renderer"
+      checked: false
+    - ref: "brief §8"
+      item: "practical extrusion/bevel for dimensional titles"
+      category: "Text and typography"
+      checked: true
+  artist_can: >-
+    Give text real depth with an extrusion and a bevel, with separate materials for front, sides and bevel,
+    lit and shadowed in the 3D scene.
+  projection_example: >-
+    A dimensional stone-like title pushes out of the facade and casts a shadow onto the wall as a light sweeps
+    across it.
+  controls:
+    - { name: "Extrusion depth", type: "float", animatable: true }
+    - { name: "Bevel style", type: "enum(none|angular|concave|convex)", animatable: false }
+    - { name: "Bevel depth", type: "float", animatable: true }
+    - { name: "Hole bevel depth", type: "percent", animatable: true }
+    - { name: "Front / side / bevel material", type: "property-ref", animatable: false }
+  animation: >-
+    Depth and bevel keyframable; works with per-character 3D so each extruded letter animates independently.
+  dependencies: [text.layer, 3d.extrude, 3d.material-pbr, 3d.light]
+  implementation: >-
+    Glyph outlines (HarfBuzz → CanvasKit path) are flattened and handed to 3d.extrude, which triangulates caps,
+    builds side walls and offset-path bevel profiles into three.js geometry; meshes are cached by (glyph outline
+    hash, depth, bevel) and rebuilt only when those change.
+  io: >-
+    Extruded text can be exported as glTF with the 3D scene where 3d.* supports it.
+  limitations: >-
+    Animating depth or bevel rebuilds geometry per frame and is slower; extreme bevels on thin strokes
+    self-intersect and are clamped.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Make it 3D" / "Carve it from stone" on a text layer, with Depth, Bevel and Material controls.
+    defaults: >-
+      Depth 20 % of font size, small convex bevel, material picked from the recipe (stone, metal, glass, glowing).
+    automation: >-
+      Converts the layer to 3D, adds a key light matched to the audience view if the scene has none, and applies
+      the material.
+    usability_check: >-
+      A first-time user makes a stone-like 3D title in at most 3 actions and under 60 s, without opening 3D
+      settings.
+  acceptance: >-
+    AS-2 support scene "carved-title": extruded title lit and shadowed in the 3D renderer; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: text.create-shapes
+  name: Create shapes or masks from text
+  sources:
+    - ref: S01
+      item: "Create Shapes from Text; Create Masks from Text"
+      category: "Creating and editing text layers"
+      checked: false
+  artist_can: >-
+    Convert text into editable vector shapes (one group per character) or masks, to reshape letters, trace them
+    with light, morph them or use them as reveals.
+  projection_example: >-
+    Convert the venue name into outlines, then trace each letter with a running light stroke using trim paths.
+  controls:
+    - { name: "Create shapes from text", type: "action", animatable: false }
+    - { name: "Create masks from text", type: "action", animatable: false }
+    - { name: "One group per character", type: "bool", animatable: false }
+    - { name: "Keep original text layer (hidden)", type: "bool", animatable: false }
+  animation: >-
+    The resulting paths are ordinary animatable shape or mask paths; text animators are not carried over.
+  dependencies: [text.layer, shape.layer, shape.path, mask.bezier]
+  implementation: >-
+    Glyph outlines at the current time's layout (quadratic curves converted to cubic) are written as shape groups
+    or mask paths in one undoable op batch; group transforms are set to each glyph origin so letters can be
+    animated individually.
+  io: >-
+    none
+  limitations: >-
+    The result is a snapshot: text is no longer editable and animator motion is not baked; the hidden original
+    is kept so it can be regenerated.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Trace the letters with light" and "Draw the letters on" recipes perform the conversion; "Turn into shapes"
+      is in More controls.
+    defaults: >-
+      One group per character, original text kept hidden.
+    automation: >-
+      The recipe converts, adds stroke and trim paths, and staggers the letters' start times.
+    usability_check: >-
+      A first-time user makes a title draw itself on as light outlines in at most 3 actions and under 45 s.
+  acceptance: >-
+    AS-1 variant "traced-name": converted letters traced with trim-path light; vector edges stay sharp in export.
+  status: not-started
+  evidence: []
+
+- id: text.across-regions
+  name: Words across regions ("Words across the columns")
+  sources:
+    - ref: "brief §8"
+      item: "words spread across architectural columns ... timing stays editable from one text layer"
+      category: "Text and typography"
+      checked: true
+    - ref: "brief §0.1"
+      item: "select the thing to change, choose what it should do"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Lay one text layer's words, lines or letters into a chosen set of venue regions (columns, windows, panels),
+    each unit fitted to its region, while every animator and timing control still lives on the single layer.
+  projection_example: >-
+    A four-word slogan places one word on each of four columns; the words drop in one after another and later
+    letters rotate forward, all edited from one layer.
+  controls:
+    - { name: "Target regions", type: "enum(selected-regions|region-group)", animatable: false }
+    - { name: "Split by", type: "enum(words|lines|characters)", animatable: false }
+    - { name: "Fit", type: "enum(fit-width|fit-height|same-size-for-all)", animatable: false }
+    - { name: "Order", type: "enum(left-to-right|right-to-left|center-out|custom)", animatable: false }
+    - { name: "Alignment in region", type: "enum(top|middle|bottom)", animatable: false }
+    - { name: "Stagger delay", type: "duration", animatable: true }
+  animation: >-
+    Selectors and animators index across all regions as one text, so "one after another" follows the region
+    order; stagger delay is keyframable and expression-linkable.
+  dependencies: [text.layer, text.paragraph, text.animator, map.region]
+  implementation: >-
+    A "region flow" layout mode in core TS: each unit is assigned a frame derived from bound region roles in
+    content (UV) space, fitted by scaling its glyph run; the layer still produces one glyph list, so selectors and
+    animators are unchanged. Regions are referenced by role, so binding the show to another venue re-flows the
+    text automatically.
+  io: >-
+    Saved as region-role references plus layout options; rebinding to another venue is covered by AS-7.
+  limitations: >-
+    Text fits each region's bounding frame in content space; strongly skewed or curved regions rely on the
+    mapping (map.*) for perspective. Words too long for a region are reported, not silently squashed below a
+    legible minimum.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Words across the columns" — select columns (or windows), type the text, and words distribute one per
+      region; choose Order and Delay.
+    defaults: >-
+      Split by words, same size for all, left-to-right order, 0.3 s stagger.
+    automation: >-
+      Uses the venue's repeated-region groups, orders regions by position, sizes text to fit, and warns when the
+      word count and region count differ.
+    usability_check: >-
+      A first-time user puts a 4-word title across 4 selected columns appearing left to right in under 60 s and at
+      most 4 actions.
+  acceptance: >-
+    Mini scene "columns-slogan" (brief §8 example) plus AS-7 rebinding: the same text layer re-flows onto another
+    venue's columns with timing preserved.
+  status: not-started
+  evidence: []
+
+- id: text.complex-scripts
+  name: Right-to-left and complex script shaping
+  sources:
+    - ref: S01
+      item: "South Asian and Middle Eastern text engine; right-to-left text; Indic scripts"
+      category: "Creating and editing text layers"
+      checked: false
+  artist_can: >-
+    Set Arabic, Hebrew, Indic, Thai and other complex scripts correctly, with right-to-left paragraphs, mixed
+    direction text and proper joining and reordering.
+  projection_example: >-
+    A bilingual Arabic and English welcome message on a museum facade, each language shaped correctly.
+  controls:
+    - { name: "Paragraph direction", type: "enum(auto|left-to-right|right-to-left)", animatable: false }
+    - { name: "Language", type: "string", animatable: false }
+    - { name: "Digit style", type: "enum(default|arabic|hindi|farsi)", animatable: false }
+  animation: >-
+    Animators and selectors work on grapheme clusters in logical order.
+  dependencies: [text.layer, text.paragraph, text.fonts]
+  implementation: >-
+    HarfBuzz shapes each run with script/language/direction from the Unicode Bidi Algorithm (UAX #9) and script
+    itemization; clusters map glyphs back to characters so selectors address grapheme clusters; one engine for all
+    scripts instead of After Effects' separate Latin and South Asian/Middle Eastern engines.
+  io: >-
+    Text saved as Unicode in logical order.
+  limitations: >-
+    Per-character animation of joined scripts can break visual joining when letters separate; the inspector
+    recommends word units for those scripts.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Works automatically when the user types or pastes the language; direction is detected.
+    defaults: >-
+      Automatic direction and language detection from the text.
+    automation: >-
+      Detects script and direction and picks word-level recipe units for joined scripts.
+    usability_check: >-
+      A first-time user pastes an Arabic phrase and sees it shaped and right-aligned correctly with no settings
+      changed.
+  acceptance: >-
+    Mini scene "bilingual-welcome": Arabic and English text renders correctly in preview and export after reopen.
+  status: not-started
+  evidence: []
+
+- id: text.vertical
+  name: Vertical text
+  sources:
+    - ref: S01
+      item: "Vertical Type tool; vertical text orientation; Tate-Chu-Yoko"
+      category: "Creating and editing text layers"
+      checked: false
+  artist_can: >-
+    Set text in vertical columns, either with upright stacked letters or rotated runs, including CJK vertical
+    layout.
+  projection_example: >-
+    A word runs down a tall pilaster with its letters stacked upright, one letter per stone course.
+  controls:
+    - { name: "Orientation", type: "enum(horizontal|vertical)", animatable: false }
+    - { name: "Latin characters", type: "enum(upright|rotated)", animatable: false }
+    - { name: "Tate-chu-yoko (horizontal-in-vertical)", type: "bool", animatable: false }
+    - { name: "Column direction", type: "enum(right-to-left|left-to-right)", animatable: false }
+  animation: >-
+    Animators and selectors work as in horizontal text; line units become columns.
+  dependencies: [text.layer, text.paragraph, text.character-formatting]
+  implementation: >-
+    HarfBuzz vertical shaping (top-to-bottom direction with vert/vrt2 features and vhea/vmtx metrics, synthesized
+    when absent); upright Latin stacks each glyph centered on a vertical baseline in the core-TS layout pass.
+  io: >-
+    Orientation saved in the text document.
+  limitations: >-
+    Fonts without vertical metrics use synthesized spacing that may need manual tracking.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Typography or per-character animation depth beyond what projection titles need. Text layers, formatting, fonts, fill/stroke, basic animators, presets and text across regions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Run down this column" — select a tall region and type; letters stack to fit.
+    defaults: >-
+      Upright stacked Latin letters sized to the region width.
+    automation: >-
+      Chooses vertical orientation automatically when the target region is much taller than wide, with a one-click
+      switch back.
+    usability_check: >-
+      A first-time user stacks a word down a selected pilaster in under 30 s.
+  acceptance: >-
+    Mini scene "pilaster-word": vertical stacked text fits the region in preview and export.
+  status: not-started
+  evidence: []

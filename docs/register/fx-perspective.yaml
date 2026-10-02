@@ -1,0 +1,663 @@
+# Perspective — Before Effects capability register
+# Sources: S02 effect list + support matrix (Perspective rows; page dated May 13, 2026); S01 user-guide pages
+#   "Perspective effects" (https://helpx.adobe.com/after-effects/desktop/apply-effects-and-animation-presets/list-of-effects/perspective-effects.html,
+#   dated Jun 27, 2025) and "Cycore plugins" (CC Cylinder, CC Environment, CC Sphere, CC Spotlight); S20 (3D Camera Tracker workflow);
+#   brief §0, §1, §9, §12, §15, §19. All live pages retrieved 2026-10-01.
+#   Controls for the CC effects, Bevel Alpha/Edges, Drop Shadow and 3D Camera Tracker advanced options come from authoring
+#   knowledge; the live pages describe the effects but don't list every control.
+# Shared passes: see the header of fx-distort.yaml (warp.inverse, warp.mesh, warp.field). Lighting here is evaluated in scene-linear
+#   rgba16float with premultiplied alpha. Shadow and bevel looks are creative content; physical spill control remains out.output-mask.
+# Control types: float, int, bool, angle, percent, color, point2d, point3d, enum(...), layer, region-set, seed, action, group.
+
+- id: fx.perspective.3d-camera-tracker
+  name: 3D Camera Tracker
+  sources:
+    - ref: S02
+      item: 3D Camera Tracker
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: 3D Camera Tracker
+      category: Perspective
+      checked: true
+    - ref: S20
+      item: 3D Camera tracker
+      category: Tracking and stabilizing motion
+      checked: true
+  artist_can: >-
+    Analyze filmed footage to recover the real camera's 3D motion, then attach text, solids, nulls or 3D objects that stick to surfaces in the shot.
+  projection_example: >-
+    Film a walk-up to the building on a phone, solve the camera, and composite the show onto the facade for a client preview video.
+  controls:
+    - { name: "Analyze / Cancel", type: action, animatable: false }
+    - { name: "Shot Type", type: "enum(fixed-angle-of-view|variable-zoom|specify-angle-of-view)", animatable: false }
+    - { name: "Horizontal Angle of View", type: float, animatable: false }
+    - { name: "Show Track Points", type: "enum(2d-source|3d-solved)", animatable: false }
+    - { name: "Render Track Points", type: bool, animatable: false }
+    - { name: "Track Point Size", type: percent, animatable: false }
+    - { name: "Target Size", type: percent, animatable: false }
+    - { name: "Create Camera (and Create Text / Solid / Null at target)", type: action, animatable: false }
+    - { name: "Advanced (Solve Method, Detailed Analysis, Auto-delete Points, Hide Warning Banner; reports Average Error)", type: group, animatable: false }
+  animation: >-
+    Produces a keyframed 3d.camera and placed layers. Ground plane, origin and scale can be redefined after solving without re-analysis.
+  dependencies: [track.camera-solve, 3d.camera, 3d.scene, proj.layer, fx.distort.optics-compensation, render.queue]
+  implementation: >-
+    An effect-style front end over the shared track.camera-solve engine. The vision sidecar extracts frames with FFmpeg and runs pycolmap
+    (SIFT, sequential matching, incremental SfM) or Blender headless (libmv) as the alternative. The solve returns per-frame intrinsics and
+    extrinsics, sparse 3D points and the reprojection error. Results are stored in the project, so rendering never re-solves. The whole clip
+    is a temporal dependency, and the solve runs as a background job.
+  io: >-
+    Exports the camera path (glTF/FBX/.chan) and point cloud (PLY) for Blender interop; can import an external solve.
+  limitations: >-
+    Footage camera tracking is not projector calibration (brief §12, §15). Low-texture shots and pure rotation can fail, and scale and
+    orientation must be set from a picked ground plane. Solver output varies between versions, so results are stored, not recomputed.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Stick things into this footage" — one click starts analysis; then click track points and choose "Attach text / image here".
+    defaults: >-
+      Auto-detect shot type; ground plane from the dominant plane; text placed facing the camera.
+    automation: >-
+      Analysis runs in the background; the app picks a ground plane and origin and shows the solve quality in plain words ("Good / Shaky / Failed").
+    usability_check: >-
+      A first-time user attaches a title to a wall in walk-around footage in under 5 min of active time, not counting analysis time.
+  acceptance: >-
+    AS-4 Performer composite (tracked attachment); reprojection error reported; reopen renders without re-solving.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.3d-glasses
+  name: 3D Glasses
+  sources:
+    - ref: S02
+      item: 3D Glasses
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: 3D Glasses
+      category: Perspective
+      checked: true
+  artist_can: >-
+    Combine left-eye and right-eye views into a stereo image: anaglyph (red/green, red/blue, balanced), side-by-side, over-under or interlaced.
+  projection_example: >-
+    Produce a side-by-side stereo master for a dual-projector passive-3D installation, or a red/cyan anaglyph preview of a depth illusion.
+  controls:
+    - { name: "Left View, Right View", type: "layer[2]", animatable: false }
+    - { name: "Scene Convergence (Convergence Offset)", type: float, animatable: true }
+    - { name: "Vertical Alignment", type: float, animatable: true }
+    - { name: "Units", type: "enum(pixels|percent-of-source)", animatable: false }
+    - { name: "Swap Left-Right", type: bool, animatable: false }
+    - { name: "3D View", type: "enum(stereo-pair|over-under|interlace-upper-l-lower-r|red-green-lr|red-blue-lr|balanced-red-green-lr|balanced-red-blue-lr|balanced-colored-red-blue)", animatable: false }
+    - { name: "Balance", type: float, animatable: true }
+  animation: >-
+    Convergence, alignment and balance keyframable (Adobe warns that keyframing convergence can look erratic).
+  dependencies: [3d.camera, proj.layer, render.encode, out.projector-output]
+  implementation: >-
+    A WGSL combine pass with one packing per mode. Balanced anaglyphs use Dubois least-squares matrices in linear light, interlace selects
+    by row parity, and side-by-side/over-under scale each view. Stereo pairs come from a two-camera rig on 3d.camera (interaxial and
+    convergence). No temporal dependency.
+  io: >-
+    Exports side-by-side or over-under stereo masters; projector bundles would need stereo metadata in the manifest.
+  limitations: >-
+    Decision 2026-10-02: implemented as a two-view channel combine so imported After Effects projects keep the look; stereoscopic workflows themselves remain unresolved (3d.stereo).
+
+    Open question: does the user plan stereoscopic shows (audience glasses or dual-projector polarized stereo)? If not, the red/cyan split
+    look is already covered by fx.channel.shift-channels and fx.color.cc-color-offset, and this entry can drop in priority. Interlaced modes
+    are obsolete for projectors.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: F
+  beginner:
+    action: >-
+      "Make a 3D-glasses version" in advanced export options (only shown when a stereo camera rig exists).
+    defaults: >-
+      Balanced colored red/blue anaglyph; convergence at the main subject's depth.
+    automation: >-
+      Builds the left and right cameras from the scene camera and sets convergence from the depth pass.
+    usability_check: >-
+      A first-time user creates an anaglyph preview of a 3D tunnel scene in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "stereo-tunnel": side-by-side export has views swapped correctly (left/right check card) and anaglyph ghosting stays below the threshold.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.bevel-alpha
+  name: Bevel Alpha
+  sources:
+    - ref: S02
+      item: Bevel Alpha
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S01
+      item: Bevel Alpha
+      category: Perspective
+      checked: true
+  artist_can: >-
+    Give the alpha edges of any shape or text a soft, chiseled, lit bevel so flat graphics look raised.
+  projection_example: >-
+    Outline each projected brick with a lit bevel so the wall appears to pop forward.
+  controls:
+    - { name: "Edge Thickness", type: float, animatable: true }
+    - { name: "Light Angle", type: angle, animatable: true }
+    - { name: "Light Color", type: color, animatable: true }
+    - { name: "Light Intensity", type: float, animatable: true }
+  animation: >-
+    All controls keyframable; Light Angle can link to the show's shared light direction.
+  dependencies: [mask.layer-styles, proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    WGSL: a jump-flood distance field from alpha, clamped at Edge Thickness, becomes a soft height profile. Normals from that profile give
+    Lambert highlight and shadow from Light Angle. Shares its bevel kernel with the Bevel & Emboss style in mask.layer-styles.
+    No bounds change; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    The profile is an approximation of Adobe's. Unlike the layer style, the effect sits at its own position in the effect stack.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Raise or recess" (fx.perspective.region-relief) → More controls, or "Make it look carved" on text and logos.
+    defaults: >-
+      Thickness 2% of the shape's short side; light from the show's shared direction.
+    automation: >-
+      Links Light Angle to the show light so every bevel agrees.
+    usability_check: >-
+      A first-time user gives a logo a raised bevel in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "brick-pop": bevels on a brick matte render without fringes in 16-bit export.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.bevel-edges
+  name: Bevel Edges
+  sources:
+    - ref: S02
+      item: Bevel Edges
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S01
+      item: Bevel Edges
+      category: Perspective
+      checked: true
+  artist_can: >-
+    Give a layer's rectangular edges a hard, uniform, chiseled and lit bevel, like a raised tile or panel.
+  projection_example: >-
+    Projected panels in a coffered ceiling get a crisp raised-tile edge.
+  controls:
+    - { name: "Edge Thickness", type: float, animatable: true }
+    - { name: "Light Angle", type: angle, animatable: true }
+    - { name: "Light Color", type: color, animatable: true }
+    - { name: "Light Intensity", type: float, animatable: true }
+  animation: >-
+    All controls keyframable.
+  dependencies: [fx.perspective.bevel-alpha, anim.keyframe.core]
+  implementation: >-
+    Same bevel kernel as Bevel Alpha but with a box (layer-bounds) distance and a hard linear chisel profile. Thickness is interpolated at
+    subpixel precision. Runs in rgba16float, although Adobe is 8 bpc only.
+  io: >-
+    none
+  limitations: >-
+    Edges are always rectangular, as in Adobe. For non-rectangular regions, region-relief uses the alpha-based profile instead.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Raise or recess" with the style "Hard square edge".
+    defaults: >-
+      Thickness 3% of the short side; shared show light.
+    automation: >-
+      Chosen automatically when the selected region is rectangular and the user picks "Tile" style.
+    usability_check: >-
+      A first-time user makes a rectangular panel look like a raised tile in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "coffered-tiles": uniform edge thickness measured on export within 0.5 px.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.cc-cylinder
+  name: CC Cylinder
+  sources:
+    - ref: S02
+      item: CC Cylinder
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S01
+      item: CC Cylinder
+      category: Perspective (Cycore plugins page)
+      checked: true
+  artist_can: >-
+    Wrap a layer around a lit 3D cylinder and spin, tilt or position it, rendering outside, inside or both.
+  projection_example: >-
+    A scrolling pattern wrapped on a cylinder appears to rotate around a projected column.
+  controls:
+    - { name: "Radius", type: percent, animatable: true }
+    - { name: "Position X, Y, Z", type: point3d, animatable: true }
+    - { name: "Rotation X, Y, Z", type: "angle[3]", animatable: true }
+    - { name: "Render", type: "enum(full|outside|inside)", animatable: false }
+    - { name: "Light (Intensity, Color, Height, Direction)", type: group, animatable: true }
+    - { name: "Shading (Ambient, Diffuse, Specular, Roughness, Metal)", type: "group(float)", animatable: true }
+  animation: >-
+    Rotation is usually keyframed or driven by time; all light and shading values keyframable.
+  dependencies: [3d.scene, 3d.light, 3d.material-pbr, map.model-3d]
+  implementation: >-
+    Analytic per-pixel ray–cylinder intersection in WGSL (no mesh), with cylindrical UV lookup into the layer and Blinn-Phong shading to
+    keep control parity. In a 3D scene the recipe can instead use a three.js cylinder with the layer as its material. Bounds are the
+    projected cylinder bbox; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    It is a 2D illusion of a cylinder. For a physical column with a venue model, mapping through map.model-3d UVs is correct and preferred.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Wrap around a column" — when the column has a 3D model the recipe uses UV wrapping; otherwise it uses this effect.
+    defaults: >-
+      Radius fits the selected column region; one rotation per 8 s; soft light from the show light direction.
+    automation: >-
+      Picks between model UV wrapping and the CC Cylinder illusion automatically and explains which one was used.
+    usability_check: >-
+      A first-time user makes a pattern appear to rotate around a column in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "rotating-column": seamless wrap seam; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.cc-environment
+  name: CC Environment
+  sources:
+    - ref: S02
+      item: CC Environment
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: CC Environment
+      category: Perspective (Cycore plugins page)
+      checked: true
+  artist_can: >-
+    Use a panoramic (spherical, light-probe or vertical-cross) image as an environment that turns correctly as the 3D camera moves.
+  projection_example: >-
+    A 360° sky panorama, seen through a "hole" in the wall, shifts naturally as the virtual camera drifts.
+  controls:
+    - { name: "Environment", type: layer, animatable: false }
+    - { name: "Mapping", type: "enum(spherical|probe|vertical-cross)", animatable: false }
+    - { name: "Horizontal Offset", type: angle, animatable: true }
+    - { name: "Filter Environment", type: bool, animatable: false }
+  animation: >-
+    Horizontal Offset keyframable; the view follows the comp camera's animation.
+  dependencies: [3d.scene, 3d.camera, color.management]
+  implementation: >-
+    A WGSL full-frame pass computes each pixel's view ray from the active 3d.camera and samples the environment. Probe and cross maps are
+    converted to equirectangular once and mip-filtered when Filter is on. In three.js scenes the same map becomes the scene background
+    and IBL source. Supports HDR float32.
+  io: >-
+    Accepts HDR/EXR panoramas, managed through color.management.
+  limitations: >-
+    It is a background at infinity with no parallax; near objects need real 3D geometry.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Add a sky / panorama backdrop" inside depth-illusion recipes (tunnel, open wall).
+    defaults: >-
+      Spherical mapping; filtered; the same map lights 3D objects.
+    automation: >-
+      Detects the panorama format from the aspect ratio and sets Mapping.
+    usability_check: >-
+      A first-time user drops a 360° image into a tunnel scene and sees it move correctly with the camera in 3 or fewer actions.
+  acceptance: >-
+    AS-2 Depth illusion: backdrop rotates consistently with the camera; preview/export match.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.cc-sphere
+  name: CC Sphere
+  sources:
+    - ref: S02
+      item: CC Sphere
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: CC Sphere
+      category: Perspective (Cycore plugins page)
+      checked: true
+  artist_can: >-
+    Wrap a layer onto a lit, rotating 3D sphere (planets, globes, balls) with reflection and transparency options.
+  projection_example: >-
+    A round window becomes a slowly rotating planet.
+  controls:
+    - { name: "Rotation X, Y, Z", type: "angle[3]", animatable: true }
+    - { name: "Radius", type: float, animatable: true }
+    - { name: "Offset", type: point2d, animatable: true }
+    - { name: "Render", type: "enum(full|outside|inside)", animatable: false }
+    - { name: "Light (Intensity, Color, Height, Direction)", type: group, animatable: true }
+    - { name: "Shading (Ambient, Diffuse, Specular, Roughness, Metal, Reflective)", type: "group(float)", animatable: true }
+    - { name: "Reflection Map", type: layer, animatable: false }
+    - { name: "Internal Shadows", type: bool, animatable: false }
+    - { name: "Transparency Falloff", type: float, animatable: true }
+  animation: >-
+    Rotation keyframed or time-driven; light and shading keyframable.
+  dependencies: [3d.scene, 3d.light, map.region]
+  implementation: >-
+    Analytic ray–sphere intersection in WGSL with equirectangular UV into the layer, Blinn-Phong shading and a reflection-map lookup.
+    Bounds are the sphere's bbox; float32-safe; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Equirect pole pinching follows the source. For a physical dome, use model-based mapping instead.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Make a planet" recipe — snaps the sphere to a selected round region.
+    defaults: >-
+      Rotation 1 turn per 20 s; light from the show light direction; outside only.
+    automation: >-
+      Fits Radius and Offset to the circular region.
+    usability_check: >-
+      A first-time user turns a round window into a rotating planet in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "planet-window": sphere fits the circular region within 1 px at export resolution.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.cc-spotlight
+  name: CC Spotlight
+  sources:
+    - ref: S02
+      item: CC Spotlight
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S01
+      item: CC Spotlight
+      category: Perspective (Cycore plugins page)
+      checked: true
+  artist_can: >-
+    Shine a soft-edged virtual spotlight across a layer, optionally through a patterned gel, darkening everything outside the beam.
+  projection_example: >-
+    A searchlight sweeps across the facade and comes to rest on the entrance.
+  controls:
+    - { name: "From", type: point3d, animatable: true }
+    - { name: "To", type: point2d, animatable: true }
+    - { name: "Height", type: float, animatable: true }
+    - { name: "Cone Angle", type: angle, animatable: true }
+    - { name: "Edge Softness", type: percent, animatable: true }
+    - { name: "Color", type: color, animatable: true }
+    - { name: "Intensity", type: float, animatable: true }
+    - { name: "Render", type: "enum(light|light-only|lit|lit-only|…)", animatable: false }
+    - { name: "Gel Layer", type: layer, animatable: false }
+  animation: >-
+    From and To follow motion paths; Intensity and Cone keyframable or audio-driven.
+  dependencies: [anim.motion-path, anim.keyframe.core, 3d.light, mask.blend-modes]
+  implementation: >-
+    WGSL analytic elliptical cone footprint from From/To/Height with a smoothstep edge. The gel layer is sampled as a projective texture
+    and the result composited per Render mode in scene-linear light. No temporal dependency; no bounds change.
+  io: >-
+    none
+  limitations: >-
+    It is a 2D light illusion with no occlusion by features. Use 3d.light with the venue model for shadowing.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Shine a spotlight" — drag the beam's landing point on the canvas; record a path by dragging during playback.
+    defaults: >-
+      Warm white, 25° cone, soft edge, scene darkened to 30% outside the beam.
+    automation: >-
+      Snaps the end of the path to the nearest region centroid (e.g., a door).
+    usability_check: >-
+      A first-time user animates a searching spotlight that ends on the door in under 60 s.
+  acceptance: >-
+    Mini scene "searchlight": the beam lands on the door region at the marked time; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.drop-shadow
+  name: Drop Shadow
+  sources:
+    - ref: S02
+      item: Drop Shadow
+      category: Perspective
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: Drop Shadow
+      category: Perspective
+      checked: true
+  artist_can: >-
+    Add a soft shadow behind a layer, shaped by its alpha, cast in a chosen direction and distance; optionally render only the shadow.
+  projection_example: >-
+    Projected letters cast shadows on the wall so they appear to float in front of it.
+  controls:
+    - { name: "Shadow Color", type: color, animatable: true }
+    - { name: "Opacity", type: percent, animatable: true }
+    - { name: "Direction", type: angle, animatable: true }
+    - { name: "Distance", type: float, animatable: true }
+    - { name: "Softness", type: float, animatable: true }
+    - { name: "Shadow Only", type: bool, animatable: false }
+  animation: >-
+    All values keyframable; Direction links to the show's shared light.
+  dependencies: [fx.blur-sharpen.gaussian-blur, proj.effect-stack]
+  implementation: >-
+    WGSL: offset the alpha, apply a separable Gaussian (the kernel shared with fx.blur-sharpen.gaussian-blur), tint and composite under the
+    source. Bounds expand by Distance + 3σ; float32; GPU. Shares code with the Drop Shadow layer style.
+  io: >-
+    none
+  limitations: >-
+    As in Adobe, the shadow rotates with the layer unless the layer is rotated by fx.distort.transform first or the shadow is applied after nesting.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Add a shadow" toggle on text, shapes and images; also part of "Raise or recess".
+    defaults: >-
+      Direction from the show light; distance 1% of comp height; softness 2× distance; 50% black.
+    automation: >-
+      Uses the shared show light so all shadows agree; recipes place it after rotations automatically.
+    usability_check: >-
+      A first-time user adds a matching shadow to a title in 1 action.
+  acceptance: >-
+    Mini scene "floating-letters": no clipping of shadow at layer bounds; 32-bit export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.radial-shadow
+  name: Radial Shadow
+  sources:
+    - ref: S02
+      item: Radial Shadow
+      category: Perspective
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S01
+      item: Radial Shadow
+      category: Perspective
+      checked: true
+  artist_can: >-
+    Cast a shadow from a point light that grows with distance; Glass Edge mode tints the shadow through semi-transparent areas like stained glass.
+  projection_example: >-
+    A floating logo casts a growing shadow onto the wall as a virtual light moves past, with colored light spilling through a stained-glass graphic.
+  controls:
+    - { name: "Shadow Color", type: color, animatable: true }
+    - { name: "Opacity", type: percent, animatable: true }
+    - { name: "Light Source", type: point2d, animatable: true }
+    - { name: "Projection Distance", type: float, animatable: true }
+    - { name: "Softness", type: float, animatable: true }
+    - { name: "Render", type: "enum(regular|glass-edge)", animatable: false }
+    - { name: "Color Influence", type: percent, animatable: true }
+    - { name: "Shadow Only", type: bool, animatable: false }
+    - { name: "Resize Layer", type: bool, animatable: false }
+  animation: >-
+    Light Source follows motion paths and can be linked to other effects' light points (e.g., a lens flare center).
+  dependencies: [anim.motion-path, fx.blur-sharpen.gaussian-blur, expr.engine]
+  implementation: >-
+    WGSL: scale the alpha (and the colour, in Glass Edge mode) about the light point by a distance factor, apply Gaussian softness, tint and
+    composite. Resize Layer expands bounds to the projected bbox. Runs in rgba16float, although Adobe is 8 bpc only.
+  io: >-
+    none
+  limitations: >-
+    It is a single planar receiver at a fixed distance, not true 3D shadowing (see fx.perspective.architectural-shadow).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Pseudo-3D or tracking effect, replaced for projection by the real 3D scene (3d.*). Drop shadow, region relief and architectural shadow stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Cast shadow from a light" — drag the light point on the canvas.
+    defaults: >-
+      Light above-left; distance 10% of comp width; Glass Edge automatically on semi-transparent layers.
+    automation: >-
+      Offers to link the light point to an existing flare or spotlight in one click.
+    usability_check: >-
+      A first-time user makes a logo's shadow swing as a light moves past in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "stained-glass-shadow": colored shadow through semi-transparent areas; no bound clipping with Resize Layer on.
+  status: not-started
+  evidence: []
+
+# ---------------------------------------------------------------------------
+# Projection-specific perspective / relief capabilities (brief §1, §19). Not in Adobe's catalog.
+# ---------------------------------------------------------------------------
+
+- id: fx.perspective.region-relief
+  name: Raise or recess a region
+  sources:
+    - ref: brief §1
+      item: Surfaces appear to change shape and depth
+      category: What the product must enable
+      checked: true
+    - ref: brief §19
+      item: Apparent surface deformation
+      category: Projection-specific creative tools
+      checked: true
+  artist_can: >-
+    Make selected regions (bricks, panels, window frames) look raised from or sunk into the wall, with consistent bevels, inner and outer
+    shadows and highlights from one shared virtual light.
+  projection_example: >-
+    Every brick pushes out of the wall one after another, all lit from the same side, then sinks back.
+  controls:
+    - { name: "Depth (+ raise / − recess)", type: float, animatable: true }
+    - { name: "Edge width", type: float, animatable: true }
+    - { name: "Profile", type: "enum(soft|chisel|square)", animatable: false }
+    - { name: "Show light direction / elevation (shared)", type: "angle[2]", animatable: true }
+    - { name: "Highlight / shadow strength", type: "percent[2]", animatable: true }
+    - { name: "Shadow softness", type: float, animatable: true }
+    - { name: "Per-region delay", type: "enum(none|by-index|by-position|seeded-random)", animatable: false }
+  animation: >-
+    Depth keyframable per region through a rig; sequencing through tool.sequence-light-up offsets; depth can follow an audio band.
+  dependencies: [fx.perspective.drop-shadow, map.region, expr.rigs, tool.sequence-light-up, ux.recipe-engine]
+  implementation: >-
+    Recipe over a region-ID matte. A per-region jump-flood SDF gives a height profile chosen by Profile, normals from it give the lighting
+    (WGSL), and a cast shadow comes from offsetting the region matte along the light vector scaled by Depth. The show light is stored once
+    and linked by expression into every bevel and shadow, so all regions agree. Pure function of time.
+  io: >-
+    Region references are by role, so the show rebinds to another venue.
+  limitations: >-
+    It is an illusion tuned for the audience viewpoint; real ambient light on the surface reduces contrast. It does not alter venue geometry.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Raise it" / "Push it in" — select regions and drag the depth slider; "One after another" staggers them.
+    defaults: >-
+      Depth 1.5% of region size; soft profile; light from upper left (the show light); 0.1 s stagger by position.
+    automation: >-
+      Builds region mattes and SDFs, links all lighting to the show light, and orders the stagger by region position.
+    usability_check: >-
+      A first-time user makes 40 bricks pop out in sequence in under 2 min. An automated check confirms that every shadow falls in the same direction.
+  acceptance: >-
+    AS-3 Transformation (pre-fragmentation relief); mini scene "brick-pop-sequence": consistent light direction across all regions after rebinding to a second venue (AS-7).
+  status: not-started
+  evidence: []
+
+- id: fx.perspective.architectural-shadow
+  name: Move the sun across the facade
+  sources:
+    - ref: brief §1
+      item: Buildings appear to change lighting and depth
+      category: What the product must enable
+      checked: true
+    - ref: brief §15
+      item: Audience viewpoint for perspective-dependent illusions
+      category: Projection design
+      checked: true
+  artist_can: >-
+    Cast fake shadows from the building's real features (ledges, columns, window recesses) under a moving virtual light, so a sun appears
+    to sweep over the facade.
+  projection_example: >-
+    A virtual sunrise: shadows inside window recesses and under the cornice lengthen and rotate as the light moves.
+  controls:
+    - { name: "Light azimuth", type: angle, animatable: true }
+    - { name: "Light elevation", type: angle, animatable: true }
+    - { name: "Light color / intensity", type: "color+float", animatable: true }
+    - { name: "Shadow softness", type: float, animatable: true }
+    - { name: "Shadow color / opacity", type: "color+percent", animatable: true }
+    - { name: "Feature depths (per region)", type: "float[]", animatable: true }
+    - { name: "Mode", type: "enum(2.5d-heightfield|3d-model)", animatable: false }
+  animation: >-
+    Azimuth and elevation keyframed along a "sun path" preset; all values keyframable.
+  dependencies: [map.region, map.model-3d, pass.depth, 3d.light, 3d.scene, 3d.camera, fx.perspective.region-relief, ux.recipe-engine]
+  implementation: >-
+    2.5D mode: a height field is built from per-region depths (defaults by region type: recesses negative, ledges positive) and WGSL
+    ray-marches it in screen space for soft shadows. 3D mode: when map.model-3d exists, three.js renders shadow maps from a directional
+    light, seen from the audience camera, into a shadow-only pass. Both are pure functions of time.
+  io: >-
+    none
+  limitations: >-
+    It is correct only near the chosen audience viewpoint, and it cannot remove real shadows or ambient light. The 2.5D depths are user
+    estimates, not survey data.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Move the sun" — drag a sun across a small sky dome widget; "Sunrise" and "Sunset" presets.
+    defaults: >-
+      Depth defaults per region type; soft shadows at 60% opacity; sunrise over 10 s.
+    automation: >-
+      Assigns default depths from region labels (window, ledge, column), uses the venue model automatically when present, and links the
+      show light to region-relief.
+    usability_check: >-
+      A first-time user animates a sunrise shadow sweep over a facade in under 3 min without entering any depth values.
+  acceptance: >-
+    AS-2 Depth illusion (light/shadow); mini scene "facade-sunrise": 2.5D and 3D modes agree in shadow direction; export matches preview.
+  status: not-started
+  evidence: []

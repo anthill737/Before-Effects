@@ -1,0 +1,1454 @@
+# Stylize — Before Effects capability register
+# Sources: S02 (effect list + support matrix), S16 (Stylize effects), brief §0, §1, §11E, §13, §14, §19, §22. Live helpx.adobe.com pages returned HTTP 403 (bot block) on 2026-10-01 for all regional variants; category membership was cross-checked via search-engine listings of S16 and Contour Paint controls via Adobe's community beta announcement, but Adobe items were authored from prior knowledge (checked: false) and adobe_support values are best-known, not matrix-verified.
+
+- id: fx.stylize.brush-strokes
+  name: Brush Strokes
+  sources:
+    - ref: S02
+      item: Brush Strokes
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [8], mfr: null }
+      checked: false
+    - ref: S16
+      item: Brush Strokes
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Give an image a rough painted look made of directional brush strokes with a chosen size, length, density and randomness.
+  projection_example: >-
+    The projected scene turns into an impressionist painting across the facade for a gallery-night show.
+  controls:
+    - { name: "Stroke angle", type: angle, animatable: true }
+    - { name: "Brush size, stroke length, stroke density", type: float, animatable: true }
+    - { name: "Stroke randomness", type: float, animatable: true }
+    - { name: "Paint surface (on original, transparent, white, black)", type: enum, animatable: false }
+    - { name: "Blend with original", type: float, animatable: true }
+    - { name: "Stroke anchoring (screen or region space, product addition)", type: enum, animatable: false }
+  animation: >-
+    All numeric controls keyframable; animating Blend with original fades the painted look in.
+  dependencies: [fx.simulation.deterministic-seeds, map.region]
+  implementation: >-
+    Stateless WGSL stroke splatting: stroke centres on a jittered grid (density) with hash(seed, cell) randomness, each drawn as an oriented soft elongated quad coloured from the source at its centre and accumulated in rgba16float, then composited per paint-surface mode. Strokes are fixed in screen space (or in region UV space when anchored) so they don't boil frame to frame. Bounds expand by half the stroke length.
+  io: >-
+    none
+  limitations: >-
+    Screen-anchored strokes "shower-door" over moving footage; region anchoring fixes this for content moving with the building but not for camera moves inside footage.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Painted look" recipe → More controls.
+    defaults: >-
+      Brush size scaled to output resolution, strokes anchored to the region, angle 135°, moderate randomness.
+    automation: >-
+      Scales brush size with resolution changes and anchors strokes to the selected region.
+    usability_check: >-
+      A first-time user turns a selected scene into a painted look and makes the strokes bigger in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "painted-facade": export matches preview within tolerance; strokes stay stable across frames.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cartoon
+  name: Cartoon
+  sources:
+    - ref: S02
+      item: Cartoon
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Cartoon
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Make footage look hand-drawn: simplify detail, flatten shading into a few tones and add ink-like edge lines.
+  projection_example: >-
+    Live-action footage of dancers becomes a comic-book animation on the theatre wall.
+  controls:
+    - { name: "Render (fill, edges, fill and edges)", type: enum, animatable: false }
+    - { name: "Detail radius and detail threshold", type: float, animatable: true }
+    - { name: "Fill (shading steps, shading smoothness)", type: group, animatable: true }
+    - { name: "Edge (threshold, width, softness, opacity)", type: group, animatable: true }
+    - { name: "Advanced (edge enhancement, edge black level, edge contrast)", type: group, animatable: true }
+  animation: >-
+    All values keyframable; edge width and shading steps are common animation targets.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    WGSL pass graph: an edge-preserving bilateral smooth (separable approximation, detail radius and threshold), then luminance quantized into shading steps with smoothstep softness, then Sobel/DoG edges on the smoothed luma with threshold, width and softness, then composite. Luma is computed on display-encoded values to match artist expectations, while colour stays scene-linear. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Per-frame filtering can shimmer on noisy footage; denoise first or raise detail threshold.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Cartoon look" recipe → More controls.
+    defaults: >-
+      Medium detail radius, 6 shading steps, thin dark edges.
+    automation: >-
+      Suggests a denoise pre-pass when footage noise is detected.
+    usability_check: >-
+      A first-time user gives a video a cartoon look and thickens its outlines in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "comic-dancers": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.color-emboss
+  name: Color Emboss
+  sources:
+    - ref: S02
+      item: Color Emboss
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Color Emboss
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Sharpen edges into a raised, lit relief while keeping the image's colours.
+  projection_example: >-
+    A projected mural looks carved into the stone yet keeps its colours.
+  controls:
+    - { name: "Direction", type: angle, animatable: true }
+    - { name: "Relief", type: float, animatable: true }
+    - { name: "Contrast", type: float, animatable: true }
+    - { name: "Blend with original", type: float, animatable: true }
+  animation: >-
+    All controls keyframable; animating direction makes the light appear to move.
+  dependencies: [fx.stylize.emboss]
+  implementation: >-
+    Shares the Emboss WGSL pass: a directional difference between each pixel and its neighbour at relief distance along the chosen angle, scaled by contrast and added to the original colour (hue preserved). Stateless; bounds expand by the relief distance.
+  io: >-
+    none
+  limitations: >-
+    A 2D image-space relief, not real lighting of the venue model (see 3d.light).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Carve into stone" recipe → "Keep colour" option.
+    defaults: >-
+      Light from the upper left of the audience view, moderate relief.
+    automation: >-
+      Sets direction from the scene's main light when one exists.
+    usability_check: >-
+      A first-time user makes a colourful image look carved in under 30 s with one option change.
+  acceptance: >-
+    Mini scene "carved-mural": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.contour-paint
+  name: Contour Paint
+  sources:
+    - ref: S02
+      item: Contour Paint
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Contour Paint
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Smear the image along its contours like finger-painting and reduce it to flat, hand-drawn colour fills, from print-like graphics to strong abstraction.
+  projection_example: >-
+    A video of waves becomes a flowing, poster-like painting on a museum facade.
+  controls:
+    - { name: "View (final result, edge map)", type: enum, animatable: false }
+    - { name: "Stylization and cleanliness", type: float, animatable: true }
+    - { name: "Smear iterations", type: int, animatable: true }
+    - { name: "Apply to alpha", type: bool, animatable: false }
+    - { name: "Draw color fills (none, over smeared image, only)", type: enum, animatable: false }
+    - { name: "Reduction method (k-means, median, nearest custom color)", type: enum, animatable: false }
+    - { name: "Posterization level and custom color set", type: group, animatable: true }
+    - { name: "Limit fills by edge strength", type: float, animatable: true }
+    - { name: "Flow map edits (offset angles, quantize angles, freehand flow strokes)", type: group, animatable: true }
+    - { name: "External edge map layer", type: layer, animatable: false }
+    - { name: "Lock palette from a reference frame (product addition)", type: bool, animatable: false }
+  animation: >-
+    Stylization, cleanliness, iterations, palette and flow offsets keyframable.
+  dependencies: [fx.stylize.posterize, fx.stylize.find-edges, shape.path]
+  implementation: >-
+    WGSL pass graph: a Gaussian-smoothed structure tensor gives an edge-tangent flow field, and the image is smeared by iterated flow-guided line-integral convolution (ping-pong rgba16float, one pass per iteration). Colours are reduced by palette quantization in OKLab (k-means or median-cut on a downsampled frame in compute, or nearest custom colour); freehand flow edits are stored as vector strokes rasterized into an angle-offset map. Per-frame palettes can flicker, so "Lock palette" keeps it stateless and stable; bounds are unchanged.
+  io: >-
+    none
+  limitations: >-
+    Adobe introduced this effect in After Effects Beta 27.0 (build 6+), and its controls were taken from Adobe's beta announcement; confirm the shipping control set when S16 can be read. The algorithm is proprietary, so the equivalent targets the look. Freehand flow edits are static and need tracking for moving footage.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Painted poster" recipe → More controls.
+    defaults: >-
+      Medium stylization, 20 smear iterations, 8 k-means colours with palette locked.
+    automation: >-
+      Picks the palette from the first frame and locks it to prevent flicker.
+    usability_check: >-
+      A first-time user turns a video into a flat poster-paint look and changes the colour count in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "poster-waves": no palette flicker over 10 s with lock on; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.emboss
+  name: Emboss
+  sources:
+    - ref: S02
+      item: Emboss
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Emboss
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Turn the image into a grey raised relief lit from one direction.
+  projection_example: >-
+    A logo appears pressed into the facade stone as a grey relief before colour floods in.
+  controls:
+    - { name: "Direction", type: angle, animatable: true }
+    - { name: "Relief", type: float, animatable: true }
+    - { name: "Contrast", type: float, animatable: true }
+    - { name: "Blend with original", type: float, animatable: true }
+  animation: >-
+    All controls keyframable.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    WGSL directional-difference pass on luma at relief distance, scaled by contrast around 50% grey, then blended. Stateless; bounds expand by the relief distance; computed in display-encoded luma for an AE-like result.
+  io: >-
+    none
+  limitations: >-
+    An image-space relief, not 3D lighting of the venue model.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Carve into stone" recipe → More controls.
+    defaults: >-
+      Light from the upper left of the audience view, moderate relief, blended over the stone texture.
+    automation: >-
+      Multiplies the relief over the wall's base colour so it reads as carved rather than grey.
+    usability_check: >-
+      A first-time user makes a logo look carved into a wall in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "carved-logo": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.find-edges
+  name: Find Edges
+  sources:
+    - ref: S02
+      item: Find Edges
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Find Edges
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Find the edges in an image and show them as lines (dark on light, or bright on dark when inverted), for sketch looks or as the starting point for neon outlines.
+  projection_example: >-
+    A photo of the facade becomes bright outlines of its own windows and mouldings, which then glow.
+  controls:
+    - { name: "Invert", type: bool, animatable: false }
+    - { name: "Blend with original", type: float, animatable: true }
+    - { name: "Source (luma or per channel, product addition)", type: enum, animatable: false }
+    - { name: "Edge strength and thickness (product addition)", type: float, animatable: true }
+  animation: >-
+    Blend and strength keyframable; outlines can fade in.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    WGSL Sobel gradient magnitude per channel or on luma, normalized against display-encoded values so HDR highlights don't overpower edges; optional dilation for thickness. Stateless with a 1-pixel apron (bounds unchanged; edge-clamp sampling).
+  io: >-
+    none
+  limitations: >-
+    Image edges are not architectural edges: noisy textures produce clutter. Clean region outlines come from tool.edge-trace and map.region.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Neon outline" (image source) and "Sketch" recipes → More controls.
+    defaults: >-
+      Inverted (bright lines on black), luma source, strength auto-normalized.
+    automation: >-
+      Auto-normalizes strength from the image histogram so outlines are visible without tuning.
+    usability_check: >-
+      A first-time user turns a photo into bright outlines in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "sketch-facade": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.glow
+  name: Glow
+  sources:
+    - ref: S02
+      item: Glow
+      category: Stylize
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: null }
+      checked: false
+    - ref: S16
+      item: Glow
+      category: Stylize
+      checked: false
+    - ref: brief §0.1
+      item: Trace with light
+      category: User experience
+      checked: true
+  artist_can: >-
+    Make the bright parts of a layer, or its alpha shape, glow with a soft halo of chosen size, strength and colour, from subtle bloom to strong neon.
+  projection_example: >-
+    Light traced around the windows and roofline blooms into a soft halo that spills slightly onto the surrounding stone.
+  controls:
+    - { name: "Glow based on (color channels, alpha channel)", type: enum, animatable: false }
+    - { name: "Glow threshold", type: float, animatable: true }
+    - { name: "Glow radius", type: float, animatable: true }
+    - { name: "Glow intensity", type: float, animatable: true }
+    - { name: "Composite original (on top, behind, none)", type: enum, animatable: false }
+    - { name: "Glow operation (blend mode)", type: enum, animatable: false }
+    - { name: "Glow colors (original or A and B), color looping, loops, phase, A and B midpoint", type: group, animatable: true }
+    - { name: "Color A and color B", type: color, animatable: true }
+    - { name: "Glow dimensions (horizontal and vertical, horizontal, vertical)", type: enum, animatable: false }
+    - { name: "Mode (classic AE-matching, physical bloom; product addition)", type: enum, animatable: false }
+  animation: >-
+    Threshold, radius, intensity, colours and phase keyframable, expression-linkable and audio-drivable (glow pulses on beats).
+  dependencies: [proj.effect-stack, mask.blend-modes, out.output-mask]
+  implementation: >-
+    WGSL pass graph: a soft-knee threshold on luminance or alpha in scene-linear rgba16float, then a downsample mip chain with upsample-accumulate (dual-filter or 13-tap) approximating large Gaussians in near-linear time (an exact separable Gaussian for small radii; H/V-only for single dimensions), then optional A/B colour remap with looping, then the chosen blend. The pass declares bounds expansion of about 3× the radius on every side (capped at comp bounds) so halos are never clipped at layer edges; values above 1.0 are preserved for HDR bloom, and 8-bit exports are dithered to avoid banding. Stateless and parallel-safe; a creative glow may spill past objects within the comp, while out.output-mask still stops physical spill.
+  io: >-
+    none
+  limitations: >-
+    Classic mode matches AE's look, not its exact pixels. Very large radii at 4K rely on the mip pyramid's approximation. Layer-style Outer/Inner Glow is mask.layer-styles and shares this blur pyramid.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Make it glow" on any selection, and added automatically by "Trace with light"; first controls are glow size, strength and colour.
+    defaults: >-
+      Threshold set from the layer's histogram, radius proportional to stroke width or region size, original on top, additive (screen-like) blend.
+    automation: >-
+      Expands layer bounds automatically, rescales radius on resolution change and adds the glow inside trace and neon recipes.
+    usability_check: >-
+      A first-time user makes a traced roofline glow and adjusts its size and colour in ≤3 deliberate actions, and no glow is clipped at the layer edges.
+  acceptance: >-
+    AS-1 (Architectural trace): traced windows and rooflines glow; halos extend past layer bounds without clipping; preview and export match within tolerance with no visible banding.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: fx.stylize.mosaic
+  name: Mosaic
+  sources:
+    - ref: S02
+      item: Mosaic
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Mosaic
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Pixelate an image into a grid of solid-colour blocks, with block counts that can animate for pixel transitions.
+  projection_example: >-
+    A scene pixelates into big blocks that line up with the stone coursing, then resolves into the next scene.
+  controls:
+    - { name: "Horizontal blocks and vertical blocks", type: int, animatable: true }
+    - { name: "Sharp colors", type: bool, animatable: false }
+    - { name: "Square blocks / block size in pixels (product addition)", type: group, animatable: true }
+    - { name: "Grid anchored to region (product addition)", type: bool, animatable: false }
+  animation: >-
+    Block counts keyframable; a fall-and-rise in block count is the classic pixel transition.
+  dependencies: [map.region]
+  implementation: >-
+    WGSL block-average via compute reduction per cell (or the centre sample when Sharp colors is on), written back as flat blocks; block grid optionally in region UV space so blocks follow the architecture. Stateless; no bounds expansion; averaging in scene-linear.
+  io: >-
+    none
+  limitations: >-
+    Non-integer block counts during animation pop between sizes, as in AE; a smooth option cross-fades between adjacent counts.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Pixelate" recipe (and the "Pixel transition" transition); first controls are block size and duration.
+    defaults: >-
+      Square blocks, about 24 across the region, grid anchored to the region.
+    automation: >-
+      Keys the pixel-in/pixel-out envelope around the cut point.
+    usability_check: >-
+      A first-time user adds a pixel transition between two scenes in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "pixel-cut": export matches preview; blocks align to the region grid.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.motion-tile
+  name: Motion Tile
+  sources:
+    - ref: S02
+      item: Motion Tile
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Motion Tile
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Repeat a layer as tiles, optionally mirrored at the seams, enlarge the output beyond the layer, and offset alternate rows or columns.
+  projection_example: >-
+    One brick-pattern loop tiles seamlessly across a long wall; mirrored edges fill gaps when a distortion pulls the image inward.
+  controls:
+    - { name: "Tile center", type: point2d, animatable: true }
+    - { name: "Tile width and tile height", type: float, animatable: true }
+    - { name: "Output width and output height", type: float, animatable: true }
+    - { name: "Mirror edges", type: bool, animatable: false }
+    - { name: "Phase", type: angle, animatable: true }
+    - { name: "Horizontal phase shift", type: bool, animatable: false }
+  animation: >-
+    Tile centre and phase keyframable; animating the centre scrolls a seamless pattern.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    WGSL UV remap with repeat or mirror-repeat addressing, plus a phase offset on alternate rows or columns. The pass declares bounds expansion equal to the output width/height percentage. Stateless, exact sampling (bicubic when tiles are scaled), and also used internally as edge extension under distortions and blurs.
+  io: >-
+    none
+  limitations: >-
+    Seam quality depends on the source; non-seamless sources need mirror edges or a blend (CC RepeTile).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Repeat as pattern" recipe; also applied automatically when a distortion would reveal empty edges.
+    defaults: >-
+      Tile size from the source, mirror edges on, output large enough to cover the region.
+    automation: >-
+      Sizes the output to cover the selected region and adds edge extension under distortions without asking.
+    usability_check: >-
+      A first-time user fills a long wall with a repeating pattern from one clip in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "tiled-wall": no visible seams or edge gaps in export.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.posterize
+  name: Posterize
+  sources:
+    - ref: S02
+      item: Posterize
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Posterize
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Reduce each colour channel to a small number of levels for a flat, screen-printed poster look.
+  projection_example: >-
+    A video on the facade becomes a four-tone screen-print look that matches a band's album art.
+  controls:
+    - { name: "Level", type: int, animatable: true }
+    - { name: "Quantize in (display, linear, OKLab; product addition)", type: enum, animatable: false }
+  animation: >-
+    Level keyframable (stepwise), useful for stylized transitions.
+  dependencies: [color.management]
+  implementation: >-
+    WGSL per-channel quantization, floor(v·levels)/(levels−1). By default it runs on display-encoded values so steps look even to artists (scene-linear quantization bunches steps in the darks), and the conversion boundary is declared to the colour pipeline. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    HDR values above 1.0 clamp to the top level; results vary with the chosen quantization space, so the space is recorded with the project.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Poster look" recipe; the first control is the number of colours.
+    defaults: >-
+      4 levels, display-space quantization.
+    automation: >-
+      Chooses the quantization space automatically from the working colour space.
+    usability_check: >-
+      A first-time user gives a video a poster look and changes the number of tones in ≤3 deliberate actions and under 15 s.
+  acceptance: >-
+    Mini scene "screen-print": export matches preview level-for-level.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.roughen-edges
+  name: Roughen Edges
+  sources:
+    - ref: S02
+      item: Roughen Edges
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Roughen Edges
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Make a layer's edges ragged, eroded, spiky, rusty or photocopied using animated fractal noise, optionally with a coloured edge band.
+  projection_example: >-
+    A reveal mask burns its way across the wall with torn, glowing edges.
+  controls:
+    - { name: "Edge type (roughen, roughen color, cut, spiky, rusty, rusty color, photocopy, photocopy color)", type: enum, animatable: false }
+    - { name: "Edge color", type: color, animatable: true }
+    - { name: "Border and edge sharpness", type: float, animatable: true }
+    - { name: "Fractal influence, scale, stretch width or height", type: float, animatable: true }
+    - { name: "Offset (turbulence)", type: point2d, animatable: true }
+    - { name: "Complexity", type: int, animatable: false }
+    - { name: "Evolution", type: angle, animatable: true }
+    - { name: "Evolution options (cycle evolution, cycle revolutions, random seed)", type: group, animatable: false }
+  animation: >-
+    Border, evolution and offset keyframable; cycle evolution gives seamless loops.
+  dependencies: [fx.noise-grain.fractal-noise, fx.simulation.deterministic-seeds, mask.bezier]
+  implementation: >-
+    WGSL: a jump-flood signed distance field from the layer alpha, offset by seeded fractal noise (the same kernel as fx.noise-grain.fractal-noise, with loopable evolution), thresholded with edge sharpness into new alpha, plus a coloured band for the colour, rusty and photocopy types. Stateless (evolution is a function of time); bounds expand by the border width.
+  io: >-
+    none
+  limitations: >-
+    The distance field is limited to the border range, so very wide borders cost more passes.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Burn away" and "Torn paper reveal" recipes → More controls, and as an "Edge: rough" option on masks.
+    defaults: >-
+      Roughen color with a warm edge, border scaled to region size, evolution looping over the scene.
+    automation: >-
+      Sets a looping evolution cycle matching the scene length.
+    usability_check: >-
+      A first-time user gives a reveal ragged, glowing edges with one option change in under 15 s.
+  acceptance: >-
+    Mini scene "burn-reveal": seamless loop at the cycle point; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.scatter
+  name: Scatter
+  sources:
+    - ref: S02
+      item: Scatter
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Scatter
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Scatter pixels randomly around their position, horizontally, vertically or both, for a grainy, diffused or dissolving look.
+  projection_example: >-
+    An image dissolves into sandy grain on the wall before the next scene sharpens in.
+  controls:
+    - { name: "Scatter amount", type: float, animatable: true }
+    - { name: "Grain (both, horizontal, vertical)", type: enum, animatable: false }
+    - { name: "Randomize every frame", type: bool, animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Scatter amount keyframable; per-frame randomization makes it shimmer.
+  dependencies: [fx.simulation.deterministic-seeds]
+  implementation: >-
+    WGSL gather: each pixel reads from an offset of hash(seed, pixel, frame slot if randomized) × amount along the grain axes. Stateless and random-access; the frame slot derives from comp time in flicks, so it is stable at any render order. Bounds expand by the scatter amount.
+  io: >-
+    none
+  limitations: >-
+    Per-frame randomization depends on frame rate (a different frame rate gives a different pattern), which is documented.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Dissolve to grain" transition → More controls.
+    defaults: >-
+      Scatter animates 0 → 40 px → 0 around the cut; static pattern.
+    automation: >-
+      Scales scatter amount to output resolution.
+    usability_check: >-
+      A first-time user adds a grainy dissolve between two scenes in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "grain-dissolve": random-order renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.strobe-light
+  name: Strobe Light
+  sources:
+    - ref: S02
+      item: Strobe Light
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Strobe Light
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Flash a colour over the layer, or make it transparent, at regular or random intervals, with chosen duration, period, probability and blend operation.
+  projection_example: >-
+    The whole facade flashes white in a regular strobe during a musical build.
+  controls:
+    - { name: "Strobe color", type: color, animatable: true }
+    - { name: "Blend with original", type: float, animatable: true }
+    - { name: "Strobe duration and strobe period (seconds or beats)", type: float, animatable: true }
+    - { name: "Random strobe probability", type: float, animatable: true }
+    - { name: "Strobe (operates on color only, makes layer transparent)", type: enum, animatable: false }
+    - { name: "Strobe operator (copy, add, subtract, multiply, difference, screen and others)", type: enum, animatable: false }
+    - { name: "Random seed", type: seed, animatable: false }
+  animation: >-
+    Period, duration and probability keyframable; period can lock to BPM from audio analysis.
+  dependencies: [fx.simulation.deterministic-seeds, audio.analysis, mask.blend-modes]
+  implementation: >-
+    Stateless: whether a strobe is on at time t depends only on floor(t / period) and hash(seed, period index) < probability, evaluated in integer flicks so periods are exact at any frame rate and render order. The flash colour is applied with the chosen operator, or alpha is cut. No bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Fast high-contrast flashing can trigger photosensitive seizures; the app warns when flash frequency exceeds about 3 per second (see fx.stylize.rhythmic-flash).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Flash" and "Flash with the beat" recipes → More controls.
+    defaults: >-
+      White flash, 1 frame duration, period of one beat when music exists (else 0.5 s).
+    automation: >-
+      Locks the period to detected BPM and checks the flash rate for safety.
+    usability_check: >-
+      A first-time user makes a wall flash on every beat in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "beat-strobe": flashes land on the same frames in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.texturize
+  name: Texturize
+  sources:
+    - ref: S02
+      item: Texturize
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Texturize
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Make a layer look like it is printed on a textured surface by using another layer as a lit relief (tiled, centred or stretched).
+  projection_example: >-
+    Projected artwork takes on a canvas or brick relief so it reads as painted onto a material rather than projected.
+  controls:
+    - { name: "Texture layer", type: layer, animatable: false }
+    - { name: "Light direction", type: angle, animatable: true }
+    - { name: "Texture contrast", type: float, animatable: true }
+    - { name: "Texture placement (tile, center, stretch)", type: enum, animatable: false }
+  animation: >-
+    Light direction and contrast keyframable; the texture layer may itself be animated.
+  dependencies: [proj.layer, fx.stylize.cc-plastic]
+  implementation: >-
+    Shared bump-shade WGSL pass (with CC Glass and CC Plastic): normals from the texture layer's luma gradient, Lambert shading by the light direction scaled by contrast, multiplied onto the source in scene-linear. Stateless; its only temporal dependency is the texture layer at the same time; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    A real projection surface already has texture, so on a physical wall this can double the relief; it is most useful in preview renders and on smooth surfaces.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Make it look like [material]" recipes → More controls.
+    defaults: >-
+      Texture from the material library, tiled, light from the upper left.
+    automation: >-
+      Picks a texture to match the chosen material name.
+    usability_check: >-
+      A first-time user makes artwork look printed on canvas in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "canvas-print": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.threshold
+  name: Threshold
+  sources:
+    - ref: S02
+      item: Threshold
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: Threshold
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Turn an image into pure black and white at a chosen brightness level, or threshold per channel, for graphic, high-contrast looks and mattes.
+  projection_example: >-
+    A video of fire becomes stark white flame shapes on a black facade, used as a matte for a glow.
+  controls:
+    - { name: "Level", type: float, animatable: true }
+    - { name: "Channel (luminance, per-channel RGB, saturation, alpha)", type: enum, animatable: false }
+    - { name: "Per-channel levels (red, green, blue)", type: float, animatable: true }
+    - { name: "Invert (all or per channel)", type: bool, animatable: false }
+    - { name: "Softness (anti-aliased edge)", type: float, animatable: true }
+    - { name: "Blend with original", type: float, animatable: true }
+    - { name: "Preserve alpha", type: bool, animatable: false }
+  animation: >-
+    Level, per-channel levels, softness and blend keyframable.
+  dependencies: [color.management]
+  implementation: >-
+    WGSL: Rec.709 luma (or the selected channel) on display-encoded values compared with the level through a smoothstep of width softness, so animated thresholds are anti-aliased instead of buzzing; per-channel mode thresholds R, G and B independently. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Covers the useful outcomes of CC Threshold and CC Threshold RGB, which are superseded by this entry.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Black and white graphic" recipe and as "Make a matte from brightness" in mask tools.
+    defaults: >-
+      Level set at the image median, slight softness.
+    automation: >-
+      Picks the starting level from the histogram.
+    usability_check: >-
+      A first-time user makes a stark black-and-white version of a video and adjusts the level in under 15 s.
+  acceptance: >-
+    Mini scene "fire-matte": threshold matte drives a glow; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-block-load
+  name: CC Block Load
+  sources:
+    - ref: S02
+      item: CC Block Load
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Block Load
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Reveal a layer like a progressive image download: coarse blocks refine into full detail over several scans.
+  projection_example: >-
+    A retro-tech scene "loads" onto the building block by block.
+  controls:
+    - { name: "Completion", type: float, animatable: true }
+    - { name: "Scans", type: int, animatable: false }
+    - { name: "Start cleared", type: bool, animatable: false }
+    - { name: "Bilinear", type: bool, animatable: false }
+  animation: >-
+    Completion is keyed 0–100% to perform the reveal.
+  dependencies: [fx.stylize.mosaic]
+  implementation: >-
+    Stateless WGSL: completion maps to the current scan and its progress; each scan shows a block-averaged mip level (block size halving per scan), updated in scanline order up to the progress point, with nearest or bilinear upsampling. No bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    A stylized look; it does not mimic any specific codec's progressive order.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Pixel build-up" transition → More controls.
+    defaults: >-
+      4 scans over 1.5 s, start cleared.
+    automation: >-
+      Keys completion over the transition duration.
+    usability_check: >-
+      A first-time user adds a "loading" reveal to a scene in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "block-load": random-order renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-burn-film
+  name: CC Burn Film
+  sources:
+    - ref: S02
+      item: CC Burn Film
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Burn Film
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Make the layer burn away like melting film, with spreading holes that have hot, charred edges.
+  projection_example: >-
+    The old scene burns away from the centre of the facade to reveal the new one.
+  controls:
+    - { name: "Burn", type: float, animatable: true }
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Random seed", type: seed, animatable: false }
+  animation: >-
+    Burn is keyed to perform the effect; the centre can follow a point or region.
+  dependencies: [fx.noise-grain.fractal-noise, fx.simulation.deterministic-seeds, fx.stylize.glow]
+  implementation: >-
+    Stateless WGSL: a seeded fractal-noise distance field around the centre is thresholded by burn to cut alpha, and the boundary band is coloured with a heat ramp whose emissive values exceed 1.0, so a following Glow catches the burning edge. No bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    A 2D look; no smoke or embers (add particles via the recipe).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Burn away" recipe → More controls.
+    defaults: >-
+      Burn from the clicked point over 2 s with glowing edges; embers optional.
+    automation: >-
+      Adds glow on the burn edge and keys the burn to the chosen duration.
+    usability_check: >-
+      A first-time user burns away one scene into another from a chosen point in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "burn-cut": random-order renders hash-match sequential output.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-glass
+  name: CC Glass
+  sources:
+    - ref: S02
+      item: CC Glass
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Glass
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Make the layer look like it is seen through or made of glass: a bump map bends the image and adds glossy highlights from a light.
+  projection_example: >-
+    The brick facade turns into rippled glass with light catching on its bumps.
+  controls:
+    - { name: "Surface (bump map, property, softness, height, displacement)", type: group, animatable: true }
+    - { name: "Light (source: effect or comp lights, intensity, color, type, height, position, direction)", type: group, animatable: true }
+    - { name: "Shading (ambient, diffuse, specular, roughness, metal)", type: group, animatable: true }
+  animation: >-
+    Height, displacement, light and shading keyframable; an animated bump map gives moving glass.
+  dependencies: [proj.layer, 3d.light, fx.noise-grain.fractal-noise]
+  implementation: >-
+    Shared bump-shade WGSL pass: a height map from the chosen bump-map property (softness = pre-blur) gives normals that refract the source lookup by displacement, with a specular term (Blinn or GGX-lite) from the effect light or comp lights in scene-linear. Stateless apart from the bump layer at the same time; bounds expand by the displacement amount.
+  io: >-
+    none
+  limitations: >-
+    Image-space refraction, not real glass rendering; for physically based glass on the venue model use 3d.material-pbr.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Turn to glass" recipe → More controls.
+    defaults: >-
+      Bump map from looping noise scaled to the region, light from the audience side, moderate displacement.
+    automation: >-
+      Generates and loops the bump map and matches its scale to the region.
+    usability_check: >-
+      A first-time user makes a wall look like rippled glass in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "glass-wall": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-hextile
+  name: CC HexTile
+  sources:
+    - ref: S02
+      item: CC HexTile
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC HexTile
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Break the image into a honeycomb of hexagonal tiles, each showing a copy or portion of the image, with size, rotation and smearing.
+  projection_example: >-
+    A futuristic scene turns the facade into a honeycomb of hex tiles that rotate as the beat drops.
+  controls:
+    - { name: "Render mode", type: enum, animatable: false }
+    - { name: "Radius", type: float, animatable: true }
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Rotate", type: angle, animatable: true }
+    - { name: "Smearing", type: float, animatable: true }
+  animation: >-
+    Radius, centre, rotation and smearing keyframable.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    WGSL hexagonal-lattice UV transform (axial coordinates, nearest-hex lookup), sampling the source per hex with local rotation and edge smearing; derivative-aware sampling anti-aliases the hex seams. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Hex lattice is in image space; aligning to architecture is manual (centre and radius).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Hexagon tiles" recipe → More controls.
+    defaults: >-
+      About 20 hexes across the region, centred on it.
+    automation: >-
+      Centres the lattice on the region and scales the radius to it.
+    usability_check: >-
+      A first-time user turns a scene into hexagon tiles and resizes them in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "honeycomb": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-kaleida
+  name: CC Kaleida
+  sources:
+    - ref: S02
+      item: CC Kaleida
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Kaleida
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Turn any image into a kaleidoscope by mirroring and repeating segments around a centre, with several symmetry styles, size and rotation.
+  projection_example: >-
+    A rose window or dome fills with a slowly rotating kaleidoscope made from flower footage.
+  controls:
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Size", type: float, animatable: true }
+    - { name: "Mirroring (symmetry style)", type: enum, animatable: false }
+    - { name: "Rotation", type: angle, animatable: true }
+    - { name: "Floating center", type: bool, animatable: false }
+  animation: >-
+    Centre, size and rotation keyframable and audio-drivable.
+  dependencies: [map.region]
+  implementation: >-
+    WGSL symmetry-group fold: polar or triangular-group UV remap (dihedral and wallpaper folds) around the centre with size and rotation, with derivative-aware sampling at fold seams. Stateless; no bounds expansion; the centre can bind to a region centroid so the pattern sits on the architecture.
+  io: >-
+    none
+  limitations: >-
+    Symmetry styles are matched by look, not by exact Cycore geometry.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Kaleidoscope" recipe; first controls are pattern style, size and spin speed.
+    defaults: >-
+      Centre snapped to the selected region's centroid, slow rotation, flower-style mirroring.
+    automation: >-
+      Centres on the region and keys a seamless looping rotation.
+    usability_check: >-
+      A first-time user fills a round window with a spinning kaleidoscope in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "rose-window": pattern stays centred on the region after rebinding to another venue.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-mr-smoothie
+  name: CC Mr. Smoothie
+  sources:
+    - ref: S02
+      item: CC Mr. Smoothie
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Mr. Smoothie
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Replace an image's colours with a smooth, looping palette sampled between two points of the image and mapped by a chosen property, for psychedelic "liquid colour".
+  projection_example: >-
+    A building's projected texture melts into flowing psychedelic colour bands during a trance track.
+  controls:
+    - { name: "Property (red, green, blue, alpha, luminance, lightness, hue, saturation)", type: enum, animatable: false }
+    - { name: "Smoothness", type: float, animatable: true }
+    - { name: "Set color (point A, point B)", type: point2d, animatable: true }
+    - { name: "Color loop and phase", type: float, animatable: true }
+    - { name: "Blend with original", type: float, animatable: true }
+  animation: >-
+    Points, loops and phase keyframable; animating phase makes the colours flow.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    WGSL: the property map is pre-blurred by smoothness, a palette LUT is built from colours sampled along the line from point A to point B, and each pixel looks up property × loops + phase. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Results depend heavily on the source image; the recipe offers preset palettes for predictability.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Liquid colour" recipe → More controls.
+    defaults: >-
+      Luminance property, 3 loops, phase animating once per 8 s.
+    automation: >-
+      Places points A and B on contrasting areas automatically.
+    usability_check: >-
+      A first-time user makes colours flow psychedelically over a scene and changes the speed in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "liquid-colour": seamless loop at the phase cycle; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-plastic
+  name: CC Plastic
+  sources:
+    - ref: S02
+      item: CC Plastic
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Plastic
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Give the layer a glossy, embossed plastic look using a bump layer and a light.
+  projection_example: >-
+    Logos on the facade appear as shiny moulded plastic badges.
+  controls:
+    - { name: "Surface bump (layer, property, softness, cut min, cut max, height)", type: group, animatable: true }
+    - { name: "Light (source, intensity, color, type, height, position, direction)", type: group, animatable: true }
+    - { name: "Shading (ambient, diffuse, specular, roughness, metal)", type: group, animatable: true }
+  animation: >-
+    Bump, light and shading values keyframable.
+  dependencies: [proj.layer, 3d.light]
+  implementation: >-
+    Shared bump-shade WGSL pass (as CC Glass, without refraction): height from the bump property with cut min/max and softness, normals, then diffuse and glossy specular in scene-linear. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Image-space shading, not a 3D material; for real extruded logos use 3d.extrude with 3d.material-pbr.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Shiny plastic" recipe → More controls.
+    defaults: >-
+      Bump from the layer's own alpha, light from the upper left, glossy.
+    automation: >-
+      Uses the layer itself as the bump source.
+    usability_check: >-
+      A first-time user makes a logo look like glossy plastic in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "plastic-badge": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-repetile
+  name: CC RepeTile
+  sources:
+    - ref: S02
+      item: CC RepeTile
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC RepeTile
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Extend a layer beyond its edges in any direction by repeating it with tiling styles (repeat, mirror/unfold, brick, checker flip) and blended borders.
+  projection_example: >-
+    One window-sized animation is extended to cover an entire floor of windows without a seam.
+  controls:
+    - { name: "Expand right, left, down, up", type: int, animatable: true }
+    - { name: "Tiling (repeat, unfold, brick, checker flip and others)", type: enum, animatable: false }
+    - { name: "Blend borders", type: float, animatable: true }
+  animation: >-
+    Expansion amounts and border blend keyframable (a pattern can grow outward).
+  dependencies: [fx.stylize.motion-tile]
+  implementation: >-
+    WGSL tiled lookup with mirror, brick-offset and checker-flip addressing, cross-fading within a seam band for blend borders. The pass declares bounds expansion equal to the four expand values. Stateless.
+  io: >-
+    none
+  limitations: >-
+    Shares addressing code with Motion Tile but stays separate because it expands bounds per side and blends seams.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Repeat as pattern" recipe → "Extend beyond edges".
+    defaults: >-
+      Expand to cover the selected region, unfold tiling, small border blend.
+    automation: >-
+      Computes the expansion needed to cover the target region.
+    usability_check: >-
+      A first-time user extends one clip to cover a wider region without seams in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Mini scene "window-row": no seams or clipping in export.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-threshold
+  name: CC Threshold
+  sources:
+    - ref: S02
+      item: CC Threshold
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Threshold
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Threshold an image to two values using a chosen channel (luminance, RGB, saturation or alpha), with invert and blend with the original.
+  projection_example: >-
+    A high-contrast silhouette version of a performer clip is used as a graphic overlay.
+  controls:
+    - { name: "Threshold", type: float, animatable: true }
+    - { name: "Channel (luminance, RGB, saturation, alpha)", type: enum, animatable: false }
+    - { name: "Invert", type: bool, animatable: false }
+    - { name: "Blend with original", type: float, animatable: true }
+  animation: >-
+    As fx.stylize.threshold.
+  dependencies: [fx.stylize.threshold]
+  implementation: >-
+    No separate pass; the legacy name is a search alias for fx.stylize.threshold with the matching channel option.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.stylize.threshold, which offers the same channel choices, invert and blend, plus softness.
+  disposition: superseded
+  superseded_by: fx.stylize.threshold
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      No separate button; reached through the "Black and white graphic" recipe.
+    defaults: >-
+      As fx.stylize.threshold.
+    automation: >-
+      Searching the legacy name opens Threshold with matching settings.
+    usability_check: >-
+      A first-time user who searches "CC Threshold" gets a working threshold look in under 15 s.
+  acceptance: >-
+    Covered by the fx.stylize.threshold acceptance scene.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-threshold-rgb
+  name: CC Threshold RGB
+  sources:
+    - ref: S02
+      item: CC Threshold RGB
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Threshold RGB
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Threshold the red, green and blue channels separately for a bold, limited-colour graphic look.
+  projection_example: >-
+    Footage becomes a pop-art eight-colour image on a theatre wall.
+  controls:
+    - { name: "Red, green and blue threshold", type: float, animatable: true }
+    - { name: "Invert red, green, blue channel", type: bool, animatable: false }
+    - { name: "Blend with original", type: float, animatable: true }
+  animation: >-
+    As fx.stylize.threshold in per-channel mode.
+  dependencies: [fx.stylize.threshold]
+  implementation: >-
+    No separate pass; fx.stylize.threshold in per-channel RGB mode.
+  io: >-
+    none
+  limitations: >-
+    Superseded by fx.stylize.threshold, whose per-channel mode provides independent R/G/B levels and invert flags.
+  disposition: superseded
+  superseded_by: fx.stylize.threshold
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      No separate button; reached through the "Pop-art colours" variant of the "Black and white graphic" recipe.
+    defaults: >-
+      Per-channel levels at each channel's median.
+    automation: >-
+      Searching the legacy name opens Threshold in per-channel mode.
+    usability_check: >-
+      A first-time user gets a pop-art colour look from a video in ≤3 deliberate actions and under 20 s.
+  acceptance: >-
+    Covered by the fx.stylize.threshold acceptance scene (per-channel variant).
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.cc-vignette
+  name: CC Vignette
+  sources:
+    - ref: S02
+      item: CC Vignette
+      category: Stylize
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+    - ref: S16
+      item: CC Vignette
+      category: Stylize
+      checked: false
+  artist_can: >-
+    Darken (or lighten) the image toward its edges like a lens vignette, with amount, angle of view, centre and highlight protection.
+  projection_example: >-
+    Content softly darkens toward the edges of a stage backdrop so it doesn't end in a hard rectangle.
+  controls:
+    - { name: "Amount", type: float, animatable: true }
+    - { name: "Angle of view", type: angle, animatable: true }
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Pin highlights", type: float, animatable: true }
+    - { name: "Shape from region edges (product addition)", type: bool, animatable: false }
+  animation: >-
+    All values keyframable.
+  dependencies: [map.region, out.output-mask]
+  implementation: >-
+    WGSL radial falloff (cos⁴-style by angle of view) multiplying colour in scene-linear, with pin highlights protecting bright pixels; the product option derives falloff from a region-edge distance field so the vignette follows the surface shape. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    A creative vignette, not an output-edge feather; physical edge softening belongs to out.output-mask and out.edge-blend.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Soft edges" look → More controls.
+    defaults: >-
+      Moderate amount, centred on the region, shape from region edges.
+    automation: >-
+      Centres on the selected region and fits the falloff to its shape.
+    usability_check: >-
+      A first-time user softens content toward a region's edges in ≤3 deliberate actions and under 15 s.
+  acceptance: >-
+    Mini scene "soft-backdrop": export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.neon-outline
+  name: Neon outline
+  sources:
+    - ref: brief §11E
+      item: Neon outlines
+      category: Stylization
+      checked: true
+    - ref: brief §0.1
+      item: Click a roofline, choose Trace with light
+      category: User experience
+      checked: true
+  artist_can: >-
+    Turn region edges, drawn paths, text or detected image edges into glowing neon tubes with a white-hot core, a coloured halo, flicker and a power-on animation.
+  projection_example: >-
+    Every window frame becomes pink neon that flickers on one window after another, then buzzes in time with the bass.
+  controls:
+    - { name: "Source (region outlines, paths, text, detected image edges)", type: enum, animatable: false }
+    - { name: "Tube width", type: float, animatable: true }
+    - { name: "Core color and glow color", type: color, animatable: true }
+    - { name: "Glow size and intensity", type: float, animatable: true }
+    - { name: "Flicker amount and seed", type: group, animatable: true }
+    - { name: "Power-on order, delay and duration", type: group, animatable: true }
+    - { name: "Edge-detection threshold (image source)", type: float, animatable: true }
+    - { name: "Darken background", type: float, animatable: true }
+  animation: >-
+    Every value keyframable, with flicker and brightness audio-drivable. Power-on is a trim-path and sequence animation on the generated strokes.
+  dependencies: [tool.edge-trace, tool.sequence-light-up, fx.stylize.glow, fx.stylize.find-edges, fx.stylize.threshold, shape.path, map.region, audio.analysis, ux.recipe-engine, fx.simulation.deterministic-seeds]
+  implementation: >-
+    A recipe that generates real items: region outlines or traced paths become CanvasKit round-capped strokes, with a narrow near-white core over a wider coloured stroke, then fx.stylize.glow in physical-bloom mode with two radii, then a seeded flicker (stateless hash per tube per time slot), with the power-on sequence handled by tool.sequence-light-up. Image sources go through Find Edges, Threshold and thinning first. Bounds come from Glow's declared expansion; brightness above 1.0 drives the bloom.
+  io: >-
+    none
+  limitations: >-
+    Image-edge sources are noisy compared with region or traced paths. Neon brightness is limited by the projector, not the comp; on a lit facade the halo reads weaker than on screen.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Neon outline": select regions (or click a roofline), choose the recipe, then pick colour, thickness and how it switches on.
+    defaults: >-
+      Pink core-and-halo neon, tube width from the output resolution, slight flicker, windows power on left to right with a 0.15 s delay.
+    automation: >-
+      Traces the region outlines, builds strokes, glow, flicker and the sequence, and orders regions by position.
+    usability_check: >-
+      A first-time user turns all selected windows into neon outlines that switch on one after another in ≤3 deliberate actions and under 45 s.
+  acceptance: >-
+    AS-1 variant "neon-windows": strokes stay on the region edges after rebinding, glow is unclipped, and flicker is identical in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.stained-glass
+  name: Stained glass
+  sources:
+    - ref: brief §11E
+      item: Stained-glass looks
+      category: Stylization
+      checked: true
+    - ref: brief §1
+      item: Brick changes into glass or glowing patterns
+      category: What the product must enable
+      checked: true
+  artist_can: >-
+    Turn a surface into stained glass: the image splits into cells (random, hexagonal, or following the real window mullions), each filled with a rich colour, separated by dark lead lines and glowing as if backlit.
+  projection_example: >-
+    The arched windows fill with stained glass whose lead lines sit on the real mullions, brightening as a "sunrise" sweeps across.
+  controls:
+    - { name: "Cell source (Voronoi, hexagons, region mullions, custom paths)", type: enum, animatable: false }
+    - { name: "Cell size and irregularity", type: float, animatable: true }
+    - { name: "Lead line width and color", type: group, animatable: true }
+    - { name: "Cell color (from image, palette, posterized)", type: enum, animatable: false }
+    - { name: "Saturation and palette", type: group, animatable: true }
+    - { name: "Glass texture amount", type: float, animatable: true }
+    - { name: "Backlight glow and light sweep", type: group, animatable: true }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Backlight, light sweep, saturation and texture keyframable; cells can light up in sequence via per-cell order.
+  dependencies: [fx.generate.cell-pattern, fx.stylize.posterize, fx.stylize.glow, fx.stylize.cc-glass, fx.noise-grain.fractal-noise, map.region, tool.sequence-light-up, ux.recipe-engine, fx.simulation.deterministic-seeds]
+  implementation: >-
+    A recipe plus one dedicated WGSL pass that builds a cell-ID map from seeded Voronoi (jump-flood) or rasterized region/path polygons, averages colour per cell (compute reduction) or quantizes it in OKLab, and draws anti-aliased lead lines from cell-ID boundaries. Glass texture comes from fractal-noise bumps through the CC Glass bump-shade pass, and the backlight from Glow. Cells live in region UV space so they stay on the building; stateless and seeded.
+  io: >-
+    none
+  limitations: >-
+    "Following the mullions" needs the mullions drawn as regions or paths; it is not detected automatically from a photo.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Stylize filter or CC plug-in clone with no projection workflow behind it. Glow, motion tile, strobe, neon outline and rhythmic flash stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Stained glass": select windows or a wall, choose the recipe, adjust cell size, colours and glow.
+    defaults: >-
+      Region mullions as lead lines when available, otherwise Voronoi cells sized to about 15 across; jewel-tone palette; soft backlight.
+    automation: >-
+      Uses the drawn mullion paths automatically, picks a palette from the content, and adds the glass texture and glow.
+    usability_check: >-
+      A first-time user turns selected arched windows into glowing stained glass in ≤3 deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "rose-glass": lead lines align with region mullions; cells stable across seek and reopen.
+  status: not-started
+  evidence: []
+
+- id: fx.stylize.rhythmic-flash
+  name: Rhythmic flashes
+  sources:
+    - ref: brief §11E
+      item: Rhythmic flashes
+      category: Stylization
+      checked: true
+    - ref: brief §13
+      item: Beat markers, BPM grid, onset detection, frequency-band control signals
+      category: Sound and music-driven animation
+      checked: true
+  artist_can: >-
+    Flash regions or the whole show on the music: full-white hits, colour pops, or chases across windows, controlling intensity, decay and which beats trigger.
+  projection_example: >-
+    On every kick all windows flash white and decay; on the snare the columns flash red in alternation.
+  controls:
+    - { name: "Trigger (beats, bars, onsets, frequency band, markers, fixed rate)", type: enum, animatable: false }
+    - { name: "Pattern (every beat, every 2nd, custom steps)", type: enum, animatable: false }
+    - { name: "Flash color and intensity", type: group, animatable: true }
+    - { name: "Attack and decay", type: float, animatable: true }
+    - { name: "Targets and order (all, chase, alternate, random)", type: group, animatable: false }
+    - { name: "Blend mode", type: enum, animatable: false }
+    - { name: "Safety limit (max flashes per second, contrast)", type: group, animatable: false }
+  animation: >-
+    Intensity, decay and colour keyframable. Triggers come from cached audio analysis, so preview and export flash on identical frames.
+  dependencies: [audio.analysis, audio.to-keyframes, fx.stylize.strobe-light, tool.sequence-light-up, map.region, expr.engine, ux.recipe-engine, fx.simulation.deterministic-seeds]
+  implementation: >-
+    A recipe that generates real items: cached beat and onset lists from audio.analysis feed a stateless envelope expression, e(t) = Σ over the last few triggers before t of attack/decay curves, which drives solid or Strobe Light opacity per region. Chases use tool.sequence-light-up and random target choice uses hash(seed, trigger index). A photosensitivity check scans rendered luminance for more than 3 general flashes in any 1 s window (WCAG 2.3.1 style) and warns before export or show, with an override for private tests.
+  io: >-
+    none
+  limitations: >-
+    The safety check is a warning tool, not a certified photosensitive-epilepsy analysis. Beat accuracy depends on the analysis; users can nudge triggers on the timeline.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Flash with the beat": select regions, choose the recipe, then pick which beats, the colour and how fast it fades.
+    defaults: >-
+      Every beat, white, 0.25 s decay, all selected regions together, safety limit on.
+    automation: >-
+      Analyzes the music, places triggers, builds the envelopes and flags unsafe flash rates with a one-click "make safer" fix.
+    usability_check: >-
+      A first-time user makes selected windows flash on each beat of the added music in ≤3 deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "beat-windows": flashes land on identical frames in preview and export; a 5 Hz pattern triggers the safety warning.
+  status: not-started
+  evidence: []

@@ -1,0 +1,1048 @@
+# AI assistant — Before Effects capability register
+# Sources: brief §0.7 (plain-language creative assistance), §0.9, §20. Provider facts checked 2026-10-01 against code.claude.com/docs/en/headless, /cli-reference, /agent-sdk/overview, /legal-and-compliance, and learn.chatgpt.com Codex docs (non-interactive mode, auth, MCP). Anything not on those pages is marked as an assumption.
+
+- id: ai.assistant
+  name: Assistant panel
+  sources:
+    - ref: brief §0.7
+      item: "Design an assistant path for requests such as 'Make these windows pulse blue with the music, then turn the wall into water'"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Ask for changes in plain language in a side panel, see the proposed result on the canvas, then apply or discard
+    it. It runs on the Claude or ChatGPT subscription you already have.
+  projection_example: >-
+    "Make these windows pulse blue with the music, then turn the wall into water" → a preview appears with a summary
+    and Apply / Discard.
+  controls:
+    - { name: "Request box and conversation", type: "chat", animatable: false }
+    - { name: "Scope chip (current selection)", type: "indicator", animatable: false }
+    - { name: "Provider (Claude Code, Codex)", type: "select", animatable: false }
+    - { name: "Status (thinking, preparing preview, ready)", type: "indicator", animatable: false }
+    - { name: "Apply / Discard / Stop", type: "action", animatable: false }
+  animation: >-
+    The assistant creates ordinary recipes, keyframes and expressions through ops; it has no special animation of
+    its own.
+  dependencies: [ai.mcp-server, ai.provider-claude, ai.provider-codex, ai.preview-commit, ai.change-summary, ux.operation-system]
+  implementation: >-
+    A React panel bound to an assistant session service in the Electron main process. The service spawns the chosen
+    provider CLI as a child process (ai.provider-*), streams its JSON events into the transcript, and connects the
+    CLI to the app through the local MCP server (ai.mcp-server). Stop terminates the child process tree and discards
+    the staged proposal (signal semantics differ on Windows, where termination rather than SIGINT is used).
+  io: >-
+    Conversation transcripts are stored locally per project (can be cleared).
+  limitations: >-
+    Needs an installed, logged-in provider CLI and an internet connection. All essential authoring works without
+    it (ai.no-ai-parity).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      An "Ask" button (Ctrl+L) opens the panel. The first use runs setup (ai.provider-detect).
+    defaults: >-
+      Scope = current selection; provider = whichever CLI is installed and logged in.
+    automation: >-
+      Provider detection, context packaging and preview rendering.
+    usability_check: >-
+      A user with a logged-in CLI makes a supported request, previews it, and applies it in under 2 minutes; a user
+      without one is told exactly how to set it up, with no dead ends.
+  acceptance: >-
+    Mini scene "assistant-windows-pulse": the example request yields a previewed, applied, undoable change.
+    Milestone B only if the op system is ready.
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.mcp-server
+  name: MCP adapter for external agents over the operation registry
+  sources:
+    - ref: brief §0.7
+      item: "Use the same operation system as the visual controls"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "A standing local external-agent API and MCP adapter"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    Mostly invisible to the artist. It is the MCP doorway for an agent the user runs themselves (Claude Code, Codex
+    or any MCP client): the agent can read a summary of the project and use the same typed, undoable operations the
+    buttons use.
+  projection_example: >-
+    An external agent calls be_search_library("water"), then be_stage_ops([...apply recipe 'Rippling water' to
+    role 'Wall A'...]) and be_render_preview.
+  controls:
+    - { name: "Exposed tool list (generated)", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, ux.recipe-engine, ai.context-summary, ai.bounded-edits, ai.preview-commit, ai.external-agent-api]
+  implementation: >-
+    Built with @modelcontextprotocol/sdk (TypeScript). Tools: be_get_context, be_get_selection, be_search_library,
+    be_describe_operation, be_stage_ops (validate and apply to the proposal branch, return diff/errors),
+    be_apply_recipe, be_render_preview, be_discard_proposal, be_report_unsupported. Tool input schemas come from the
+    op registry's Zod schemas via z.toJSONSchema. A generic be_stage_ops with on-demand be_describe_operation avoids
+    shipping hundreds of tool definitions. Transport: a small stdio bridge script (run with the app's Electron
+    binary using ELECTRON_RUN_AS_NODE=1) that the CLI launches from its MCP config; it connects to the running app
+    over a per-session named pipe with a one-time token passed through the config's env.
+    Direction (brief 2026-10-02, projection scope): this becomes a thin MCP adapter over the standing local
+    external-agent API (ai.external-agent-api) that runs whenever the app is open. The per-session launch path
+    belongs to the deferred embedded assistant.
+  io: >-
+    The per-session MCP config JSON/TOML is generated in app data and deleted afterwards.
+  limitations: >-
+    No write tool can commit to the live project; commits happen only from the app's Apply button. The tool set is
+    deliberately narrow (no file system, no shell, no network).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None (internal).
+    defaults: >-
+      Only ops flagged aiExposed in the registry are offered.
+    automation: >-
+      Schema generation from the registry.
+    usability_check: >-
+      Automated contract tests: every exposed tool validates inputs against its schema, rejects out-of-scope ops, and
+      never mutates the live project; an MCP inspector session lists the expected tools.
+  acceptance: >-
+    Contract test suite; mini scene "assistant-windows-pulse".
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.request-to-ops
+  name: Plain-language request to editable operations
+  sources:
+    - ref: brief §0.7
+      item: "Translate supported requests into editable project operations"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Describe the result you want. The assistant builds it from the app's own recipes and controls, so everything it
+    makes can be adjusted with the normal tools afterwards.
+  projection_example: >-
+    "Turn the wall into water" → the "Rippling water" material-change recipe on Wall A, progress over 3 s — the same
+    as choosing it from the library.
+  controls:
+    - { name: "Request", type: "string", animatable: false }
+  animation: >-
+    The resulting animation is ordinary recipe output.
+  dependencies: [ai.mcp-server, ux.recipe-engine, ux.effect-library]
+  implementation: >-
+    The system prompt (passed with --append-system-prompt-file / Codex instructions) teaches the model the workflow:
+    read context → search the library → prefer recipes over raw ops → stage → render preview → report. Each
+    recipe's metadata (intent phrases, parameter meanings, units) is exposed via be_search_library and
+    be_describe_operation.
+  io: >-
+    None.
+  limitations: >-
+    Quality depends on the provider's model and on library coverage. Requests outside the op registry are reported
+    as unsupported (ai.honest-failure).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      Type a request in the panel.
+    defaults: >-
+      Recipe-first strategy.
+    automation: >-
+      Full.
+    usability_check: >-
+      For a set of 20 supported example requests, at least 80% produce a previewed change that 2 reviewers judge to
+      match the request on the first attempt.
+  acceptance: >-
+    AI evaluation set (20 requests) run per provider per milestone.
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.preview-commit
+  name: Preview before commit
+  sources:
+    - ref: brief §0.7
+      item: "Show a preview; do not claim success without a changed project and a verifiable preview"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Review agent proposals before they are committed"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    See an external agent's proposal playing on the canvas (marked "Proposal") and compare it with the current
+    version before anything changes in your project.
+  projection_example: >-
+    Toggle A/B between the current show and the proposal on the windows, then press Apply.
+  controls:
+    - { name: "Proposal badge, A/B toggle", type: "toggle", animatable: false }
+    - { name: "Apply / Discard", type: "action", animatable: false }
+  animation: >-
+    The proposal plays with normal preview.
+  dependencies: [ux.live-preview-apply, ux.operation-system, preview.cache]
+  implementation: >-
+    Staged ops are applied to a copy-on-write proposal branch of the project state, rendered by the normal engine.
+    Apply commits the branch's op list as one transaction (ai.undo-transaction). If the user edits the live project
+    meanwhile, the branch is rebased (ops replayed) or marked stale with a plain message.
+  io: >-
+    None.
+  limitations: >-
+    Heavy proposals (simulations) may preview at reduced quality first, and this is labelled.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Apply / Discard buttons under the summary.
+    defaults: >-
+      Preview plays from the start of the affected range.
+    automation: >-
+      Branching and rebasing.
+    usability_check: >-
+      Automated: no assistant op reaches the live project before Apply. Users can say whether a change has been
+      applied yet (at least 4 of 5).
+  acceptance: >-
+    Mini scene "proposal-isolation".
+  status: not-started
+  evidence: []
+
+- id: ai.change-summary
+  name: Change summary generated from the actual diff
+  sources:
+    - ref: brief §0.7
+      item: "Summarize what changed"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Read a short, accurate list of what will change (which regions, which effects, which settings), written by the
+    app from the real changes, not from the AI's claims.
+  projection_example: >-
+    "Added 'Pulse' to 12 windows (blue, follows bass, 60% strength). Added 'Rippling water' to Wall A (starts at
+    0:42, 3 s)."
+  controls:
+    - { name: "Summary list (click an item to select it)", type: "view", animatable: false }
+    - { name: "Assistant's explanation (separately labelled)", type: "text", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.preview-commit, ux.operation-system]
+  implementation: >-
+    A deterministic summariser over the proposal's op list using op labels and recipe metadata, grouping by target
+    role. The model's own prose is shown separately as "Assistant's note". A mismatch check flags a note that claims
+    changes not present in the diff.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      Shown automatically with every proposal.
+    defaults: >-
+      Collapsed to 3 lines, expandable.
+    automation: >-
+      Full.
+    usability_check: >-
+      Users correctly answer "which windows will change?" from the summary alone (at least 4 of 5).
+  acceptance: >-
+    Mini scene "summary-matches-diff".
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.follow-ups
+  name: Follow-up refinements
+  sources:
+    - ref: brief §0.7
+      item: "Support follow-ups such as 'slower,' 'only on these windows,' or 'keep the timing but change the color'"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Refine the last change in a few words — "slower", "only on these windows", "keep the timing but change the
+    colour" — and get a new proposal based on it.
+  projection_example: >-
+    After the pulse is applied, select the top-row windows and say "only on these" → the proposal removes the pulse
+    from the other rows.
+  controls:
+    - { name: "Follow-up request", type: "string", animatable: false }
+  animation: >-
+    Follow-ups edit the generated recipe parameters, keeping user overrides.
+  dependencies: [ai.assistant, ai.bounded-edits, ux.recipe-engine]
+  implementation: >-
+    The CLI session continues (claude -p --resume <session_id>; codex exec resume <SESSION_ID>), and the context
+    includes the last transaction ID, its generated items, and the new selection. Follow-ups target recipe
+    parameters of those items rather than re-creating them.
+  io: >-
+    Session IDs are stored with the local transcript.
+  limitations: >-
+    Long sessions can grow context; the app starts a fresh session with a structured recap when needed.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: C
+  beginner:
+    action: >-
+      Type the follow-up in the same panel.
+    defaults: >-
+      Applies to the most recent assistant change unless the selection says otherwise.
+    automation: >-
+      Session continuation and context.
+    usability_check: >-
+      For 10 scripted follow-ups ("slower", "only on these windows", "keep the timing but change the colour"…), at
+      least 8 produce the intended change without side effects on other items (automated diff check).
+  acceptance: >-
+    AI evaluation set (follow-ups).
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.bounded-edits
+  name: Edits bounded to the selection
+  sources:
+    - ref: brief §0.7
+      item: "Bounded edits to the intended selection"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Scope limits apply to agents using the local API"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    Trust that an external agent only changes what you selected (or what you explicitly allowed), never the rest of
+    the show, the venue or the calibration.
+  projection_example: >-
+    With 6 windows selected, "make these red" cannot touch the other 18 windows or the roofline.
+  controls:
+    - { name: "Scope (selection, scene, whole show)", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server, ux.operation-system, map.calibration-versions]
+  implementation: >-
+    Each session carries a scope token: the target IDs/roles from the selection plus allowed op categories. The MCP
+    server rejects staged ops whose effect set falls outside the scope, with a message the model can read. Venue and
+    calibration ops are never exposed to the assistant. The user can widen the scope from the chip.
+  io: >-
+    None.
+  limitations: >-
+    Some requests legitimately need wider scope (a new scene); the model must ask, and the user widens it explicitly.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The scope chip shows "Changes limited to: 6 windows" with a widen option.
+    defaults: >-
+      Current selection, or the current scene if nothing is selected.
+    automation: >-
+      Enforcement.
+    usability_check: >-
+      Automated adversarial tests: requests that try to modify out-of-scope items are rejected in 100% of cases.
+  acceptance: >-
+    Mini scene "scope-enforcement".
+  status: prototype
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: limited by tool design and instructions (typed effects on named parts), not a hard scope lock; run_operations can touch anything but is one undoable step"
+
+- id: ai.honest-failure
+  name: Honest failure (no faked success)
+  sources:
+    - ref: brief §0.7
+      item: "Do not fake unsupported requests or claim success without a changed project and a verifiable preview"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Get a straight answer when the assistant can't do something ("I can't make real smoke simulation yet — closest is
+    'Smoke-like wisps'") instead of a fake success.
+  projection_example: >-
+    "Make the building levitate" → "Not supported: we can't move the real building. I can make the facade appear to
+    lift with a shadow illusion — preview?"
+  controls:
+    - { name: "Outcome status (applied, partial, unsupported, failed)", type: "indicator", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.change-summary, ai.preview-commit, ux.errors]
+  implementation: >-
+    Success is decided by the app, not the model. It requires a non-empty staged diff, a successful preview render,
+    and a summary. Otherwise the status is "nothing changed". The model can call be_report_unsupported(reason,
+    alternatives). Provider errors (stream-json system/api_retry categories such as rate_limit,
+    authentication_failed and billing_error; Codex error events) map to ux.errors cards. An optional, opt-in
+    low-resolution preview frame lets the model check its own result visually.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      Shown automatically.
+    defaults: >-
+      Preview-frame self-check off (privacy).
+    automation: >-
+      Status determination.
+    usability_check: >-
+      For 10 unsupported requests, 100% are reported as unsupported or partial, never as applied (automated status
+      check).
+  acceptance: >-
+    AI evaluation set (unsupported requests).
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: plain tool errors returned to the model; usage-limit/sign-in/network messages; Stop; not-set-up guidance without any paid option; API-key logins refused"
+
+- id: ai.undo-transaction
+  name: Agent edits undo as one step
+  sources:
+    - ref: brief §0.7
+      item: "Reliable undo"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Agent changes are ordinary undoable transactions"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    Undo an entire external-agent change with one Ctrl+Z, or undo a follow-up while keeping the earlier change.
+  projection_example: >-
+    "Undo: Assistant — make windows pulse blue" removes the pulse and its audio link in one step.
+  controls:
+    - { name: "History entry labelled 'Assistant: …'", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, ux.undo, ai.preview-commit]
+  implementation: >-
+    Apply commits the proposal's ops as one transaction labelled with the request's short form. Follow-ups are
+    separate transactions. No other state (files, uploads) is touched by assistant tools.
+  io: >-
+    In the op journal like any transaction.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Ctrl+Z.
+    defaults: >-
+      N/A.
+    automation: >-
+      Transaction grouping.
+    usability_check: >-
+      Automated: undo after Apply restores the exact prior hash. Users undo an assistant change without help (at least
+      95%).
+  acceptance: >-
+    Mini scene "assistant-undo".
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.provider-claude
+  name: Claude Code CLI adapter (Claude subscription)
+  sources:
+    - ref: brief §0.7
+      item: "Identify feasible model/provider options and their access, privacy, cost, and offline implications"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Use the assistant with the Claude subscription already signed in to Claude Code on this PC — no API key.
+  projection_example: >-
+    A Claude subscriber picks "Claude" as provider; requests run through their own Claude Code login.
+  controls:
+    - { name: "Model (from the CLI's allowed aliases)", type: "select", animatable: false }
+    - { name: "Max turns", type: "int", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server, ai.provider-detect, ai.sandboxing]
+  implementation: >-
+    Spawns the user's unmodified `claude` binary from an empty app-owned working directory: claude -p <request>
+    --output-format stream-json --verbose --mcp-config <session.json> --strict-mcp-config --tools ""
+    --allowedTools "mcp__beffects__*" --permission-mode dontAsk --append-system-prompt-file <be-instructions.md>
+    --max-turns N, plus --resume <session_id> for follow-ups. It parses system/init (mcp_servers status,
+    mcp_server_errors), assistant/tool events, system/api_retry and the final result event. ANTHROPIC_API_KEY and
+    ANTHROPIC_AUTH_TOKEN are removed from the child environment so the subscription login is used. --bare is NOT
+    used, because bare mode never reads the OAuth/keychain login.
+  io: >-
+    None.
+  limitations: >-
+    Verified: these flags, stream-json events, and that --bare ignores the subscription login. Risk: the docs say
+    --bare "will become the default for -p in a future release", which would break subscription use unless an
+    opt-out exists, so a startup probe must detect it. Assumed: the exact MCP permission-rule wildcard form. Policy:
+    allowed because the user signs in to the unmodified binary through Anthropic's own flow and the app never
+    handles credentials; usage counts against plan limits meant for "ordinary, individual usage". Revisit if the app
+    is ever distributed.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      Provider dropdown → "Claude (your Claude Code login)".
+    defaults: >-
+      The CLI's default model; 20 max turns.
+    automation: >-
+      Command construction, environment scrubbing, event parsing and session IDs.
+    usability_check: >-
+      On a machine with a logged-in Claude Code, the first request works with zero configuration (at least 4 of 5
+      pilot users).
+  acceptance: >-
+    AI evaluation set run with Claude Code. Startup probe test (detects bare-default or auth changes).
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.provider-codex
+  name: OpenAI Codex CLI adapter (ChatGPT subscription)
+  sources:
+    - ref: brief §0.7
+      item: "Identify feasible model/provider options and their access, privacy, cost, and offline implications"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Use the assistant with the ChatGPT plan already signed in to the Codex CLI on this PC — no API key.
+  projection_example: >-
+    A ChatGPT subscriber picks "ChatGPT (Codex)"; requests run through their Codex sign-in.
+  controls:
+    - { name: "Model (as allowed by the CLI)", type: "select", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server, ai.provider-detect, ai.sandboxing]
+  implementation: >-
+    Spawns the user's `codex` binary in an empty app-owned directory: codex exec --json --skip-git-repo-check
+    <request>, relying on exec's default read-only sandbox, with codex exec resume <SESSION_ID> for follow-ups. It parses JSONL events
+    (thread.started, turn.started, turn.completed, item.*). The Before Effects server is configured as
+    [mcp_servers.beffects] (command, args, env, required = true, enabled_tools = [...],
+    default_tools_approval_mode), injected via -c config overrides, or a temporary config if overrides cannot express
+    it. CODEX_API_KEY and OPENAI_API_KEY are removed from the child environment so the ChatGPT login is used.
+  io: >-
+    None.
+  limitations: >-
+    Verified: exec flags (--json, --skip-git-repo-check, --ephemeral, resume), the default read-only sandbox, JSONL
+    event names, `codex login`/`codex login status`, saved-auth reuse, the config.toml MCP keys, and that
+    required = true makes exec fail when the server fails. Assumed: that -c overrides can define MCP servers, how MCP
+    tool approval behaves in exec (the docs don't say), and that --ignore-user-config keeps the saved login. Built-in shell commands are not removed (sandbox read-only plus an empty directory are
+    the mitigation). Plan eligibility and limits follow OpenAI's terms (not verified here).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      Provider dropdown → "ChatGPT (your Codex login)".
+    defaults: >-
+      The CLI's default model.
+    automation: >-
+      Command construction, MCP config injection, environment scrubbing and event parsing.
+    usability_check: >-
+      On a machine with a logged-in Codex CLI, the first request works with zero configuration (at least 4 of 5
+      pilot users).
+  acceptance: >-
+    AI evaluation set run with Codex CLI.
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.provider-detect
+  name: Detect provider install and login, and guide setup
+  sources:
+    - ref: brief §0.7
+      item: "Essential authoring and export must remain usable without having to obtain an additional AI subscription"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    See whether Claude Code or Codex is installed and signed in. If not, get short step-by-step guidance, including a
+    button that opens the provider's own sign-in.
+  projection_example: >-
+    "Claude Code is installed but not signed in. [Open sign-in] — a browser window will ask you to log in to Claude."
+  controls:
+    - { name: "Provider status cards", type: "view", animatable: false }
+    - { name: "Open sign-in (runs the CLI's login in a terminal)", type: "action", animatable: false }
+    - { name: "Re-check", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.assistant]
+  implementation: >-
+    Detection: `where claude` / `where codex`, then `claude -v` / `codex --version`. Login: `claude auth status` (JSON
+    authMethod: none, claude.ai, oauth_token, api_key…; exit code 0 if logged in, 1 if not) and `codex login
+    status`. If Claude reports api_key, the app warns that this would bill an API key and suggests signing in with
+    the subscription. Sign-in opens a new console running `claude auth login` or `codex login` (or `codex login
+    --device-auth`), so the user completes the provider's own browser flow. Before Effects never sees or stores
+    credentials. Install guidance links to the official install pages.
+  io: >-
+    None.
+  limitations: >-
+    CLI output formats can change between versions; detection is covered by version-tagged tests. The `codex login
+    status` output format and exit codes are not verified.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      First use of "Ask" shows the status cards.
+    defaults: >-
+      Prefers a provider that is already signed in.
+    automation: >-
+      Detection and re-check after sign-in.
+    usability_check: >-
+      A user with neither CLI gets from "Ask" to a working assistant following only the in-app steps (pilot, at least
+      3 of 5 unaided), or understands that everything else works without it (5 of 5).
+  acceptance: >-
+    Mini scenes "no-cli", "not-logged-in", "api-key-only" (mocked CLIs).
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: live Claude Code and Codex, each on a personal subscription, both made, slowed and retargeted a blue music-driven effect; one undo step per request"
+
+- id: ai.sandboxing
+  name: Restrict the CLI to Before Effects tools only
+  sources:
+    - ref: brief §0.7
+      item: "Bounded edits; reliable undo"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: brief §5
+      item: "Sandbox scripts and bound their execution time"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Trust that the assistant can't touch your files, run programs, or browse the web — it can only use Before
+    Effects' own operations.
+  projection_example: >-
+    A request like "delete my old exports" is impossible: the assistant has no file tools.
+  controls:
+    - { name: "None (fixed policy)", type: "n/a", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server, ai.provider-claude, ai.provider-codex]
+  implementation: >-
+    Claude Code: --tools "" removes built-in tools, --strict-mcp-config ignores other MCP servers, --allowedTools
+    covers only mcp__beffects tools, and --permission-mode dontAsk denies anything else (--permission-prompts none
+    on v2.1.259+). It runs in an empty working directory so no project .mcp.json, hooks or CLAUDE.md are picked up.
+    Codex: exec's default read-only sandbox, an empty working directory, and enabled_tools limited to the Before
+    Effects tools.
+    For both: --max-turns or a time limit, per-call rate limits in the MCP server, and no file paths accepted from
+    the model (library IDs only).
+  io: >-
+    None.
+  limitations: >-
+    Codex's built-in shell cannot be fully removed by verified flags; read-only sandbox plus an empty working
+    directory limit it. The user's global CLI settings (e.g. hooks in ~/.claude) still load without --bare; use
+    --setting-sources to limit them if that keeps the subscription login (assumption to test).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      None (automatic).
+    defaults: >-
+      Strictest policy.
+    automation: >-
+      Full.
+    usability_check: >-
+      Automated adversarial prompts (read files, run commands, fetch URLs) produce zero successful non-Before-Effects
+      tool calls for each provider.
+  acceptance: >-
+    Mini scene "sandbox-adversarial".
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: Claude --tools '' --strict-mcp-config --allowedTools mcp__be --permission-mode dontAsk; Codex read-only sandbox, shell tool off, ignore-user-config; one-time pipe token; API-key env vars stripped"
+
+- id: ai.context-summary
+  name: Project context summary (structure, not media)
+  sources:
+    - ref: brief §0.7
+      item: "Privacy implications of model/provider options"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "External agents read a structured project summary, not media"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    Let an external agent understand your show — scenes, areas, assignments, effects, timing, music beats — without
+    sending your videos, photos or audio files.
+  projection_example: >-
+    The agent knows there are 24 windows in 3 rows, the music is 128 BPM, and scene 2 uses a trace, but never sees
+    the facade photo.
+  controls:
+    - { name: "Share region names", type: "bool", animatable: false }
+    - { name: "Share a low-res preview frame (opt-in)", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server, map.region, audio.analysis]
+  implementation: >-
+    be_get_context returns a size-bounded JSON summary: compositions/scenes, layers and recipe instances with
+    parameters, roles and region descriptors (type, count, order, size in metres), selection, the time/beat grid
+    (BPM, sections), and library catalogue names. More detail is fetched on demand through tools. Media content
+    never leaves the machine, apart from the optional low-res rendered preview frame.
+  io: >-
+    None.
+  limitations: >-
+    Without pixels the model cannot judge visual taste; it relies on recipe metadata and the user's review.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A "What the assistant can see" link in the panel shows the exact JSON that will be sent.
+    defaults: >-
+      Names shared, preview frames off.
+    automation: >-
+      Summary generation.
+    usability_check: >-
+      Automated: summaries contain no media bytes or file paths. Users can say what is shared after reading the panel
+      link (at least 4 of 5).
+  acceptance: >-
+    Mini scene "context-no-media".
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: get_show sends structure (part names, effects, settings, media names, tempo), never pictures, video or audio; what leaves the PC and the cost model are documented"
+
+- id: ai.privacy
+  name: Privacy, cost and offline implications
+  sources:
+    - ref: brief §0.7
+      item: "Identify feasible model/provider options and their access, privacy, cost, and offline implications"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Know what leaves your computer when you use the assistant, what it costs (your existing subscription and its
+    limits), and that everything else works offline.
+  projection_example: >-
+    On a venue with no internet, the panel says "Assistant needs internet — all other tools work normally".
+  controls:
+    - { name: "Privacy explainer", type: "view", animatable: false }
+    - { name: "Assistant on/off", type: "bool", animatable: false }
+    - { name: "Clear local transcripts", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.context-summary, ai.provider-claude, ai.provider-codex]
+  implementation: >-
+    A static explainer states: requests and structured context go to the provider (Anthropic or OpenAI) under the
+    user's own account terms; no media is sent; transcripts are stored locally; there is no Before Effects telemetry
+    or server. Cost is covered by the user's plan, subject to its usage limits. The app surfaces provider
+    rate-limit errors plainly. Offline mode disables the assistant and nothing else.
+  io: >-
+    None.
+  limitations: >-
+    Provider data-retention and training settings are controlled in the user's provider account, not by the app;
+    the explainer links to them.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: B
+  beginner:
+    action: >-
+      "About the assistant" link in the panel; shown once on first use.
+    defaults: >-
+      Assistant on if a provider is ready.
+    automation: >-
+      Offline detection.
+    usability_check: >-
+      After reading the explainer, at least 4 of 5 users correctly say whether their videos are sent (no) and whether
+      the app works offline (yes, without the assistant).
+  acceptance: >-
+    Mini scene "offline-mode".
+  status: implemented
+  evidence:
+    - "docs/05-ai-assistant.md; journey steps assistant-* (scripted, real MCP bridge) and assistant-live with BE_UITEST_LIVE_AI=claude,codex, 2026-10-02: get_show sends structure (part names, effects, settings, media names, tempo), never pictures, video or audio; what leaves the PC and the cost model are documented"
+
+- id: ai.no-ai-parity
+  name: Everything essential works without AI
+  sources:
+    - ref: brief §0.7
+      item: "Essential authoring and export must remain usable through the visual interface without having to write prompts or obtain an additional AI subscription"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Do everything essential — set up, create, animate, preview, export — through the visual interface, with no
+    prompts and no AI subscription.
+  projection_example: >-
+    A user without Claude or ChatGPT completes the full guided path and exports.
+  controls:
+    - { name: "None (product rule)", type: "n/a", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, ux.guided-workflow, ai.mcp-server]
+  implementation: >-
+    The MCP tool list is generated from the same registry as the UI, and a CI check fails if any op or recipe is
+    flagged AI-only. The §0.10 journeys run in CI with the assistant disabled (ux.action-count-guard).
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Embedded AI assistant is deferred (brief 2026-10-02, projection scope). The standing local external-agent API and MCP adapter stay required (ai.mcp-server and the ai.external-agent-* / ai.agent-* entries)."
+  milestone: A
+  beginner:
+    action: >-
+      N/A (rule).
+    defaults: >-
+      N/A.
+    automation: >-
+      CI enforcement.
+    usability_check: >-
+      All §0.10 usability targets are met by participants with the assistant disabled.
+  acceptance: >-
+    §0.10 journeys with the assistant off.
+  status: implemented
+  evidence:
+    - "All 58 journey steps except assistant-* make, animate, preview and export without the assistant; the assistant is an optional panel"
+
+- id: ai.local-model
+  name: Optional local model route
+  sources:
+    - ref: brief §0.7
+      item: "Offline implications of model/provider options"
+      category: "Plain-language creative assistance"
+      checked: true
+  artist_can: >-
+    Possibly use the assistant offline with a model running on this PC.
+  projection_example: >-
+    At a venue without internet, simple requests ("make these windows pulse blue") still work through a local model.
+  controls:
+    - { name: "Local provider (if adopted)", type: "select", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server]
+  implementation: >-
+    Candidate routes: a local OpenAI-compatible server (Ollama or llama.cpp) driven through a CLI that supports local
+    providers with MCP (e.g. Codex CLI's open-source-model mode — not verified), or a small built-in MCP client loop.
+    The same MCP server and safety rules would apply.
+  io: >-
+    Model weights download (several GB).
+  limitations: >-
+    User chose subscription-based Claude Code / Codex access. A local model stays an optional future route; recommendation: not now.
+
+    Open questions: is local model quality good enough for op planning, and can it share the RTX 5070 Ti's VRAM with
+    the renderer during editing? Not a requirement unless the user wants offline assistance.
+  disposition: unresolved
+  superseded_by: null
+  exclusion_reason: null
+  milestone: F
+  beginner:
+    action: >-
+      To be designed if adopted.
+    defaults: >-
+      Off.
+    automation: >-
+      N/A.
+    usability_check: >-
+      If adopted: the same AI evaluation set at a pass rate to be agreed.
+  acceptance: >-
+    None unless adopted.
+  status: not-started
+  evidence: []
+
+- id: ai.external-agent-api
+  name: Standing local external-agent API
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "A standing local external-agent API and MCP adapter"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    Any agent or script on this PC (Claude Code, Codex, another MCP client, or your own script) can talk to the
+    running app through a local API: read the show, make changes as ordinary undoable operations, ask for a preview
+    frame, and start exports. Before Effects does not run or embed a model.
+  projection_example: >-
+    From a terminal: "make the roofline windows pulse with the chorus" runs against the open project, the change
+    appears in the app, and Ctrl+Z undoes it in one step.
+  controls:
+    - { name: "API on or off", type: "bool", animatable: false }
+    - { name: "Endpoint (loopback port or named pipe)", type: "string", animatable: false }
+    - { name: "Allowed scopes", type: "flags", animatable: false }
+    - { name: "Connected agents", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.mcp-server, ux.operation-system, ux.recipe-engine, render.queue, ai.context-summary, ai.bounded-edits]
+  implementation: >-
+    A loopback-only server (HTTP and JSON, with a Windows named-pipe option) started with the app. Versioned v1
+    endpoints: describe operations (schemas from the operation registry), read the project summary and selection,
+    submit typed operations (validated and applied as one undoable transaction, or staged for review), render a
+    preview frame, queue and monitor exports, and subscribe to change events. The MCP server (ai.mcp-server) is a thin
+    adapter over the same API. Results state plainly whether anything changed.
+  io: >-
+    No files are exposed. Media and file paths are referenced by asset id.
+  limitations: >-
+    Reachable only from this machine and only while the app is running. There is no embedded model, and quality
+    depends on the agent the user runs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Settings, "Let my agent connect": one switch and a copyable snippet.
+    defaults: >-
+      On and off by choice, local only, edit scope.
+    automation: >-
+      Starts with the app, publishes the operation list and keeps every change undoable.
+    usability_check: >-
+      A user connects Claude Code or Codex using only the shown snippet and makes one change.
+  acceptance: >-
+    Contract tests plus mini scene "agent-windows-pulse": an external agent makes a change over the API, and it undoes
+    as one step.
+  status: not-started
+  evidence: []
+
+- id: ai.agent-connect
+  name: Connect your own agent (pairing and setup)
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Standing local API and MCP adapter for the user's own agents"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    See a ready-made configuration for Claude Code, Codex or any MCP client, copy it once, and see which agents are
+    connected. Revoke access in one click.
+  projection_example: >-
+    Paste the shown line into Claude Code's MCP settings. The app lists "Claude Code (connected)".
+  controls:
+    - { name: "Pairing token", type: "secret", animatable: false }
+    - { name: "Copy configuration (Claude Code, Codex, generic MCP)", type: "action", animatable: false }
+    - { name: "Connected agents and revoke", type: "list", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.external-agent-api, ai.mcp-server]
+  implementation: >-
+    The app generates a per-install token stored in app data, and shows configuration snippets for the supported MCP
+    clients using the stdio bridge or the local endpoint. Connections are listed with their names and last activity.
+    Revoking rotates the token. The app never receives or stores any provider credentials: agents use the user's own
+    logins.
+  io: >-
+    Configuration snippets are text for the user to copy.
+  limitations: >-
+    Client configuration formats change between versions. The snippets are version-tagged and checked in tests.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Settings, "Connect an agent": choose your agent, copy, paste.
+    defaults: >-
+      Token created on first use. Scope is read plus edit, no export.
+    automation: >-
+      Detects the installed agent CLIs and shows only relevant snippets.
+    usability_check: >-
+      A first-time user connects an installed agent in under 2 minutes.
+  acceptance: >-
+    Version-tagged snippet tests and a manual connect and revoke with Claude Code and Codex.
+  status: not-started
+  evidence: []
+
+- id: ai.agent-operations
+  name: Every projection operation is available to agents
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Standing external-agent API exposes the same operations as the interface"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    An agent can do whatever the visual interface does for projection work: areas, content assignment, scenes,
+    timeline, 3D objects and physics, rendering and export. Each operation describes its inputs, units and an example.
+  projection_example: >-
+    An agent assigns a video to all windows (repeat), duplicates the scene, swaps the video and queues an export.
+  controls:
+    - { name: "Operation catalogue", type: "view", animatable: false }
+    - { name: "Operation coverage report", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.external-agent-api, ai.mcp-server, ux.operation-system, tool.area-assign, proj.scene-save-duplicate, 3d.object-editing, render.queue]
+  implementation: >-
+    The tool list is generated from the operation registry, so a new operation is exposed with its schema as soon as
+    it exists. A coverage check compares registry operations with interface actions and fails when an interface action
+    has no operation. Descriptions include units, ranges and a short example, and the generic stage-operations tool
+    keeps the tool count small.
+  io: >-
+    None.
+  limitations: >-
+    Operations that only make sense interactively (dragging a handle) are exposed as their final operation, not as
+    pointer events.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Internal: the catalogue is shown in the connect panel.
+    defaults: >-
+      Everything the interface can do is exposed unless flagged otherwise.
+    automation: >-
+      Generates schemas from the registry and checks coverage in tests.
+    usability_check: >-
+      A coverage test lists any interface action that an agent cannot do.
+  acceptance: >-
+    Coverage test over the acceptance journeys: each can be driven end to end through the API.
+  status: not-started
+  evidence: []
+
+- id: ai.agent-permissions
+  name: Agent permissions, activity log and kill switch
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Safety for a standing local external-agent API"
+      category: "External agents"
+      checked: true
+  artist_can: >-
+    Decide what a connected agent may do (read only, edit, render and export), see a log of what it did, and cut it
+    off instantly. Venue geometry, calibration and projector output are protected unless explicitly allowed.
+  projection_example: >-
+    An agent may edit scenes and queue exports but cannot touch calibration, and the log shows each operation it made.
+  controls:
+    - { name: "Scopes (read, edit, render and export, venue and calibration)", type: "flags", animatable: false }
+    - { name: "Activity log", type: "view", animatable: false }
+    - { name: "Disconnect all agents", type: "action", animatable: false }
+    - { name: "Rate limit", type: "int", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ai.external-agent-api, ai.bounded-edits, ai.agent-connect, map.calibration-versions, ux.operation-system]
+  implementation: >-
+    Scopes are checked per operation by the operation registry before any change. Venue, calibration and output
+    operations need the venue scope, which is off by default. Every call is written to a local activity log (time,
+    agent, operation, result). A kill switch revokes tokens and closes connections. Rate limits stop runaway loops.
+  io: >-
+    The log is a local file in app data, trimmed by size.
+  limitations: >-
+    Scopes limit what the app performs. They cannot limit what an agent does outside the app.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Settings, "Agent access": pick Read only, Edit, or Edit and export.
+    defaults: >-
+      Edit without venue or calibration access.
+    automation: >-
+      Records the log and blocks out-of-scope operations with a readable message.
+    usability_check: >-
+      A first-time user limits an agent to read only and the agent's edit is refused with a clear message.
+  acceptance: >-
+    Contract tests: out-of-scope operations are rejected and logged; the kill switch disconnects within 1 s.
+  status: not-started
+  evidence: []

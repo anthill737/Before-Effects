@@ -1,0 +1,74 @@
+node_modules/
+dist/
+out/
+.vite/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tsbuildinfo
+
+# Render output, caches and scratch never live in the repo
+/renders/
+/cache/
+.be-cache/
+
+# Packaged app (built by the launcher / pnpm --filter @be/studio package)
+/build/
+# The double-click launcher is built from tools/launcher (build.cmd); not committed
+/Before Effects.exe
+*.exe
+*.obj
+*.res
+*.pdb
+
+# Personal content: shows, demo pictures, footage and sound stay on this machine
+*.beproj
+*.beproj.*
+Test content/
+Renders/
+Projects/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.heic
+*.tif
+*.tiff
+*.bmp
+*.psd
+*.exr
+*.hdr
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.avi
+*.mkv
+*.wav
+*.mp3
+*.aac
+*.m4a
+*.flac
+*.ogg
+*.aep
+*.aepx
+*.zip
+# ...except the app icons and the third-party AE test projects (MIT, see their licence file)
+!apps/studio/build/icon.png
+!packages/aep/test/fixtures/**/*.aep
+
+# Secrets and sign-ins (subscriptions, keys, tokens) must never be committed
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+auth.json
+.claude/
+.codex/
+.anthropic/
+.npmrc

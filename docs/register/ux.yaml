@@ -1,0 +1,1879 @@
+# Guided experience — Before Effects capability register
+# Sources: brief §0.1–§0.10 (user-experience requirements), §2, §3, §5, §17, §18, §20, §21. Product-only requirements; checked against the brief 2026-10-01. Accessibility targets reference WCAG 2.2 AA.
+
+- id: ux.operation-system
+  name: Operation system (typed, undoable operations)
+  sources:
+    - ref: brief §0.7
+      item: "Use the same operation system as the visual controls, with reliable undo"
+      category: "Plain-language creative assistance"
+      checked: true
+    - ref: brief §20
+      item: "Build the guided operation system alongside the engine so ease of use is structural"
+      category: "Architecture and build rules"
+      checked: true
+  artist_can: >-
+    Every change — from a click, a recipe, a script or the assistant — is the same kind of small, named, undoable
+    step. Nothing is magic, and anything can be undone, repeated or applied elsewhere.
+  projection_example: >-
+    "Light up windows" appears in history as one step that undoes cleanly, whether it came from the library, a
+    keyboard shortcut or the assistant.
+  controls:
+    - { name: "History list (plain-language labels)", type: "view", animatable: false }
+  animation: >-
+    Ops create and edit keyframes, expressions and recipe instances; they are not animation themselves.
+  dependencies: [proj.project-model, proj.undo-redo]
+  implementation: >-
+    Core TS: defineOp({type, version, schema (Zod), label(params) → plain words, scope, apply(draft, params) →
+    inverse, coalesceKey}). Transactions group ops. State is immutable snapshots with structural sharing. The op
+    journal feeds autosave/recovery. The registry exports JSON Schema via z.toJSONSchema for scripts and the MCP
+    server. Versioned op migrations. Drags coalesce into one undo step per gesture. Ops are deterministic and
+    tested headless under Node.
+  io: >-
+    The op journal is persisted for recovery; op logs can be exported for bug reports.
+  limitations: >-
+    Ops must be complete and deterministic; non-deterministic sources (live input) must be recorded first.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: A
+  beginner:
+    action: >-
+      Invisible: users only see that everything undoes with Ctrl+Z, with readable names in History.
+    defaults: >-
+      Unlimited undo within the session, with the journal persisted.
+    automation: >-
+      Coalescing, labels and journaling.
+    usability_check: >-
+      Automated property test over every registered op: apply then inverse gives the identical state hash. §0.10:
+      users undo a mistaken change without assistance (at least 95%).
+  acceptance: >-
+    All acceptance shows depend on it. Mini scene "op-roundtrip": a random op sequence of 10k steps undone to the
+    original hash.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.recipe-engine
+  name: Recipe engine (editable generated outcomes)
+  sources:
+    - ref: brief §0.1
+      item: "The app creates the necessary masks, paths, layers, keyframes, expressions, geometry, materials, and routing"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §0.4
+      item: "Advanced edits must not silently get overwritten by a preset change"
+      category: "Reveal depth progressively"
+      checked: true
+    - ref: brief §19
+      item: "Do not ship these as opaque canned movies"
+      category: "Projection-specific creative tools"
+      checked: true
+  artist_can: >-
+    Apply complete effects ("Trace with light") made of real layers, keyframes, effects and expressions. Change the
+    simple controls later, and keep your custom edits when the recipe regenerates.
+  projection_example: >-
+    After hand-tweaking one window's timing, changing the recipe's overall speed keeps that tweak and marks it as
+    custom.
+  controls:
+    - { name: "Recipe primary controls (3–5)", type: "mixed", animatable: true }
+    - { name: "Reset property / reset all to recipe", type: "action", animatable: false }
+    - { name: "Detach (convert to plain layers)", type: "action", animatable: false }
+  animation: >-
+    Recipes generate keyframes and expressions. Primary controls are themselves animatable, as expression controls.
+  dependencies: [ux.operation-system, expr.engine, expr.rigs, proj.effect-stack]
+  implementation: >-
+    A recipe is a versioned TS module: parameter schema (primary + more), target signature (role types and counts),
+    and generate(params, targets, context) → op batch. Generated items are tagged {recipeInstanceId, slot}.
+    Regeneration does a 3-way merge between the last generated output, the current state and the new output.
+    Properties changed by the user become overrides that are kept and flagged. Recipes declare relative units for
+    rebinding (ux.auto-adapt).
+  io: >-
+    Recipe instances are saved in the project with version and overrides. Recipes can be exported/imported as
+    packages.
+  limitations: >-
+    A structural edit (deleting a generated layer) may block a primary control; the UI explains which control and
+    offers "Reset this part" (ux.override-indicator).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: A
+  beginner:
+    action: >-
+      Every library item is a recipe: pick it, adjust 3–5 controls, then "More controls" / "Edit animation".
+    defaults: >-
+      Each recipe ships with tuned defaults and adapts to the target.
+    automation: >-
+      Generation, regeneration with merge, and override tracking.
+    usability_check: >-
+      Automated: apply → edit a keyframe → change speed keeps the edit and flags it. At least 4 of 5 users find
+      "Reset to recipe" for one property when asked.
+  acceptance: >-
+    AS-1, AS-3. Mini scene "override-survives-regenerate".
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.action-model
+  name: Result-first action model (select → choose → adjust → see)
+  sources:
+    - ref: brief §0.1
+      item: "Select the thing to change, choose what it should do, adjust a few understandable controls, and see the result immediately"
+      category: "Design around the result the user wants"
+      checked: true
+  artist_can: >-
+    Work by outcome: select something on the building, pick what it should do, tweak a few controls, and see it
+    happen — without assembling layers by hand.
+  projection_example: >-
+    Click the roofline → "Trace with light" → choose colour and speed → it plays immediately.
+  controls:
+    - { name: "Action menu for the current selection (contextual)", type: "menu", animatable: false }
+  animation: >-
+    Actions generate editable animation.
+  dependencies: [ux.recipe-engine, ux.effect-library, ux.canvas-direct, ux.inspector]
+  implementation: >-
+    The selection type (regions, groups, layers, scenes, audio) filters the recipe catalogue to applicable actions,
+    ranked by fit and recent use. The chosen action applies as a transaction with live preview (ux.live-preview-apply),
+    then the inspector shows its primary controls.
+  io: >-
+    None.
+  limitations: >-
+    Outcomes the library doesn't cover need detailed tools or the assistant; the action menu says so ("Not here?
+    Try search or Edit animation").
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: A
+  beginner:
+    action: >-
+      Right-click or the "What should this do?" button next to the selection.
+    defaults: >-
+      The top 6 actions shown for the selection type.
+    automation: >-
+      Filtering and ranking.
+    usability_check: >-
+      §0.10: apply a common effect to an existing selection in no more than three deliberate actions, excluding
+      optional customization (measured from action logs, at least 80% of participants).
+  acceptance: >-
+    Milestone A interaction prototype; §0.10 journeys.
+  status: not-started
+  evidence: []
+
+- id: ux.guided-workflow
+  name: Guided route through a show
+  sources:
+    - ref: brief §0.2
+      item: "Set up the space → Add content → Animate → Preview → Export or Play; show the current result and the next useful action"
+      category: "Clear, flexible route through a show"
+      checked: true
+  artist_can: >-
+    Follow a clear route (Set up the space → Add content → Animate → Preview → Export or Play), always see the next
+    useful step, jump freely between steps, and skip hardware setup when only designing.
+  projection_example: >-
+    A designer without a projector skips calibration, designs on the photo, exports a master, and does calibration
+    on site later.
+  controls:
+    - { name: "Step bar (5 steps with status)", type: "nav", animatable: false }
+    - { name: "Next suggested action", type: "card", animatable: false }
+    - { name: "Design without a projector", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, map.venue, ux.guided-calibration, ux.guided-export]
+  implementation: >-
+    The step bar is derived from project state (venue exists? projector calibrated? content? exports?), not from a
+    forced wizard. The next-action card comes from a rules table over that state. Steps are views over the same
+    project (ux.single-project).
+  io: >-
+    None.
+  limitations: >-
+    Suggestions are heuristic, and the user can dismiss them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Always visible at the top of the window.
+    defaults: >-
+      New projects start at "Set up the space", with the sample offered.
+    automation: >-
+      Status and suggestions.
+    usability_check: >-
+      §0.10: with supplied assets, at least 80% of first-time users create and preview an animated effect on a
+      surface within 5 minutes without external instructions.
+  acceptance: >-
+    Milestone B guided path, end to end.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.starter-scenes
+  name: Starter scenes and editable sample on first launch
+  sources:
+    - ref: brief §0.2
+      item: "Provide useful starter scenes and an immediately editable sample"
+      category: "Clear, flexible route through a show"
+      checked: true
+  artist_can: >-
+    Start by playing with a working example instead of a blank screen, or pick a starter space that matches the job.
+  projection_example: >-
+    First launch shows the Town Hall sample playing, with "Change the window colour" as the first suggestion.
+  controls:
+    - { name: "Start screen (sample, starter spaces, recent projects, blank)", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [tool.starter-content, ux.guided-workflow]
+  implementation: >-
+    The start screen loads the content pack (tool.starter-content) as copies, with a one-line hint overlay on the
+    sample. Recent projects show animated thumbnails.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The start screen's first card is "Try the sample".
+    defaults: >-
+      The sample opens playing.
+    automation: >-
+      Copy-on-open.
+    usability_check: >-
+      From launch to the first visible edit in the sample takes under 60 seconds for at least 90% of first-time users.
+  acceptance: >-
+    §0.10 journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.import-paths
+  name: Import paths with honest explanations
+  sources:
+    - ref: brief §0.2
+      item: "Offer an import path for a photo/reference, venue model, or simple shape, and explain only the input needed for that path"
+      category: "Clear, flexible route through a show"
+      checked: true
+  artist_can: >-
+    Choose how to describe the space — photo, 3D model or simple shape — and see in one screen what that path needs
+    and what it can and cannot give you.
+  projection_example: >-
+    The photo card says: "Good for tracing windows and edges. It doesn't tell us the building's depth or where your
+    projector is — you'll align on site."
+  controls:
+    - { name: "Path cards (photo, model, simple shape)", type: "choice", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.photo-trace, map.venue-import, map.venue-proxy]
+  implementation: >-
+    Three cards, each with "You need", "You get" and "Not included". Copy is maintained in a reviewed string table.
+    Each card leads into its map.* flow.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Set up the space → choose a card.
+    defaults: >-
+      "Photo" is highlighted when no model is known.
+    automation: >-
+      None.
+    usability_check: >-
+      Given 3 scenario descriptions, at least 80% of users choose the right path. In a follow-up question, none
+      believes a photo alone aligns the projector.
+  acceptance: >-
+    Milestone B guided path.
+  status: implemented
+  evidence:
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: ux.canvas-direct
+  name: Canvas-central direct manipulation
+  sources:
+    - ref: brief §0.3
+      item: "Select physical regions and creative objects directly in the preview; drag to position, resize, rotate, reshape; snapping, alignment guides, readable handles, forgiving hit targets"
+      category: "Keep the canvas central"
+      checked: true
+  artist_can: >-
+    Select regions and creative objects right on the preview, and drag, resize, rotate and reshape them with snapping,
+    alignment guides, readable handles and generous click targets.
+  projection_example: >-
+    Drag a text block onto a column; it snaps to the column centre, and a guide shows it aligned with the next column.
+  controls:
+    - { name: "Selection, transform handles", type: "gizmo", animatable: false }
+    - { name: "Snapping (regions, edges, guides, grid)", type: "flags", animatable: false }
+    - { name: "Alignment guides", type: "bool", animatable: false }
+  animation: >-
+    Dragging with auto-key on creates keyframes. Otherwise it edits static values.
+  dependencies: [ux.operation-system, map.edge-snap, map.region]
+  implementation: >-
+    A canvas interaction layer over the WebGPU viewport, with GPU picking via an ID buffer (pass.object-id
+    infrastructure) for exact hits on regions, layers and paths, plus a hit-slop expansion (≥24 px targets per WCAG
+    2.5.8). The selection outline is drawn in a high-contrast style. Snapping is computed in content space and shown
+    with labels.
+  io: >-
+    None.
+  limitations: >-
+    Dense overlapping objects need a "select underneath" cycle (Alt+click).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Click and drag on the canvas.
+    defaults: >-
+      Snapping and guides on.
+    automation: >-
+      Snapping and alignment.
+    usability_check: >-
+      Mis-click rate under 5% when selecting 8 small windows at default zoom. Users align a layer to a region edge in
+      under 10 seconds.
+  acceptance: >-
+    Milestone A prototype; milestone B journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.draw-on-surface
+  name: Draw paths directly on surfaces
+  sources:
+    - ref: brief §0.3
+      item: "Draw paths directly on relevant surfaces"
+      category: "Keep the canvas central"
+      checked: true
+  artist_can: >-
+    Draw paths and shapes straight onto the building in the preview (photo or 3D view), and they stay on the surface
+    in perspective.
+  projection_example: >-
+    Draw a wavy line across two walls of the 3D venue; it wraps around the corner as one path.
+  controls:
+    - { name: "Pen / freehand / shape tools", type: "tool", animatable: false }
+    - { name: "Surface lock (stay on surface)", type: "bool", animatable: false }
+  animation: >-
+    Drawn paths animate like any path (trim, morph).
+  dependencies: [shape.path, map.uv-content-space, map.edge-snap]
+  implementation: >-
+    Pointer rays are cast onto venue geometry (three.js raycaster/BVH). Points are stored in surface UV space,
+    curves are evaluated in UV, and rendering goes through the content pipeline. Crossing surface seams splits the
+    path into linked segments.
+  io: >-
+    None.
+  limitations: >-
+    Paths across UV seams on complex models may need cleanup.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Pick the pen and draw on the building.
+    defaults: >-
+      Surface lock on, snapping on.
+    automation: >-
+      Projection to surface and seam handling.
+    usability_check: >-
+      Users draw a path along a roofline in the 3D venue that stays on the surface (automated distance check) in
+      under 1 minute.
+  acceptance: >-
+    AS-1.
+  status: implemented
+  evidence:
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: ux.live-preview-apply
+  name: Preview before committing
+  sources:
+    - ref: brief §0.3
+      item: "Preview effects before committing"
+      category: "Keep the canvas central"
+      checked: true
+    - ref: brief §0.9
+      item: "Reversible previews"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    Hover or step through looks and see each one on your selection right away, then commit the one you like or
+    escape back without leaving anything behind.
+  projection_example: >-
+    Arrow through 8 window looks and watch each one play on the windows; Enter keeps "Neon pulse", Esc goes back.
+  controls:
+    - { name: "Preview on hover / on focus", type: "bool", animatable: false }
+    - { name: "Apply (Enter) / cancel (Esc)", type: "action", animatable: false }
+  animation: >-
+    The preview plays the recipe's default animation.
+  dependencies: [ux.operation-system, ux.effect-library, preview.cache]
+  implementation: >-
+    A provisional transaction is applied to a copy-on-write branch of the project state and rendered. It is
+    discarded on cancel, or committed as one transaction (one undo step). The preview starts from cached thumbnails
+    while the real evaluation compiles.
+  io: >-
+    None.
+  limitations: >-
+    Heavy recipes (simulations) preview at reduced quality first, and this is labelled.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Hover or arrow-key through library items with something selected.
+    defaults: >-
+      Preview on.
+    automation: >-
+      Branching and discard.
+    usability_check: >-
+      Users try at least 3 looks and revert, leaving undo history unchanged (logged). Time to first preview frame is
+      under 200 ms for cached items.
+  acceptance: >-
+    Milestone B journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.inspector
+  name: Contextual inspector
+  sources:
+    - ref: brief §0.3
+      item: "A focused contextual inspector with the controls relevant to the selection; avoid deep property trees and nested dialog chains"
+      category: "Keep the canvas central"
+      checked: true
+  artist_can: >-
+    See only the controls that matter for what is selected, in plain words, without digging through property trees
+    or dialogs.
+  projection_example: >-
+    Selecting a trace shows Colour, Speed, Trail, Glow and Order; selecting a window region shows Name, Type and
+    "What should this do?".
+  controls:
+    - { name: "Primary controls", type: "panel", animatable: false }
+    - { name: "More controls", type: "expander", animatable: false }
+  animation: >-
+    Keyframe toggles appear next to animatable controls in "Edit animation" mode.
+  dependencies: [ux.progressive-disclosure, ux.recipe-engine]
+  implementation: >-
+    Inspector descriptors come from op/recipe schemas (labels, units, ranges, groups, primary flag). React panels are
+    rendered generically from the descriptors, with custom widgets for colour, curves and points. Default view depth
+    is at most 2.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select anything; the inspector shows its controls.
+    defaults: >-
+      Primary controls only.
+    automation: >-
+      Descriptor-driven layout.
+    usability_check: >-
+      Users find the speed control of a selected trace in under 10 seconds. An automated audit confirms default
+      nesting depth ≤2 for all recipes.
+  acceptance: >-
+    Milestone B journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.enlarge-panels
+  name: Enlargeable canvas and timeline
+  sources:
+    - ref: brief §0.3
+      item: "Make the canvas and timeline easy to enlarge"
+      category: "Keep the canvas central"
+      checked: true
+    - ref: brief §0.9
+      item: "Adjustable layout"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    Make the canvas or timeline fill the window with one key, move panels to a second monitor, and keep the layout
+    you like.
+  projection_example: >-
+    Maximise the canvas to check details on the facade, then toggle back to the timeline view for timing.
+  controls:
+    - { name: "Maximise panel (toggle)", type: "action", animatable: false }
+    - { name: "Detach panel to window", type: "action", animatable: false }
+    - { name: "Saved layouts", type: "select", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.accessibility]
+  implementation: >-
+    A dockable layout (e.g. a React docking library or a custom split-pane tree) with persisted per-user layouts.
+    Detached panels are separate BrowserWindows sharing state through the store. The ` key maximises the hovered
+    panel.
+  io: >-
+    Layouts saved in user settings.
+  limitations: >-
+    Panels never go to projector displays (show.control-isolation).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A maximise button on each panel, or the ` key.
+    defaults: >-
+      Canvas-dominant layout.
+    automation: >-
+      None.
+    usability_check: >-
+      Users maximise the canvas and restore it in ≤2 actions without help.
+  acceptance: >-
+    Milestone B journeys.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: ux.scene-timeline
+  name: Scene timeline for assembling a show
+  sources:
+    - ref: brief §0.10
+      item: "Assemble a short three-scene show, add music, and start a compatible export in twenty minutes"
+      category: "Test ease of use"
+      checked: true
+    - ref: brief §0.4
+      item: "Provide 'More controls' and 'Edit animation' for detailed settings, curves, layers"
+      category: "Reveal depth progressively"
+      checked: true
+  artist_can: >-
+    Build the show as scene blocks laid over the music — drag to reorder, stretch to retime, snap to beats — and
+    open any block into the full layer timeline when needed.
+  projection_example: >-
+    Three blocks — "Windows wake up", "Tunnel", "Collapse" — snapped to the song's sections, with transitions between
+    them.
+  controls:
+    - { name: "Scene blocks (order, length)", type: "timeline", animatable: false }
+    - { name: "Music track with sections and beats", type: "track", animatable: false }
+    - { name: "Transitions between blocks", type: "chip", animatable: false }
+    - { name: "Open in full timeline", type: "action", animatable: false }
+  animation: >-
+    Retiming a block retimes its generated animation (recipes adapt; manual keyframes scale or keep timing by
+    choice).
+  dependencies: [proj.composition, proj.precompose, audio.analysis, ux.recipe-engine, tool.region-transition]
+  implementation: >-
+    Scenes are nested compositions shown as blocks on a simplified track view. Music sections come from
+    audio.analysis (novelty/segment detection) and beats from the beat grid. Retiming uses time-remap or recipe
+    regeneration. It is the same data as the full timeline (ux.single-project).
+  io: >-
+    None.
+  limitations: >-
+    Section detection can be wrong; sections are editable markers.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The Animate step shows scene blocks under the canvas; "Add scene" duplicates or starts from a recipe.
+    defaults: >-
+      Blocks snap to music sections and bars.
+    automation: >-
+      Section detection, snapping and fitting.
+    usability_check: >-
+      §0.10: first-time users assemble a three-scene show, add music and start a compatible export within
+      20 minutes using supplied assets, with computation and upload waiting measured separately.
+  acceptance: >-
+    §0.10 twenty-minute journey.
+  status: not-started
+  evidence: []
+
+- id: ux.progressive-disclosure
+  name: Progressive disclosure (3–5 controls, then more)
+  sources:
+    - ref: brief §0.4
+      item: "Expose a small set of useful creative controls first, often three to five; provide 'More controls' and 'Edit animation'"
+      category: "Reveal depth progressively"
+      checked: true
+  artist_can: >-
+    See 3–5 meaningful controls first (intensity, size, speed, colour, timing), then open "More controls" or "Edit
+    animation" for curves, layers and expressions — all on the same project.
+  projection_example: >-
+    A trace shows Colour, Speed, Glow and Order; "Edit animation" opens its speed curve in the graph editor.
+  controls:
+    - { name: "Primary controls", type: "panel", animatable: true }
+    - { name: "More controls", type: "expander", animatable: false }
+    - { name: "Edit animation", type: "action", animatable: false }
+  animation: >-
+    "Edit animation" focuses the timeline/graph editor on the generated keyframes of the selection.
+  dependencies: [ux.inspector, ux.recipe-engine, anim.graph-editor]
+  implementation: >-
+    Recipe parameter schemas mark primary versus secondary controls (max 5 primary, enforced by a lint). "Edit
+    animation" selects the recipe's generated items and opens the timeline filtered to them.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Inspector: primary controls at the top; "More controls" and "Edit animation" below.
+    defaults: >-
+      Collapsed "More".
+    automation: >-
+      Lint ensures ≤5 primary controls per recipe.
+    usability_check: >-
+      An automated audit confirms ≤5 primary controls everywhere. At least 4 of 5 users find "More controls" when
+      asked to change a secondary parameter. §0.10: common tasks need no expressions, node graph or codec choice.
+  acceptance: >-
+    §0.10 journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.single-project
+  name: One underlying project (no lossy conversion)
+  sources:
+    - ref: brief §0.4
+      item: "The guided workflow and detailed tools must edit the same data without lossy conversion or duplicate versions"
+      category: "Reveal depth progressively"
+      checked: true
+  artist_can: >-
+    Switch freely between guided and detailed tools: they are views of the same project, so nothing is converted,
+    duplicated or lost.
+  projection_example: >-
+    Edit a recipe's keyframe in the graph editor, go back to the simple Speed slider, and both show the same truth.
+  controls:
+    - { name: "None (architectural)", type: "n/a", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, ux.recipe-engine, proj.project-model]
+  implementation: >-
+    Guided actions only emit ordinary ops on the one project model. There are no shadow "simple mode" documents.
+    Views are pure projections of state. A CI test checks that switching views never changes the project hash.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: A
+  beginner:
+    action: >-
+      Invisible.
+    defaults: >-
+      N/A.
+    automation: >-
+      N/A.
+    usability_check: >-
+      Automated: guided → detailed → guided round trips keep the project hash stable. In think-aloud tests, users
+      recognise a change made in one view in the other (at least 4 of 5).
+  acceptance: >-
+    Milestone A architecture proof.
+  status: not-started
+  evidence: []
+
+- id: ux.override-indicator
+  name: Custom-edit (override) indicator
+  sources:
+    - ref: brief §0.4
+      item: "Clearly show when a custom edit changes what a simplified control can safely adjust"
+      category: "Reveal depth progressively"
+      checked: true
+  artist_can: >-
+    See where you've customised something a recipe made, and what that means for the simple controls — with a
+    one-click way to keep or reset it.
+  projection_example: >-
+    The Speed slider shows "Window 7 uses your own timing" with "Keep" / "Reset Window 7".
+  controls:
+    - { name: "Override badge on properties and items", type: "indicator", animatable: false }
+    - { name: "Reset this / reset all", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.recipe-engine, ux.inspector]
+  implementation: >-
+    Override records from the recipe engine's 3-way merge are surfaced as badges in the inspector, timeline and
+    canvas. Primary controls compute their "coverage" (how many generated targets they still affect) and show a note
+    when it is below 100%.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A small dot next to customised properties, plus a note under simple controls when coverage is partial.
+    defaults: >-
+      Shown.
+    automation: >-
+      Coverage calculation.
+    usability_check: >-
+      After a manual edit, at least 4 of 5 users correctly predict whether the simple Speed slider will still affect
+      that item.
+  acceptance: >-
+    Mini scene "override-survives-regenerate".
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.effect-library
+  name: Visual library of editable outcomes
+  sources:
+    - ref: brief §0.5
+      item: "Animated thumbnails and previews on the selected surface; organized by what people want to create"
+      category: "Visual library of editable outcomes"
+      checked: true
+  artist_can: >-
+    Browse effects as animated thumbnails grouped by what you want — light, water, fire-like, cracks, movement,
+    patterns, depth, text, particles, transitions — and preview each one on your selected surface.
+  projection_example: >-
+    Open "Water", see six animated looks, hover "Rippling surface", and it plays on the selected wall.
+  controls:
+    - { name: "Categories (light, water, fire-like, cracks, movement, patterns, depth, text, particles, transitions)", type: "nav", animatable: false }
+    - { name: "Animated thumbnails", type: "grid", animatable: false }
+    - { name: "Favorites, recent", type: "filter", animatable: false }
+  animation: >-
+    None in the library itself; applied items generate animation.
+  dependencies: [ux.recipe-engine, ux.live-preview-apply, ux.search]
+  implementation: >-
+    The catalogue is generated from recipe metadata (categories, tags, example phrases). Thumbnails are rendered by
+    the engine itself from each recipe on a standard surface (short WebM loops cached on install/update), so
+    thumbnails always match actual output. The on-surface preview uses ux.live-preview-apply.
+  io: >-
+    The library includes user recipes and imported packs.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The "Add content" and "Animate" steps open the library next to the canvas.
+    defaults: >-
+      Opens on the category matching the selection (windows → light).
+    automation: >-
+      Thumbnail rendering and filtering by what can apply.
+    usability_check: >-
+      Users find and apply a "water" look to a selected wall in ≤3 actions (at least 80% success).
+  acceptance: >-
+    §0.10 journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.search
+  name: Everyday-language search
+  sources:
+    - ref: brief §0.5
+      item: "Search must recognize everyday descriptions such as 'make this look like water'"
+      category: "Visual library of editable outcomes"
+      checked: true
+  artist_can: >-
+    Type what you want in your own words ("make this look like water", "sparkles", "light running along the edge")
+    and get the right effects, even without knowing their names.
+  projection_example: >-
+    Typing "windows blink like Christmas lights" returns Sequence light-up with a random order and Twinkle.
+  controls:
+    - { name: "Search box (everywhere, Ctrl+K)", type: "string", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.effect-library]
+  implementation: >-
+    Works offline and without AI. A curated phrase/synonym index per recipe (tags, descriptions, example phrases),
+    fuzzy lexical search (MiniSearch), and a small local sentence-embedding model (ONNX via onnxruntime) for
+    semantic matching. Results are re-ranked by selection compatibility. Failed queries are logged locally to improve
+    the phrase index. The AI assistant is an optional extra route, not a dependency.
+  io: >-
+    None.
+  limitations: >-
+    Unusual phrasing may miss; the empty state offers category browsing and (if set up) "Ask the assistant".
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A search box at the top of the library and in the action menu.
+    defaults: >-
+      Searches recipes, effects, help and commands.
+    automation: >-
+      Synonyms and semantic matching.
+    usability_check: >-
+      For a test set of 30 everyday phrases collected from users, the intended recipe appears in the top 3 for at
+      least 85%.
+  acceptance: >-
+    Search evaluation set in CI.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.auto-adapt
+  name: Recipes auto-adapt scale and timing
+  sources:
+    - ref: brief §0.5
+      item: "Automatically adapt scale and timing to the target region and show"
+      category: "Visual library of editable outcomes"
+      checked: true
+  artist_can: >-
+    Apply any effect to a small window or a whole facade and get proportionate size and sensible timing for the
+    music and scene length, without adjusting it yourself.
+  projection_example: >-
+    The same ripple recipe makes small ripples in a window and broad waves across the wall, both lasting one bar of
+    the song.
+  controls:
+    - { name: "Adapt size / adapt timing", type: "bool[2]", animatable: false }
+  animation: >-
+    Timing parameters snap to beats/bars and fit to scene length where the recipe declares it.
+  dependencies: [ux.recipe-engine, map.region, audio.analysis, tool.show-logic]
+  implementation: >-
+    Recipe parameters declare units (metres, fraction of region, seconds, beats). The generator resolves them
+    against the target's physical size (from the venue scale) and the show's tempo/scene length. The resolved values
+    are visible in More controls.
+  io: >-
+    None.
+  limitations: >-
+    Without a known scale (no measurement), sizes adapt relative to the region only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic on apply.
+    defaults: >-
+      Both on.
+    automation: >-
+      Full.
+    usability_check: >-
+      Applying one recipe to a small window and to a big wall produces results that at least 4 of 5 users rate as
+      proportionate without adjustment. Automated: parameters scale with region size.
+  acceptance: >-
+    Mini scene "adapt-small-large".
+  status: not-started
+  evidence: []
+
+- id: ux.favorites-styles
+  name: Favorites, variations and reusable styles
+  sources:
+    - ref: brief §0.5
+      item: "Allow favorites, saved variations, reusable styles"
+      category: "Visual library of editable outcomes"
+      checked: true
+    - ref: brief §5
+      item: "Save/share custom presets"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Star favourite effects, save your tuned version of a recipe as a variation, and keep reusable styles (colour
+    palettes, glow amount, timing feel) that apply across effects.
+  projection_example: >-
+    Save "Ice-blue neon" as a style and apply it to the trace, the window pulse and the particles in one go.
+  controls:
+    - { name: "Star / favourite", type: "action", animatable: false }
+    - { name: "Save as variation", type: "action", animatable: false }
+    - { name: "Styles (palette, intensity, timing feel)", type: "list", animatable: false }
+  animation: >-
+    Styles can include timing feel (easing, tempo multiplier).
+  dependencies: [ux.recipe-engine, ux.effect-library]
+  implementation: >-
+    Variations are parameter sets bound to a recipe ID and version. Styles are named token sets (colours, intensity,
+    easing) that recipes map onto their parameters through declared style slots. Both are stored in a user library
+    (shared across projects) and exportable.
+  io: >-
+    Export/import as library packs.
+  limitations: >-
+    A style affects only recipes that declare matching slots; the UI lists what it changed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A star on thumbnails; "Save this look" in the inspector; a Styles strip in the library.
+    defaults: >-
+      A few starter styles.
+    automation: >-
+      Style mapping.
+    usability_check: >-
+      Users save a variation and apply it to another region in under 30 seconds.
+  acceptance: >-
+    Mini scene "style-across-recipes".
+  status: not-started
+  evidence: []
+
+- id: ux.apply-to-many
+  name: Apply to many in one action
+  sources:
+    - ref: brief §0.5
+      item: "Applying one animation across many surfaces in a single action"
+      category: "Visual library of editable outcomes"
+      checked: true
+  artist_can: >-
+    Select many regions (or a group) and apply an effect to all of them in one action, then set offsets and
+    exceptions without repeating the work.
+  projection_example: >-
+    Select all 40 windows, apply "Breathing glow", set the offset to 0.1 s, and tint three windows differently.
+  controls:
+    - { name: "Multi-select (box, by type, by group, similar)", type: "selection", animatable: false }
+    - { name: "Offset control (auto-shown for multiple targets)", type: "time", animatable: true }
+  animation: >-
+    Through tool.apply-across-regions instancing.
+  dependencies: [tool.apply-across-regions, map.region-group, ux.canvas-direct]
+  implementation: >-
+    Multi-selection resolves to a role (an auto-created group). Applying a recipe with multiple targets instantiates
+    it through tool.apply-across-regions, and the inspector adds the offset/variation controls. "Select similar" uses
+    map.region-auto-group descriptors.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag a box or "Select all windows", then pick an effect.
+    defaults: >-
+      Offset by order, 0.1 s.
+    automation: >-
+      Role creation and instancing.
+    usability_check: >-
+      Users apply one animation to 24 windows in ≤3 actions and set the per-window delay with one control.
+  acceptance: >-
+    AS-1.
+  status: not-started
+  evidence: []
+
+- id: ux.suggestions
+  name: Accept-or-correct automation suggestions
+  sources:
+    - ref: brief §0.6
+      item: "Automatically propose repeated-region groups, path snapping, beat timing, reusable animation offsets, and sensible scene lighting; let users accept or correct; give simple manual alternatives"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Get helpful proposals — groups of similar windows, snapping to edges, timing on the beat, offsets, lighting —
+    and accept, correct or ignore each, with a simple manual way when automation gets it wrong.
+  projection_example: >-
+    "Snap these flashes to the beat?" — Accept moves them; "Not quite" opens the beat markers to fix the grid.
+  controls:
+    - { name: "Suggestion chips (accept, correct, dismiss)", type: "chip", animatable: false }
+    - { name: "Suggestion settings (on/off per kind)", type: "flags", animatable: false }
+  animation: >-
+    Accepted timing suggestions edit keyframes and markers.
+  dependencies: [ux.operation-system, map.region-auto-group, map.edge-snap, audio.analysis, tool.relight]
+  implementation: >-
+    Suggestion providers return proposals as un-applied op batches with a preview and a confidence score. Accept
+    applies them as one transaction; "Correct" opens the relevant manual tool prefilled. Creative changes are never
+    auto-applied silently.
+  io: >-
+    None.
+  limitations: >-
+    Suggestion quality varies; confidence below a threshold is not shown.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Chips appear near the canvas when relevant.
+    defaults: >-
+      All kinds on, at most one chip at a time.
+    automation: >-
+      Proposal generation.
+    usability_check: >-
+      Accept and correct rates are logged. At least 4 of 5 users reject a wrong suggestion and do the job manually
+      without help.
+  acceptance: >-
+    Milestone B journeys.
+  status: not-started
+  evidence: []
+
+- id: ux.auto-media-prep
+  name: Automatic media conversion and proxies
+  sources:
+    - ref: brief §0.6
+      item: "Handle media conversion, build proxies; preserve originals; explain visible quality tradeoffs and offer a way to reverse them"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Drop in any video or image and have it just work — phone videos, odd codecs, huge files — while the originals
+    stay untouched and any quality trade-off is explained and reversible.
+  projection_example: >-
+    A variable-frame-rate phone clip is converted in the background to a smooth editing copy; the note "Using an
+    editing copy — original kept" has an "Use original" option.
+  controls:
+    - { name: "Status per item (original, converted, proxy)", type: "badge", animatable: false }
+    - { name: "Use original / use proxy", type: "toggle", animatable: false }
+  animation: >-
+    None.
+  dependencies: [preview.proxy, preview.cache, proj.project-model]
+  implementation: >-
+    On import, FFmpeg ffprobe checks codec, VFR, colour metadata and alpha. Problem media is transcoded in a
+    background job to an edit-friendly mezzanine (constant-frame-rate ProRes/DNxHR or an image sequence), and
+    proxies are generated above a resolution/bitrate threshold. Originals are referenced for final renders unless
+    the user chooses otherwise. Notices are in plain language with a revert option.
+  io: >-
+    Mezzanines and proxies live in the project cache.
+  limitations: >-
+    Conversion takes time and disk space, and both are shown. Some sources (DRM, exotic codecs) can't be read; a
+    plain-language error explains why.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic on import, with a small status badge.
+    defaults: >-
+      Convert when needed; proxies above 4K or a heavy bitrate.
+    automation: >-
+      Full.
+    usability_check: >-
+      Dropping a VFR phone video gives smooth scrubbing without the user seeing any codec name (at least 90%).
+  acceptance: >-
+    Mini scene "vfr-phone-clip".
+  status: not-started
+  evidence: []
+
+- id: ux.auto-cache
+  name: Automatic cache management and background pre-render
+  sources:
+    - ref: brief §0.6
+      item: "Manage caches, and pre-render expensive content in the background when appropriate"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Never manage caches by hand: the app keeps them within limits, cleans up, and quietly pre-renders heavy parts in
+    the background so playback stays smooth.
+  projection_example: >-
+    While you edit the windows, the heavy tunnel scene finishes pre-rendering, and the next playback is real time.
+  controls:
+    - { name: "Cache size limits (RAM, disk)", type: "GB[2]", animatable: false }
+    - { name: "Background pre-render (on, off)", type: "bool", animatable: false }
+    - { name: "Clear cache", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [preview.cache, render.queue]
+  implementation: >-
+    An LRU cache with budgets keyed by dependency hashes (frame + node + parameter hash). An idle-time background
+    scheduler pre-renders nodes flagged expensive (measured cost) into the disk cache. Invalidation happens
+    automatically on dependency change. Low-disk detection trims the cache first.
+  io: >-
+    Cache folder location is configurable.
+  limitations: >-
+    Pre-rendering uses GPU and power; it pauses during interactive work and live shows.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic. A small "Preparing 2 heavy parts" indicator.
+    defaults: >-
+      RAM 25%, disk 50 GB, background on.
+    automation: >-
+      Full.
+    usability_check: >-
+      No participant needs to clear a cache manually during the 20-minute task, and the disk cache stays under
+      budget.
+  acceptance: >-
+    AS-6 (editing continues during long renders).
+  status: not-started
+  evidence: []
+
+- id: ux.performance-advisor
+  name: Bottleneck finder and quality trade-off advisor
+  sources:
+    - ref: brief §0.6
+      item: "Find performance bottlenecks; explain visible quality tradeoffs and offer a way to reverse them"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: brief §18
+      item: "Profiling; a fast but visually different preview must identify its compromises"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    When playback stutters, see in plain words what is slow and one-click fixes (pre-render this scene, lower preview
+    quality for particles), with every compromise labelled and reversible.
+  projection_example: >-
+    "Preview is slow because of the particle storm (14 ms per frame). Prepare it in the background? Or preview
+    particles at half amount?"
+  controls:
+    - { name: "Advisor panel", type: "view", animatable: false }
+    - { name: "Fix actions (pre-render, preview quality, proxy)", type: "action", animatable: false }
+    - { name: "Active compromises list (revert)", type: "list", animatable: false }
+  animation: >-
+    None.
+  dependencies: [preview.cache, preview.proxy, ux.auto-cache]
+  implementation: >-
+    Per-pass GPU timing via WebGPU timestamp queries (where available), plus CPU, decode and cache-miss timing per
+    node. A rules engine maps bottlenecks to fixes. Preview compromises are tracked as a list shown on the canvas
+    ("Preview: particles 50%").
+  io: >-
+    Profiles are exportable for diagnosis.
+  limitations: >-
+    Timestamp queries may be unavailable or coarse on some drivers; it falls back to CPU-side timing.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Why is this slow?" link appears when preview drops below real time.
+    defaults: >-
+      Shown on frame drops.
+    automation: >-
+      Diagnosis and fix suggestions.
+    usability_check: >-
+      When preview drops below real time, at least 4 of 5 users restore real-time playback with the advisor, without
+      technical vocabulary.
+  acceptance: >-
+    AS-6.
+  status: not-started
+  evidence: []
+
+- id: ux.auto-output-settings
+  name: Automatic compatible output settings
+  sources:
+    - ref: brief §0.6
+      item: "Choose compatible output settings"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: brief §0.8
+      item: "Put codecs, pixel formats, color transforms, and channel layouts in advanced settings unless a compatibility decision requires attention"
+      category: "Make export a guided outcome"
+      checked: true
+  artist_can: >-
+    Get export settings that will actually play where you need them (projector USB player, media server, phone,
+    Drive preview), with one plain sentence explaining the choice.
+  projection_example: >-
+    "H.264, 1920×1080, 30 fps — plays on most projector USB players." HAP is chosen automatically for the media
+    server preset.
+  controls:
+    - { name: "Target (share, projector USB player, media server, master, transparent)", type: "enum", animatable: false }
+    - { name: "Advanced settings (codec, pixel format, colour, audio)", type: "expander", animatable: false }
+  animation: >-
+    None.
+  dependencies: [render.encode, out.projector-video, ux.guided-export]
+  implementation: >-
+    A preset table keyed by target, built only from encoder combinations tested end-to-end (render.verify). The
+    compatibility rules (resolution caps, fps, alpha needs, audio) produce a recommended preset plus a reason
+    string. Advanced settings stay collapsed unless a conflict requires a decision (e.g. alpha with H.264).
+  io: >-
+    Presets are stored and versioned.
+  limitations: >-
+    Device compatibility lists are only as good as the tests; unknown players get the most compatible preset.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Export: pick an outcome; settings are already right.
+    defaults: >-
+      Per outcome.
+    automation: >-
+      Full.
+    usability_check: >-
+      Users export a projector file that plays on the target player without touching codec settings (at least 4 of
+      5).
+  acceptance: >-
+    Milestone B export.
+  status: not-started
+  evidence: []
+
+- id: ux.guided-calibration
+  name: Guided calibration
+  sources:
+    - ref: brief §0.6
+      item: "Show numbered target points and straightforward instructions such as 'Move this point to the top-left corner of the window.' Visualize alignment error and save the result. Guide necessary physical measurements"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: brief §0.10
+      item: "Test physical setup separately with the actual installation and equipment"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    Align the projector by following numbered, plain instructions on the projector and the screen ("Move point 3 to
+    the top-left corner of the window"), see how good the fit is, and save it.
+  projection_example: >-
+    The facade shows a big "1" crosshair; the laptop shows the photo with the corner circled; arrow keys move it;
+    after 4 points the window outlines snap onto the windows.
+  controls:
+    - { name: "Step list with progress", type: "nav", animatable: false }
+    - { name: "Current target (number, instruction, picture)", type: "card", animatable: false }
+    - { name: "Arrow-key / drag positioning", type: "input", animatable: false }
+    - { name: "Fit quality badge", type: "indicator", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration, map.calibration-3d, map.calibration-residuals, map.calibration-versions, map.scale-reference, out.projector-output]
+  implementation: >-
+    A step machine: check the projector connection → focus pattern → measurement prompts (only those the chosen
+    path needs) → numbered targets (auto-chosen, shown on the projector and highlighted on the photo/model) →
+    solve and residual feedback → "Check alignment" pattern → save. Every step is skippable and revisitable.
+  io: >-
+    The calibration version is saved.
+  limitations: >-
+    The interface guides measurement but cannot make it accurate. Physical accuracy is tested with real equipment;
+    canned examples do not count as proof.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Set up the space → "Line up the projector".
+    defaults: >-
+      4 points for flat surfaces, more for 3D.
+    automation: >-
+      Target selection, solve, error display and save.
+    usability_check: >-
+      Physical field test (not canned): a first-time user reaches the target accuracy (≤3 px RMS flat, ≤4 px 3D) in
+      under 15 minutes. Confusion points and help requests are recorded.
+  acceptance: >-
+    AS-1/AS-2 on real hardware when available.
+  status: prototype
+  evidence:
+    - "journey: projector-output-window step — full-screen output on chosen display at projector resolution, identify/grid/checker/white/black/colors patterns, open/close; display identification overlays. Physical projection NOT yet verified on hardware."
+
+- id: ux.guided-export
+  name: Guided export with estimates
+  sources:
+    - ref: brief §0.8
+      item: "A video to share, a high-quality master, a transparent animation, or files for my projector setup; recommend preset and destination; estimate time and size; distinguish rendering, encoding, uploading"
+      category: "Make export a guided outcome"
+      checked: true
+  artist_can: >-
+    Export by choosing what you need — "A video to share", "A high-quality master", "A transparent animation", "Files
+    for my projector setup" — with a recommended preset and destination, and an estimated time and size.
+  projection_example: >-
+    "Files for my projector setup → Projector 1 → USB player. About 4 min, 1.1 GB. Save to Exports and send to Google
+    Drive."
+  controls:
+    - { name: "Outcome", type: "choice", animatable: false }
+    - { name: "Destination(s)", type: "select", animatable: false }
+    - { name: "Range (whole show, scene, work area)", type: "enum", animatable: false }
+    - { name: "Advanced settings", type: "expander", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.auto-output-settings, out.projector-video, render.queue, deliver.local, deliver.google-drive, deliver.reveal]
+  implementation: >-
+    Outcome → preset → destination flow. Estimates come from measured per-frame cost of the snapshot (sampled frames
+    rendered during setup) and encoder bitrate models; they refine during the job. Progress is split into labelled
+    phases (Rendering, Encoding, Uploading). The last choices per outcome are remembered.
+  io: >-
+    Export plus manifest.
+  limitations: >-
+    Estimates are approximate until a few frames have rendered, and the UI says so.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The "Export or Play" step → choose an outcome.
+    defaults: >-
+      Remembered per outcome.
+    automation: >-
+      Preset, destination, estimates and verification.
+    usability_check: >-
+      Users start a compatible export in ≤4 actions. Size/time estimates are within ±30% after 5% of frames. Users
+      can tell which phase is running (post-task question).
+  acceptance: >-
+    Milestone B (master + projector video). AS-7.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.undo
+  name: Visible, reliable undo and redo
+  sources:
+    - ref: brief §0.9
+      item: "Provide reliable undo/redo"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+    - ref: brief §0.10
+      item: "Undo a mistaken change without assistance"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    Undo and redo anything — including recipes and assistant changes — with readable names, and jump back several
+    steps from a history list.
+  projection_example: >-
+    "Undo: Crack and rebuild on Wall A" removes the whole effect, including the generated geometry and simulation.
+  controls:
+    - { name: "Undo / redo (Ctrl+Z / Ctrl+Shift+Z)", type: "action", animatable: false }
+    - { name: "History list", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, proj.undo-redo]
+  implementation: >-
+    Built on op-system transactions with plain-language labels. Undo toasts after big actions ("Applied Light sweep
+    — Undo"). History survives reopen via the op journal (bounded). Calibration-lock and show-mode guards are
+    respected.
+  io: >-
+    Journal persisted with autosave.
+  limitations: >-
+    External side effects (uploads, files written) are not undone; they are listed as such.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Ctrl+Z, the undo button, or the history list.
+    defaults: >-
+      Unlimited in session; the last 500 steps across reopen.
+    automation: >-
+      Labels and grouping.
+    usability_check: >-
+      §0.10: at least 95% of users undo a mistaken change without assistance.
+  acceptance: >-
+    §0.10 journeys.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.save-state
+  name: Autosave, recovery and saved indicator
+  sources:
+    - ref: brief §0.9
+      item: "Autosave, recovery, and a clear indication that work is saved"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    Always know your work is saved, and get it back after a crash or power cut with a clear explanation of what was
+    recovered.
+  projection_example: >-
+    After a laptop battery dies on site, reopening shows "Recovered your work up to 21:42 (3 seconds before the
+    shutdown)".
+  controls:
+    - { name: "Saved indicator (status + time)", type: "indicator", animatable: false }
+    - { name: "Recovery prompt", type: "dialog", animatable: false }
+    - { name: "Versions (restore earlier save)", type: "list", animatable: false }
+  animation: >-
+    None.
+  dependencies: [proj.autosave-recovery, ux.operation-system]
+  implementation: >-
+    The op journal is appended (fsync'd) after each transaction, with periodic snapshots and atomic file replace for
+    the project file. On startup the journal is replayed onto the last snapshot. The indicator reflects
+    journal-flushed state.
+  io: >-
+    Journal and snapshots next to the project (or in app data for unsaved projects).
+  limitations: >-
+    Media files outside the project are not versioned (relink handles moved files).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The indicator in the title bar shows "All changes saved · 21:43".
+    defaults: >-
+      Autosave always on.
+    automation: >-
+      Full.
+    usability_check: >-
+      After a forced crash, users recover within 1 minute; at least 90% can say whether their work is saved when
+      asked at random moments.
+  acceptance: >-
+    Mini scene "power-cut".
+  status: not-started
+  evidence: []
+
+- id: ux.errors
+  name: Plain-language errors with actions
+  sources:
+    - ref: brief §0.9
+      item: "Errors must say what happened, identify the affected item, and offer a practical action; keep raw logs in expandable details"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    When something goes wrong, read what happened in plain words, see which item is affected, and fix it with a
+    button (relink, substitute font, retry, use a compatible preset). Technical details are available if wanted.
+  projection_example: >-
+    "We can't find 'fish-tank.mov' used in Window 3. [Find it…] [Replace] [Details]".
+  controls:
+    - { name: "Message, affected item link, action buttons", type: "card", animatable: false }
+    - { name: "Details (raw log)", type: "expander", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system]
+  implementation: >-
+    A typed error catalogue (code, plain message template, affected-item reference, actions as op/command IDs, raw
+    detail). Every subsystem (media, render, encode, upload, expressions, AI) must map its errors into the catalogue.
+    A lint fails unmapped error paths. Clicking the affected item selects it.
+  io: >-
+    Error logs saved locally for diagnosis.
+  limitations: >-
+    Unknown errors fall back to a generic card with details and "Copy report".
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Error cards appear next to the affected item and in the notifications list.
+    defaults: >-
+      Details collapsed.
+    automation: >-
+      Suggested fix ranking.
+    usability_check: >-
+      For 5 injected failures (missing file, missing font, encoder failure, disk full, upload failed), at least 80% of
+      users resolve each without help.
+  acceptance: >-
+    AS-7 (relink). Mini scene "five-failures".
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: ux.confirmations
+  name: Confirmations only when warranted
+  sources:
+    - ref: brief §0.9
+      item: "Use confirmations when warranted by irreversible loss or external sharing, not for routine reversible edits"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    Work without "Are you sure?" interruptions for normal edits (they can be undone), and get a clear confirmation
+    only when something can't be undone or when sharing outside the PC.
+  projection_example: >-
+    Deleting a scene shows "Deleted — Undo"; overwriting a file on disk or uploading to a new Drive folder asks first.
+  controls:
+    - { name: "Confirmation dialog (irreversible, external)", type: "dialog", animatable: false }
+    - { name: "Undo toast (reversible)", type: "toast", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.undo, deliver.google-drive]
+  implementation: >-
+    Commands declare reversibility and an externality flag in the registry. The UI layer chooses a toast versus a
+    confirm dialog from those flags (never ad hoc). The assistant follows the same rules.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic.
+    defaults: >-
+      As described.
+    automation: >-
+      Flag-driven.
+    usability_check: >-
+      At most one confirmation dialog in the 20-minute journey, excluding the upload. An automated check finds no
+      confirm dialog on any reversible command.
+  acceptance: >-
+    §0.10 journeys.
+  status: not-started
+  evidence: []
+
+- id: ux.accessibility
+  name: Readable, high-contrast, adjustable interface
+  sources:
+    - ref: brief §0.9
+      item: "Readable type, adequate contrast, large usable controls, and adjustable layout"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    Read and use the interface comfortably: adjustable text size, strong contrast, large controls, status shown by
+    more than colour, and reduced motion if preferred.
+  projection_example: >-
+    On a dark street at night with a dimmed laptop, the high-contrast large-control mode keeps calibration readable.
+  controls:
+    - { name: "UI scale (100–200%)", type: "percent", animatable: false }
+    - { name: "High contrast", type: "bool", animatable: false }
+    - { name: "Large controls", type: "bool", animatable: false }
+    - { name: "Reduce motion", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.enlarge-panels]
+  implementation: >-
+    Design tokens with WCAG 2.2 AA contrast (4.5:1 text, 3:1 UI components), a minimum 24×24 px target size, and
+    status icons paired with colour. Respects the OS prefers-reduced-motion and scale. axe-core checks run in CI on
+    rendered panels (Playwright for Electron).
+  io: >-
+    None.
+  limitations: >-
+    The canvas content (the show) is not altered by accessibility settings.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Settings → "Display & accessibility"; also offered on first launch.
+    defaults: >-
+      Dark theme, AA contrast, OS scale.
+    automation: >-
+      None.
+    usability_check: >-
+      Automated axe-core audits pass AA. A manual review at 200% scale shows no clipped controls in the 5-minute
+      journey.
+  acceptance: >-
+    Accessibility audit per milestone.
+  status: not-started
+  evidence: []
+
+- id: ux.keyboard
+  name: Keyboard navigation and visible focus
+  sources:
+    - ref: brief §0.9
+      item: "Keyboard navigation, visible focus"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+    - ref: brief §3
+      item: "Useful keyboard navigation"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Do everything from the keyboard, always see where focus is, and find commands by typing (Ctrl+K).
+  projection_example: >-
+    During calibration, Tab moves between points and arrow keys nudge them while the user watches the building, not
+    the screen.
+  controls:
+    - { name: "Command palette (Ctrl+K)", type: "action", animatable: false }
+    - { name: "Shortcut editor", type: "view", animatable: false }
+    - { name: "Focus ring", type: "indicator", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system]
+  implementation: >-
+    Every command is registered with an ID in the op/command registry, so the palette, menus and shortcuts share it.
+    There is a roving-tabindex focus model across panels and a focus-visible ring token. Shortcut conflicts are
+    linted.
+  io: >-
+    Shortcut maps exportable.
+  limitations: >-
+    Freehand drawing still needs a pointer; there is a keyboard alternative for point placement.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Press Ctrl+K and type what you want.
+    defaults: >-
+      Standard shortcuts (Space play, Ctrl+Z undo).
+    automation: >-
+      None.
+    usability_check: >-
+      An expert pilot completes the 5-minute journey keyboard-only. An automated check confirms focus is always
+      visible.
+  acceptance: >-
+    Accessibility audit per milestone.
+  status: not-started
+  evidence: []
+
+- id: ux.contextual-help
+  name: Contextual help and demonstrations
+  sources:
+    - ref: brief §0.9
+      item: "Plain labels, short contextual explanations, and demonstrations directly where the task happens; no mandatory long tutorial"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    Get a short explanation or a few-second demo right where you're working, without a mandatory tutorial.
+  projection_example: >-
+    Hovering "Trail length" shows a 3-second loop of short versus long trails on a roofline.
+  controls:
+    - { name: "? hints and inline demos", type: "tooltip", animatable: false }
+    - { name: "Empty-state guidance", type: "card", animatable: false }
+    - { name: "Searchable help", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.search, ux.effect-library]
+  implementation: >-
+    Help strings and demo specs live with recipe/op metadata. Demos are rendered by the engine (short loops, cached
+    like thumbnails), so they always match current behaviour. Help search shares the ux.search index.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hover any control or press ?.
+    defaults: >-
+      Hints on, demos on hover after 0.6 s.
+    automation: >-
+      Demo rendering.
+    usability_check: >-
+      At least 4 of 5 stuck users find their answer through contextual help within 1 minute.
+  acceptance: >-
+    §0.10 journeys.
+  status: not-started
+  evidence: []
+
+- id: ux.usability-program
+  name: Usability testing program and metrics
+  sources:
+    - ref: brief §0.10
+      item: "Proposed initial usability targets; record completion rates, time, confusion points, required help, and recovery from mistakes"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    Not an artist feature: the process proving the app is easy, by testing representative first-time users against
+    the §0.10 targets at every milestone.
+  projection_example: >-
+    A milestone B round of 5 first-time users runs the 5-minute and 20-minute journeys on the sample assets; results
+    and confusion points are filed as evidence.
+  controls:
+    - { name: "Test plan, task scripts, consent, result sheet", type: "docs", animatable: false }
+    - { name: "Opt-in local session logging", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [tool.starter-content, ux.action-count-guard]
+  implementation: >-
+    Rounds of 5–8 first-time participants per milestone (B onward; prototypes in A), think-aloud, plus opt-in local
+    action logs (op journal + UI events, never uploaded automatically) to measure time, action counts and errors.
+    Results are stored under docs/usability/ and linked as evidence in register entries.
+  io: >-
+    Local logs only.
+  limitations: >-
+    Targets are design goals, not measured claims. Automated UI tests cannot establish novice understanding. Small
+    samples give direction, not statistics.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: A
+  beginner:
+    action: >-
+      N/A (process).
+    defaults: >-
+      N/A.
+    automation: >-
+      Metric extraction from logs.
+    usability_check: >-
+      The §0.10 targets: (1) animated effect on a surface in 5 min; (2) three-scene show + music + export started in
+      20 min, computation/upload measured separately; (3) a common effect on a selection in ≤3 deliberate actions;
+      (4) no expressions, node graph, codec or UV/premultiplication knowledge needed; (5) undo a mistake and find the
+      saved/exported result unaided.
+  acceptance: >-
+    A usability report per milestone in docs/usability/.
+  status: not-started
+  evidence: []
+
+- id: ux.field-test
+  name: Physical setup testing with real equipment
+  sources:
+    - ref: brief §0.10
+      item: "Test physical setup separately with the actual installation and equipment; do not count a canned example as proof of easy calibration"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    Not an artist feature: the field test protocol that measures how easy and accurate real-world setup and
+    calibration are.
+  projection_example: >-
+    At the actual garage door with the real projector, the user calibrates from scratch while time, residuals and
+    drift over an hour are recorded.
+  controls:
+    - { name: "Field test protocol and record sheet", type: "docs", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.guided-calibration, map.calibration-residuals, show.latency-validation]
+  implementation: >-
+    A protocol covers setup time, calibration time, final residuals (from the app), visual misalignment measured on
+    site (tape, at marked points), drift after 1 h, and confusion points. The app exports a field report (calibration
+    version, residuals, hardware fingerprint) to attach as evidence.
+  io: >-
+    Field report export.
+  limitations: >-
+    Depends on access to hardware and venue; until then, milestones record "not physically verified".
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      N/A (process).
+    defaults: >-
+      N/A.
+    automation: >-
+      Field report generation.
+    usability_check: >-
+      Per milestone from B (when hardware is available): calibration time, residuals and drift recorded; target
+      tolerances set after the hardware is known.
+  acceptance: >-
+    AS-1, AS-2 and AS-5 physical verification records.
+  status: not-started
+  evidence: []
+
+- id: ux.action-count-guard
+  name: Automated journey and action-count regression checks
+  sources:
+    - ref: brief §0.10
+      item: "Apply a common effect to an existing selection in no more than three deliberate actions"
+      category: "Test ease of use"
+      checked: true
+    - ref: brief §0.10
+      item: "Revisit them as features are added"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    Not an artist feature: CI checks that common journeys keep working and don't silently grow extra steps as
+    features are added.
+  projection_example: >-
+    A refactor that adds a dialog to "Trace with light" fails CI because the journey went from 3 to 4 actions.
+  controls:
+    - { name: "Journey scripts with action budgets", type: "test", animatable: false }
+  animation: >-
+    None.
+  dependencies: [ux.operation-system, ux.action-model]
+  implementation: >-
+    Playwright-for-Electron scripts drive the §0.10 journeys on the sample assets, counting deliberate user actions
+    (clicks, drags, key commands excluding typing in text fields) against per-journey budgets. They also assert the
+    default inspector control counts (≤5). Results are recorded per build.
+  io: >-
+    CI artifacts.
+  limitations: >-
+    Proves step counts and function, not understanding; it complements and never replaces ux.usability-program.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: A
+  beginner:
+    action: >-
+      N/A (engineering).
+    defaults: >-
+      N/A.
+    automation: >-
+      Full.
+    usability_check: >-
+      CI fails when any common-effect journey exceeds 3 deliberate actions or any default inspector shows more than
+      5 primary controls.
+  acceptance: >-
+    CI green on every milestone.
+  status: not-started
+  evidence: []
+
+- id: ux.launcher
+  name: Double-click launcher and desktop shortcut
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (double-click launcher)
+      checked: true
+  artist_can: >-
+    Start Before Effects by double-clicking one clearly named file in the project folder, or the desktop shortcut, with no terminal or developer tools.
+  projection_example: >-
+    On show day the operator double-clicks "Before Effects" on the desktop and the studio opens ready to play.
+  controls:
+    - { name: "Launcher executable (Before Effects.exe in the project root)", type: file, animatable: false }
+    - { name: "Desktop shortcut", type: shortcut, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [ux.startup-safety]
+  implementation: >-
+    Native Win32 launcher (C++, static runtime, no installed dependencies) that resolves its own folder, finds the packaged app (build/app/Before Effects.exe), rebuilds it automatically when sources are newer and the toolchain exists, starts it inside a Windows job object so every background process ends with the app, and reports failures with the log tail. Desktop shortcut created with the Windows shell.
+  io: >-
+    Writes logs under %APPDATA%\Before Effects\logs.
+  limitations: >-
+    Windows only. Automatic rebuilds need Node.js and pnpm; without them the last packaged build is launched.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Double-click "Before Effects" (desktop or project folder).
+    defaults: >-
+      Opens the welcome screen or recovers unsaved work.
+    automation: >-
+      Builds, checks prerequisites, bundles FFmpeg, and cleans up background processes automatically.
+    usability_check: >-
+      A first-time user starts the app from the desktop with no instructions, and a deliberately broken install shows an understandable message instead of vanishing.
+  acceptance: >-
+    Launch from Explorer, from the desktop shortcut and from another working folder; second launch focuses the running window; closing the app leaves no FFmpeg or helper processes.
+  status: implemented
+  evidence:
+    - "launcher: double-click Before Effects.exe from another working folder → packaged app + bundled FFmpeg → UI journey 17/17 (launcher.log, main.log)"
+    - "launcher: second launch hands over in 1 s (exit 0); closing leaves 0 app/FFmpeg processes (job object)"
+    - "launcher: source change → automatic rebuild with progress window; simulated startup failure → plain-language dialog with Start again / Open log (screenshot ui-test/launcher-startup-failure.png)"
+
+- id: ux.startup-safety
+  name: Startup checks, single instance and clean shutdown
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (launcher behaviour)
+      checked: true
+  artist_can: >-
+    Get a clear explanation and a fix when something needed is missing, never a window that flashes and disappears; launching twice just brings the open studio forward.
+  projection_example: >-
+    If FFmpeg or the graphics driver is missing on a venue laptop, the app says exactly what to install.
+  controls:
+    - { name: "Open log", type: action, animatable: false }
+    - { name: "Try again", type: action, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [ux.errors]
+  implementation: >-
+    Electron single-instance lock with focus of the existing window; main-process log file; prerequisite checks (WebGPU adapter, FFmpeg bundled or on PATH) surfaced as plain-language screens; child processes (FFmpeg sessions, render workers, assistant CLIs, sidecars) tracked and terminated on quit, with the launcher's job object as a backstop.
+  io: >-
+    Log files with rotation.
+  limitations: >-
+    Driver-level GPU failures can only be reported, not fixed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Nothing to do; messages appear only when something needs attention.
+    defaults: >-
+      One running copy at a time.
+    automation: >-
+      Detects problems and offers the matching fix.
+    usability_check: >-
+      With FFmpeg removed, a first-time user follows the on-screen fix without help.
+  acceptance: >-
+    Simulated missing prerequisites and a forced startup crash both produce readable guidance; no orphaned processes after quitting.
+  status: implemented
+  evidence:
+    - "launcher: double-click Before Effects.exe from another working folder → packaged app + bundled FFmpeg → UI journey 17/17 (launcher.log, main.log)"
+    - "launcher: second launch hands over in 1 s (exit 0); closing leaves 0 app/FFmpeg processes (job object)"
+    - "launcher: source change → automatic rebuild with progress window; simulated startup failure → plain-language dialog with Start again / Open log (screenshot ui-test/launcher-startup-failure.png)"

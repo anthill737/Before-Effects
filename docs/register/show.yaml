@@ -1,0 +1,802 @@
+# Show operation (live playback) — Before Effects capability register
+# Sources: brief §13 (live inputs), §16 (MIDI/OSC and cue controls), §18 (show operation), §22 AS-6; S27 MadMapper features (Cues, Timelines, DMX/Art-Net/sACN). Live pages checked 2026-10-01.
+
+- id: show.workspace
+  name: Show workspace
+  sources:
+    - ref: brief §18
+      item: "A separate show workspace"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Switch from editing to a calm operator screen built for running the show. It has big cue buttons, transport,
+    blackout and output health, the project is locked against accidental edits, and the outputs stay clean.
+  projection_example: >-
+    On show night the operator opens "Show", sees the cue list and two output thumbnails, and nothing in the editor
+    can be changed by a stray click.
+  controls:
+    - { name: "Enter / leave show mode", type: "action", animatable: false }
+    - { name: "Edit lock", type: "bool", animatable: false }
+    - { name: "Layout (cues, transport, output thumbnails, health)", type: "layout", animatable: false }
+  animation: >-
+    None.
+  dependencies: [show.cue-list, show.transport, show.output-health, show.control-isolation, out.projector-output]
+  implementation: >-
+    A separate React route/window using an immutable project snapshot (the same one render jobs use). Edit ops are
+    rejected by an op-system guard while show mode is active. Output thumbnails are low-res mirrors of the output
+    windows' final textures.
+  io: >-
+    A show-mode configuration (layout, controller mappings) saved with the project.
+  limitations: >-
+    Editing during a live show is not supported in the first version. Open question: is "edit while playing" needed?
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Export or Play" step → "Play the show live".
+    defaults: >-
+      Edit lock on. Large-control layout.
+    automation: >-
+      Preload starts on entry (show.preload), and output health checks run.
+    usability_check: >-
+      A first-time operator runs a 5-cue show with no wrong cue in a rehearsal after a 2-minute orientation.
+  acceptance: >-
+    AS-5 live variant. Mini scene "show-mode-lock": edits are rejected while live.
+  status: not-started
+  evidence: []
+
+- id: show.cue-list
+  name: Cue list
+  sources:
+    - ref: brief §18
+      item: "Cue list"
+      category: "Preview, performance, and show operation"
+      checked: true
+    - ref: S27
+      item: "Unlimited cues (parameter snapshots)"
+      category: "Timeline & Cues"
+      checked: true
+  artist_can: >-
+    Arrange the show as numbered cues — scenes, loops, holds and blackouts. Press GO to move on, or let cues follow
+    automatically after a time or at the end of a scene.
+  projection_example: >-
+    Cue 1 "Pre-show loop" (loop until GO), Cue 2 "Opening" (auto-follow), Cue 3 "Tunnel", Cue 4 "Collapse",
+    Cue 5 "Bows loop".
+  controls:
+    - { name: "Cue (number, name, content: composition/time range/state)", type: "list", animatable: false }
+    - { name: "Trigger (GO, auto-follow, at time, external MIDI/OSC)", type: "enum", animatable: false }
+    - { name: "Transition in", type: "transition-ref", animatable: false }
+    - { name: "Loop behaviour", type: "enum", animatable: false }
+    - { name: "Notes for operator", type: "string", animatable: false }
+  animation: >-
+    Cues reference timeline content; parameter snapshots (as in MadMapper cues) can set recipe controls on entry.
+  dependencies: [show.workspace, show.transport, show.transition, show.loop, proj.composition]
+  implementation: >-
+    Cue documents live in the project and reference compositions/time ranges plus optional parameter snapshots
+    (stored as op batches). A deterministic cue state machine runs on the show clock; GO is an op-registry command,
+    so MIDI, OSC, keyboard and UI share one path. The authoring scene timeline (ux.scene-timeline) can generate an
+    initial cue list.
+  io: >-
+    The cue list is printable/exportable as CSV/PDF for the operator.
+  limitations: >-
+    Cue list semantics (e.g. parallel cues, cue stacks) are kept minimal at first. Open question: are parallel
+    layered cues needed?
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Make cues from my scenes" turns each scene block into a cue. GO is the space bar.
+    defaults: >-
+      One cue per scene, GO-triggered, a 1 s crossfade between cues.
+    automation: >-
+      Cue generation from the scene timeline and auto-numbering.
+    usability_check: >-
+      Users build a 5-cue list from an existing 3-scene show in under 5 minutes.
+  acceptance: >-
+    Mini scene "cue-run": scripted GO sequence yields frame-exact cue entry times across runs.
+  status: not-started
+  evidence: []
+
+- id: show.transport
+  name: Play, pause and seek
+  sources:
+    - ref: brief §18
+      item: "Play/pause/seek"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Play, pause and jump to any point of the show or of a cue, with an accurate clock and time display.
+  projection_example: >-
+    During rehearsal, jump to 2:31 to check the collapse again on the building.
+  controls:
+    - { name: "Play / pause", type: "action", animatable: false }
+    - { name: "Seek (time, cue, marker)", type: "time", animatable: false }
+    - { name: "Time display (timecode, cue-relative)", type: "enum", animatable: false }
+  animation: >-
+    Seeking must land on the exact frame with all simulations and particles in the right state.
+  dependencies: [preview.cache, anim.time-remap]
+  implementation: >-
+    The show clock uses integer flicks driven by the audio clock when audio plays (so picture follows sound). Seek
+    restores simulation checkpoints (deterministic replay) and warms decoders before display. The transport is shared
+    with the editor's preview, but in show mode it runs at output refresh.
+  io: >-
+    None.
+  limitations: >-
+    Seeking into heavy real-time content may take a moment; the UI shows "preparing" instead of showing wrong frames
+    on the outputs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Big play/pause button, a scrub bar with cue markers, and a click on a cue to jump.
+    defaults: >-
+      Space = GO in show mode; P = play/pause.
+    automation: >-
+      Decoder pre-warming before resuming play.
+    usability_check: >-
+      Users jump to a named cue and play from there in ≤2 actions.
+  acceptance: >-
+    AS-3 (reproducible after seeking). AS-6 (audio timing measured).
+  status: not-started
+  evidence: []
+
+- id: show.loop
+  name: Loop regions
+  sources:
+    - ref: brief §18
+      item: "Loop regions"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Hold a scene in a seamless loop (a pre-show ambience, a waiting state) until the operator moves on.
+  projection_example: >-
+    A gentle shimmering facade loops while the audience gathers, then GO starts the show from the loop's next clean
+    point.
+  controls:
+    - { name: "Loop in / out", type: "time[2]", animatable: false }
+    - { name: "Exit on GO (immediately, end of loop, next beat/bar)", type: "enum", animatable: false }
+  animation: >-
+    Loops must be seamless: content uses looping noise/evolution (seamless-loop options in generators).
+  dependencies: [show.cue-list, show.transport, audio.analysis]
+  implementation: >-
+    The loop is evaluated on the show clock with wrap-around. Simulations inside loops either restart from a
+    checkpoint or use loop-safe generators. Exit quantization uses beat/bar markers from audio.analysis.
+  io: >-
+    Loops can be exported as seamless loop files for external players (render.queue loop check).
+  limitations: >-
+    Stateful simulations do not loop seamlessly unless designed to; the app warns when a loop contains one.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Cue option "Loop until GO".
+    defaults: >-
+      Exit at the end of the current loop pass.
+    automation: >-
+      Seamless-loop check with a visual warning.
+    usability_check: >-
+      Users set up a pre-show loop that exits cleanly on GO, first try (at least 4 of 5).
+  acceptance: >-
+    Mini scene "seamless-loop": no visible jump at the wrap (frame difference below threshold).
+  status: not-started
+  evidence: []
+
+- id: show.transition
+  name: Transitions between cues
+  sources:
+    - ref: brief §18
+      item: "Transitions"
+      category: "Preview, performance, and show operation"
+      checked: true
+    - ref: brief §11G
+      item: "Transitions that can follow installation regions"
+      category: "Transitions"
+      checked: true
+  artist_can: >-
+    Move between cues with a cut, crossfade, fade through black, or a region-aware transition (windows switching one
+    after another).
+  projection_example: >-
+    The "Tunnel" cue arrives by switching windows one by one from left to right.
+  controls:
+    - { name: "Type (cut, crossfade, through black, recipe transition)", type: "enum", animatable: false }
+    - { name: "Duration", type: "time", animatable: false }
+    - { name: "Curve", type: "easing", animatable: false }
+  animation: >-
+    Transition progress is a 0–1 signal that recipe transitions can use.
+  dependencies: [show.cue-list, tool.region-transition, fx.transition.gradient-wipe]
+  implementation: >-
+    Both cue renders are evaluated during the transition window and composited in linear light by a transition pass.
+    Recipe transitions are ordinary transition recipes fed by the progress signal.
+  io: >-
+    Exported shows bake transitions. The cue-list export notes them.
+  limitations: >-
+    Two heavy scenes rendering at once can exceed the real-time budget; preload/pre-render covers this
+    (show.playback-mode).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      A transition chip between cues, with animated thumbnails to choose from.
+    defaults: >-
+      1 s crossfade.
+    automation: >-
+      Warns if a transition is predicted to drop frames and offers to pre-render it.
+    usability_check: >-
+      Users change a transition to "windows one by one" in ≤3 actions.
+  acceptance: >-
+    Mini scene "region-transition-cue".
+  status: not-started
+  evidence: []
+
+- id: show.blackout
+  name: Master blackout and master intensity
+  sources:
+    - ref: brief §18
+      item: "Master blackout"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Instantly (or with a quick fade) send every projector to black, and ride a master intensity fader for the whole
+    show.
+  projection_example: >-
+    Someone walks into the beam on stage: the operator hits blackout, then fades back up when it's clear.
+  controls:
+    - { name: "Blackout (toggle, hold)", type: "action", animatable: false }
+    - { name: "Fade time", type: "time", animatable: false }
+    - { name: "Master intensity", type: "percent", animatable: false }
+  animation: >-
+    Live only. Not part of the exported show unless recorded.
+  dependencies: [show.workspace, out.projector-output]
+  implementation: >-
+    The final per-output multiply runs after all stages, before encode. Blackout uses true zero signal (not
+    black-level-compensated black). Bound to a dedicated key (Esc/F1), on-screen button, MIDI and OSC. It responds
+    within one frame and is independent of content rendering, so it works even if a scene stalls.
+  io: >-
+    None.
+  limitations: >-
+    Projector black is not darkness: some light remains. True no-light needs the projector's shutter (control via
+    PJLink is an open question).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      A big red "Blackout" button, always visible in show mode, plus a master fader.
+    defaults: >-
+      0.2 s fade, master 100%.
+    automation: >-
+      None.
+    usability_check: >-
+      Under a simulated incident, operators black out in under 1 second (median) in rehearsal.
+  acceptance: >-
+    Mini scene "blackout-latency": measured output black within 1 frame of the command.
+  status: not-started
+  evidence: []
+
+- id: show.audio-routing
+  name: Audio routing
+  sources:
+    - ref: brief §18
+      item: "Audio routing"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Send show audio to the right sound device and channels (the venue mixer, not the laptop speakers), and align
+    sound with picture.
+  projection_example: >-
+    Stereo music to the USB audio interface outputs 3–4 feeding the FOH mixer, with a 40 ms picture-to-sound offset
+    to match projector latency.
+  controls:
+    - { name: "Output device", type: "select", animatable: false }
+    - { name: "Channel map", type: "matrix", animatable: false }
+    - { name: "Audio/picture offset", type: "ms", animatable: false }
+    - { name: "Level", type: "dB", animatable: false }
+  animation: >-
+    Show audio levels follow the project's audio automation.
+  dependencies: [audio.track, show.transport, show.latency-validation]
+  implementation: >-
+    Web Audio with AudioContext setSinkId for device selection and a ChannelMergerNode/channel matrix for routing.
+    The show clock is slaved to AudioContext time, with the offset applied as a picture delay or audio delay.
+    Multichannel interfaces are exposed through Chromium's audio output (ASIO is not available; WASAPI only).
+  io: >-
+    Routing is saved with the show configuration.
+  limitations: >-
+    Chromium audio uses WASAPI shared/exclusive modes and no ASIO, so latency and channel counts depend on the
+    driver. Measure on the venue's interface.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Show workspace → "Sound goes to:" device dropdown and a "Test sound" button.
+    defaults: >-
+      The system default device, stereo 1–2, no offset.
+    automation: >-
+      The offset is suggested from show.latency-validation measurements.
+    usability_check: >-
+      Users route audio to a second device and confirm with the test tone in under 1 minute.
+  acceptance: >-
+    AS-6 (audio timing measured).
+  status: not-started
+  evidence: []
+
+- id: show.output-health
+  name: Output health
+  sources:
+    - ref: brief §18
+      item: "Output health; display of dropped frames"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    See at a glance that every projector output is connected and running smoothly — frame rate, dropped frames,
+    GPU load and memory — with clear warnings before problems become visible.
+  projection_example: >-
+    A yellow badge "Output 2: 3 dropped frames in the last minute (GPU 95%)" appears during rehearsal; the operator
+    pre-renders the heavy cue.
+  controls:
+    - { name: "Per-output status (connected, fps, dropped, resolution)", type: "view", animatable: false }
+    - { name: "GPU / VRAM / CPU / disk", type: "view", animatable: false }
+    - { name: "Log", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output, show.workspace, ux.performance-advisor]
+  implementation: >-
+    Per-output frame timing from requestAnimationFrame timestamps and WebGPU queue.onSubmittedWorkDone, plus
+    timestamp queries where supported. Display presence comes from Electron screen events. GPU stats come from
+    app.getGPUInfo and nvidia-smi polling in the main process (NVIDIA). Results are logged to a rotating show log.
+  io: >-
+    The show log is exportable for diagnosis.
+  limitations: >-
+    Software frame timing cannot see the projector's own processing or dropped frames inside the projector; physical
+    verification uses show.latency-validation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Green / yellow / red badges on each output thumbnail; click for plain-language details.
+    defaults: >-
+      Warn at ≥1 dropped frame per minute or GPU above 90%.
+    automation: >-
+      Suggests fixes (pre-render, lower preview quality) through ux.performance-advisor.
+    usability_check: >-
+      Operators notice and correctly describe an injected output problem within 10 seconds.
+  acceptance: >-
+    AS-6. Mini scene "unplug-warning".
+  status: not-started
+  evidence: []
+
+- id: show.preload
+  name: Preload
+  sources:
+    - ref: brief §18
+      item: "Preload"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Get every cue ready before it is needed — media decoded, heavy scenes pre-rendered, simulations cached — and see
+    which cues are ready.
+  projection_example: >-
+    The show starts after all 12 cues show a green "Ready" tick.
+  controls:
+    - { name: "Preload all / next N cues", type: "action", animatable: false }
+    - { name: "Readiness per cue", type: "view", animatable: false }
+    - { name: "Memory budget", type: "GB", animatable: false }
+  animation: >-
+    None.
+  dependencies: [show.cue-list, preview.cache, show.playback-mode]
+  implementation: >-
+    Background tasks walk the cue list: open decoders and decode the first frames (WebCodecs/FFmpeg), compile WGSL
+    pipelines, and warm simulation checkpoints. Pre-rendered cues are verified by checksum. Readiness is a per-cue
+    state machine shown in the UI. VRAM is budgeted per cue window.
+  io: >-
+    Uses the preview/disk cache.
+  limitations: >-
+    A show larger than RAM/VRAM is streamed from disk; disk speed is checked against the required bitrate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Automatic on entering show mode, with a "Getting ready… 9 of 12 cues" bar.
+    defaults: >-
+      Preload all cues within budget; otherwise the next 3.
+    automation: >-
+      Fully automatic, with warnings when the budget is insufficient.
+    usability_check: >-
+      Operators can tell whether the show is ready to start (post-task question, 100% correct).
+  acceptance: >-
+    AS-6.
+  status: not-started
+  evidence: []
+
+- id: show.playback-mode
+  name: Real-time or pre-rendered playback per cue
+  sources:
+    - ref: brief §18
+      item: "Pre-rendered sequences; validate sustained frame rate"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Run light cues in real time (tweakable, reactive) and play heavy cues from pre-rendered files, chosen per cue, so
+    the live show never drops frames.
+  projection_example: >-
+    The 3D tunnel cue plays from a pre-rendered HAP file; the beat-reactive finale renders live.
+  controls:
+    - { name: "Per-cue mode (live, pre-rendered, auto)", type: "enum", animatable: false }
+    - { name: "Pre-render format (HAP, ProRes, image sequence)", type: "enum", animatable: false }
+  animation: >-
+    Pre-rendered cues freeze their content at render time; live parameters do not affect them.
+  dependencies: [render.queue, show.preload, out.bake-once]
+  implementation: >-
+    Pre-render jobs render content in surface/content space (not projector space) and store the stage ledger, so
+    mapping and output corrections are applied exactly once at playback (out.bake-once). HAP decode via FFmpeg
+    sidecar to GPU texture upload (DXT/BC formats as compressed textures where WebGPU supports
+    texture-compression-bc). "Auto" mode chooses from measured cost.
+  io: >-
+    Pre-rendered media is stored in the project cache with dependency hashes.
+  limitations: >-
+    Pre-rendering costs disk space and time, and invalidates on edit. HAP-in-WebGPU decode is to be prototyped (BC
+    texture support must be verified on the target GPU and Chromium).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Automatic: "This cue is heavy — prepared as a video for smooth playback" (with an undo to "Keep live").
+    defaults: >-
+      Auto.
+    automation: >-
+      Cost measurement, pre-render and invalidation.
+    usability_check: >-
+      In a show with one heavy cue, zero dropped frames in rehearsal without the user making any technical choice.
+  acceptance: >-
+    AS-6 (render reliability).
+  status: not-started
+  evidence: []
+
+- id: show.recovery
+  name: Show crash recovery
+  sources:
+    - ref: brief §18
+      item: "Recovery"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    If something crashes during a show, the outputs hold a safe image (black or the last frame) and playback restarts
+    at the right cue and time within seconds.
+  projection_example: >-
+    A renderer crash during cue 4 restarts automatically and resumes at the same point, with the facade dark for about
+    2 seconds instead of showing a desktop.
+  controls:
+    - { name: "On failure (hold last frame, black)", type: "enum", animatable: false }
+    - { name: "Auto-resume", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [show.workspace, show.transport, proj.autosave-recovery]
+  implementation: >-
+    The Electron main process supervises renderer processes (render-process-gone / child-process-gone events),
+    persists show state (cue, time, start wall-clock) to disk once per second, and re-creates output windows. Output
+    windows have a black background, so no desktop or error dialog is ever exposed. On restart, the clock resumes
+    from wall-clock-elapsed time.
+  io: >-
+    Crash logs are kept locally.
+  limitations: >-
+    A GPU driver reset (TDR) or OS crash may show the desktop or "no signal" briefly. A spare playback machine is an
+    operational decision outside the app.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Automatic; a banner afterwards says what happened and where the show resumed.
+    defaults: >-
+      Black on failure, auto-resume on.
+    automation: >-
+      Supervision, restart and resume.
+    usability_check: >-
+      In a forced-crash rehearsal, outputs resume within 5 seconds, and the operator understands the banner without
+      help.
+  acceptance: >-
+    Mini scene "kill-renderer": resume within 5 s at the correct time ±1 frame.
+  status: not-started
+  evidence: []
+
+- id: show.control-isolation
+  name: Control UI kept out of projector feeds
+  sources:
+    - ref: brief §18
+      item: "Keep control UI out of projector feeds"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Be sure nothing but the show reaches the projectors: no mouse cursor, dialogs, notifications, taskbars or error
+    windows on the building.
+  projection_example: >-
+    A Windows update notification appears on the laptop screen only, never on the facade.
+  controls:
+    - { name: "Isolation checklist (status)", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output]
+  implementation: >-
+    Output windows: frameless, always-on-top at 'screen-saver' level, skipTaskbar, focusable false, cursor hidden,
+    and placed on non-primary displays. All dialogs are parented to the control window. Before going live, the app
+    checks the projector display is not the primary display, and recommends Windows "Do not disturb" (Focus) mode.
+    The cursor is confined away from outputs in show mode where possible.
+  io: >-
+    None.
+  limitations: >-
+    Some OS-level popups (driver dialogs, UAC, low-battery warnings) can still appear on any display; the pre-show
+    checklist tells the user how to suppress them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      A pre-show checklist with green ticks: "Projector is not your main screen", "Notifications off".
+    defaults: >-
+      All protections on.
+    automation: >-
+      Window flags, checks and guidance.
+    usability_check: >-
+      During a 30-minute rehearsal with injected notifications, nothing appears on the projector outputs (camera
+      check).
+  acceptance: >-
+    Mini scene "notification-storm".
+  status: not-started
+  evidence: []
+
+- id: show.latency-validation
+  name: Measured latency and sustained frame rate
+  sources:
+    - ref: brief §18
+      item: "Validate measured output latency and sustained frame rate on the actual installation hardware"
+      category: "Preview, performance, and show operation"
+      checked: true
+    - ref: brief §22
+      item: "AS-6: audio timing is measured; record dropped frames and throughput"
+      category: "Acceptance shows"
+      checked: true
+  artist_can: >-
+    Measure the real delay from command to light on the building, and run a soak test to prove the show holds its
+    frame rate on the actual hardware.
+  projection_example: >-
+    A phone slow-motion video of a flash test measures 70 ms projector latency, which is used to offset audio.
+  controls:
+    - { name: "Flash/beep test", type: "action", animatable: false }
+    - { name: "Soak test (duration)", type: "time", animatable: false }
+    - { name: "Enter measured latency", type: "ms", animatable: false }
+  animation: >-
+    None.
+  dependencies: [show.output-health, show.audio-routing, out.sync]
+  implementation: >-
+    A test generator flashes all outputs while emitting a click on the show audio. The user films both with a phone
+    (slow motion), or uses a light sensor/microphone into the audio input for automatic measurement (cross-
+    correlation in the audio worker). The soak test plays the full show N times while logging frame timing.
+  io: >-
+    Measurements are stored in the venue (per output) and in the manifest.
+  limitations: >-
+    Results apply only to the measured hardware and settings. The app does not claim universal latency or fps
+    figures.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Show workspace → "Check timing" wizard.
+    defaults: >-
+      Flash test, then a 1× full-show soak.
+    automation: >-
+      Automatic analysis with a light sensor; otherwise guided manual entry.
+    usability_check: >-
+      Pilot users complete the flash test and enter a latency value in under 5 minutes.
+  acceptance: >-
+    AS-6.
+  status: not-started
+  evidence: []
+
+- id: show.live-audio-input
+  name: Live audio-reactive input with record/bake
+  sources:
+    - ref: brief §13
+      item: "Live inputs need a recording/baking path if the user wants reproducible video exports"
+      category: "Sound and music-driven animation"
+      checked: true
+  artist_can: >-
+    Make the projection react to a live band or DJ through the audio input, and record what happened so it can be
+    exported or replayed exactly.
+  projection_example: >-
+    Windows pulse to a live drummer; the analysed band data is recorded and baked so the night can be exported as a
+    video afterwards.
+  controls:
+    - { name: "Input device and channel", type: "select", animatable: false }
+    - { name: "Bands / onset sensitivity", type: "float[]", animatable: false }
+    - { name: "Record analysis", type: "bool", animatable: false }
+  animation: >-
+    The live signals drive the same parameters as pre-analysed audio (audio.to-keyframes). Recorded data becomes
+    keyframes.
+  dependencies: [audio.analysis, audio.to-keyframes, tool.beat-sync]
+  implementation: >-
+    getUserMedia audio → AudioWorklet analysis using the same FFT/onset code as offline analysis → control signals on
+    the show clock. Recording stores analysis frames (and optionally the audio) time-stamped in flicks, then bakes
+    them to keyframes/data tracks.
+  io: >-
+    The recorded analysis track is saved in the project.
+  limitations: >-
+    Live analysis adds input latency, and real-time onset detection is less accurate than offline analysis.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Live audio-reactive input is not needed for pre-rendered or cue-based shows now (audio analysis is cached)."
+  milestone: E
+  beginner:
+    action: >-
+      In the "Move with the beat" recipe → Music source: "Live input".
+    defaults: >-
+      Default input, recording on.
+    automation: >-
+      Auto gain and baking after the show.
+    usability_check: >-
+      Users switch a beat recipe from a music file to live input in ≤3 actions.
+  acceptance: >-
+    Mini scene "live-bake": a recorded live session re-exports identically twice.
+  status: not-started
+  evidence: []
+
+- id: show.dmx
+  name: DMX / Art-Net / sACN lighting fixtures
+  sources:
+    - ref: S27
+      item: "ArtNet 4 / sACN; up to 4096 DMX universes with fixture editor"
+      category: "Networking & Control"
+      checked: true
+  artist_can: >-
+    Control or follow stage lighting fixtures from the show (or let a lighting desk control the projection), keeping
+    projection and lights in one timeline.
+  projection_example: >-
+    Uplights on the facade turn blue in sync with the projected water scene.
+  controls:
+    - { name: "Universes and fixture patch", type: "list", animatable: false }
+    - { name: "Fixture parameters as tracks", type: "track", animatable: true }
+    - { name: "DMX input mapping", type: "list", animatable: false }
+  animation: >-
+    If adopted, fixture channels would be keyframable and recipe-driven like any parameter.
+  dependencies: [show.cue-list]
+  implementation: >-
+    Candidate: Art-Net/sACN over UDP in the main process (npm artnet/e131 libraries), a fixture library (e.g. Open
+    Fixture Library), and fixture tracks in the timeline.
+  io: >-
+    Would need fixture-profile import.
+  limitations: >-
+    User 2026-10-02: DMX / Art-Net / sACN stays in the full plan as an optional integration that never complicates ordinary video creation; equipment and protocols are determined when needed and hardware validation is recorded separately.
+
+    Not in the brief. MadMapper offers it, but relevance to this user is undecided. Open question: does the user run
+    lighting fixtures alongside projection?
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      To be designed if adopted.
+    defaults: >-
+      N/A.
+    automation: >-
+      N/A.
+    usability_check: >-
+      To be defined if adopted.
+  acceptance: >-
+    None unless adopted.
+  status: not-started
+  evidence: []
+
+- id: show.timecode
+  name: Timecode sync (MTC / LTC)
+  sources:
+    - ref: brief §17
+      item: "Matching video durations alone does not guarantee synchronized external playback"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Lock the show to external timecode (a music playback rig or show controller), or send timecode so other systems
+    follow the projection.
+  projection_example: >-
+    Fireworks and projection follow the same LTC from the music rig.
+  controls:
+    - { name: "Mode (off, chase MTC/LTC, generate)", type: "enum", animatable: false }
+    - { name: "Offset", type: "timecode", animatable: false }
+    - { name: "Frame rate", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [show.transport, out.midi, show.audio-routing]
+  implementation: >-
+    Candidate: MTC through Web MIDI. LTC decode/encode in an AudioWorklet (libltc-style logic). The show clock would
+    be disciplined with drift correction.
+  io: >-
+    None.
+  limitations: >-
+    User 2026-10-02: MTC/LTC timecode sync stays in the full plan as an optional integration; hardware validation is recorded separately.
+
+    Not explicitly required by the brief. Open question: will the user sync to external systems (music rigs,
+    fireworks, lighting desks)?
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      To be designed if adopted.
+    defaults: >-
+      Off.
+    automation: >-
+      N/A.
+    usability_check: >-
+      To be defined if adopted.
+  acceptance: >-
+    None unless adopted.
+  status: not-started
+  evidence: []
+
+- id: show.schedule
+  name: Scheduled unattended playback
+  sources:
+    - ref: brief §18
+      item: "Show operation and recovery"
+      category: "Preview, performance, and show operation"
+      checked: true
+  artist_can: >-
+    Run an installation unattended: start at dusk, loop until a set time, black out, and repeat nightly.
+  projection_example: >-
+    A two-week facade installation plays from 18:30 to 23:00 every evening without an operator.
+  controls:
+    - { name: "Schedule (days, start, end)", type: "schedule", animatable: false }
+    - { name: "Start at sunset (location)", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [show.cue-list, show.recovery, show.output-health]
+  implementation: >-
+    Candidate: a scheduler in the main process with sunset calculation (suncalc), auto-start on login, and health
+    reporting by email/webhook (to be decided).
+  io: >-
+    None.
+  limitations: >-
+    Decision 2026-10-02: a simple scheduled-playback option for unattended installations (reversible default, small cost).
+
+    Not in the brief. Open question: are unattended multi-day installations a target, or is every show operated
+    live? Hardware power scheduling is outside the app.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      To be designed if adopted.
+    defaults: >-
+      N/A.
+    automation: >-
+      N/A.
+    usability_check: >-
+      To be defined if adopted.
+  acceptance: >-
+    None unless adopted.
+  status: not-started
+  evidence: []

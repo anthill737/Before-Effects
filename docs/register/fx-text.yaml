@@ -1,0 +1,163 @@
+# Text effects — Before Effects capability register
+# Sources: S02 effect list + support matrix (Text rows), S01 user guide → Add text → Text effects (helpx.adobe.com/after-effects/desktop/add-text/text-effects/text-effects.html), brief §0, §2, §8, §16, §17. Live pages checked 2026-10-01 in a browser (Adobe CDN blocks non-browser fetches).
+
+- id: fx.text.numbers
+  name: Numbers
+  sources:
+    - ref: S02
+      item: Numbers
+      category: Text
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S01
+      item: Numbers
+      category: Text effects
+      checked: true
+  artist_can: >-
+    Render sequential or random numbers on a layer: decimals, leading zeros, timecode, times, dates and hexadecimal, optionally from the current date/time. Font, fill/stroke, size, tracking and spacing are adjustable. Used for counters, countdowns, scoreboards and dates.
+  projection_example: >-
+    A New Year's countdown runs from 10 to 0 across the clock tower and lands exactly on the beat.
+  controls:
+    - { name: "Font / style / direction / alignment (Options)", type: "group", animatable: false }
+    - { name: "Type (Number, Number leading zeros, Timecode 30/25/24, Time, Numerical date, Short date, Long date, Hexadecimal)", type: "enum", animatable: false }
+    - { name: "Random values", type: "bool", animatable: false }
+    - { name: "Value / Offset / Random max", type: "float", animatable: true }
+    - { name: "Decimal places", type: "int", animatable: true }
+    - { name: "Current time/date", type: "bool", animatable: false }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Display options (Fill only, Stroke only, Fill over stroke, Stroke over fill)", type: "enum", animatable: false }
+    - { name: "Fill color / Stroke color / Stroke width", type: "group", animatable: true }
+    - { name: "Size / Tracking", type: "float", animatable: true }
+    - { name: "Proportional spacing", type: "bool", animatable: false }
+    - { name: "Composite on original", type: "bool", animatable: false }
+  animation: >-
+    Keyframe or expression-drive Value/Offset to count. Random mode is seeded per frame, and the count can be aligned to markers or beats.
+  dependencies: [text.layer, text.animator, expr.engine, anim.keyframe.core, fx.noise-grain.seed-control, audio.analysis, show.cue-list]
+  implementation: >-
+    Values are formatted in the TS core (number, date, hex and timecode formatters, plus a seeded random per frame). Glyphs are shaped with HarfBuzz and drawn by the text engine's GPU path rasterizer, as an effect wrapper around a generated text run. "Convert to text layer" promotes it to text.layer for animators. "Current time/date" is captured once per render snapshot, so exports are deterministic; live shows can bind it to the wall clock.
+  io: >-
+    Uses project fonts; missing fonts are reported through the normal font-substitution path.
+  limitations: >-
+    Current date/time at render is inherently not reproducible, so the captured timestamp is written to the render log. Adobe's 30,000 sequential-offset cap and 1995 date base are kept only in a compatibility mode. Adobe recommends text layers for richer control, and the convert path covers that.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Numbers readout is After Effects parity. Projector sync burn-in and timecode stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Counter / countdown" in Add content → Text: choose from/to and duration (or "count down to a clock time").
+    defaults: >-
+      Counts 10 → 0 over 10 s in the show font, ending on the nearest beat or marker, sized to fit the selected region.
+    automation: >-
+      Centers and fits the counter to the region and aligns the final value to a beat or marker. For live shows it can count down to a set clock time.
+    usability_check: >-
+      A first-time user creates a 10-to-0 countdown fitted to a chosen region in 3 or fewer deliberate actions and under 60 s.
+  acceptance: >-
+    Mini scene "nye-countdown": the digit changes on exact frame boundaries in export; random-digit mode is identical on re-render.
+  status: not-started
+  evidence: []
+
+- id: fx.text.timecode
+  name: Timecode
+  sources:
+    - ref: S02
+      item: Timecode
+      category: Text
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S01
+      item: Timecode
+      category: Text effects
+      checked: true
+  artist_can: >-
+    Overlay timecode or frame numbers on a layer: SMPTE, frames, or feet+frames for 35 mm and 16 mm film. The source can be the layer, the composition, or custom (frame rate, drop frame, starting frame), with text size, color and an optional box.
+  projection_example: >-
+    Timecode is burned into review renders for the venue's AV team, so they can give notes by exact frame.
+  controls:
+    - { name: "Display format (SMPTE, Frames, Feet+frames 35mm, Feet+frames 16mm)", type: "enum", animatable: false }
+    - { name: "Time source (Layer source, Composition, Custom)", type: "enum", animatable: false }
+    - { name: "Time units (fps) / Drop frame / Starting frame (custom)", type: "group", animatable: false }
+    - { name: "Text position", type: "point2d", animatable: true }
+    - { name: "Text size", type: "float", animatable: true }
+    - { name: "Text color", type: "color", animatable: true }
+    - { name: "Show box / Box color / Opacity", type: "group", animatable: true }
+    - { name: "Composite on original", type: "bool", animatable: false }
+  animation: >-
+    The value is derived from time; position, size and colors keyframable.
+  dependencies: [text.layer, proj.composition, render.queue, anim.keyframe.core]
+  implementation: >-
+    Formatted from integer flick time, which is exact at any frame rate, with drop-frame math for 29.97 and 59.94. Feet+frames uses 16 frames/ft (35 mm) and 40 frames/ft (16 mm). Text comes from the text engine and the box is an SDF rect. Stateless.
+  io: >-
+    Reads source-footage timecode metadata via the FFmpeg probe for the Layer source mode. Embedded timecode in files is not modified.
+  limitations: >-
+    For styled time displays, a text layer with a time expression is better. This effect is for utility burn-ins.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Export → "Add timecode to review video" checkbox, or "Show time on screen" in the effect library.
+    defaults: >-
+      Composition source, SMPTE at the comp frame rate, bottom-center, white on a 60% black box.
+    automation: >-
+      Picks the frame rate and drop-frame setting from the composition, and applies the burn-in only to review exports, not masters.
+    usability_check: >-
+      A first-time user adds a timecode burn-in to a review export with one checkbox, in under 15 s.
+  acceptance: >-
+    Mini scene "review-burnin": burned-in values equal the frame's true timecode for 24, 25, 29.97 DF and 59.94 DF test comps.
+  status: not-started
+  evidence: []
+
+# ---------------------------------------------------------------------------
+# Projection-specific text capability (brief §16, §17)
+# ---------------------------------------------------------------------------
+
+- id: fx.text.sync-burn-in
+  name: Projector sync and identity burn-in
+  sources:
+    - ref: "brief §16"
+      item: Numbered test patterns, output identification, consistent timing across outputs
+      category: Multiple projectors and output management
+      checked: true
+    - ref: "brief §17"
+      item: Automatic verification; multi-projector bundles do not guarantee synchronized external playback
+      category: Rendering, export, and delivery
+      checked: true
+  artist_can: >-
+    Overlay each projector output with its name, its frame number or timecode, and a moving sync marker. Playback sync and correct routing can then be checked by eye or with a phone camera.
+  projection_example: >-
+    During tech rehearsal, all four projectors show their names and running frame counters. A phone photo shows whether any output lags by a frame.
+  controls:
+    - { name: "Outputs", type: "output-ref list", animatable: false }
+    - { name: "Content (output name, timecode, frame number, calibration version)", type: "flags", animatable: false }
+    - { name: "Sync marker (moving bar, flash every N frames)", type: "enum + int", animatable: false }
+    - { name: "Position / size", type: "point2d + float", animatable: false }
+    - { name: "Include in export (review bundles only)", type: "bool", animatable: false }
+  animation: >-
+    Driven by each output's playback clock; no keyframes.
+  dependencies: [fx.text.timecode, out.projector-output, map.projector, render.verify, show.cue-list]
+  implementation: >-
+    A diagnostic overlay in the projector output stage, never baked into content masters. Text comes from the text engine, and the frame index comes from the output's own timeline clock. Burn-in is flagged in the bundle manifest, and render.verify can check frame continuity by decoding the marker pattern, with no OCR needed.
+  io: >-
+    Written into review projector bundles only, with a manifest flag.
+  limitations: >-
+    Diagnostic only; an export guard warns if it is enabled for final show renders. A visual check is not a latency measurement.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Identify outputs" button in the projector setup step.
+    defaults: >-
+      Output name plus a running frame number, centered, with a moving sync bar along the bottom.
+    automation: >-
+      Turns the overlay on for all connected outputs and off automatically when leaving setup or exporting finals.
+    usability_check: >-
+      A first-time user turns on "Identify outputs" and sees every projector labeled with matching running frame numbers within 10 s.
+  acceptance: >-
+    AS-5 and AS-6: burned-in counters match across outputs at sampled instants, and the verify step detects a deliberately dropped frame from the marker pattern.
+  status: not-started
+  evidence: []

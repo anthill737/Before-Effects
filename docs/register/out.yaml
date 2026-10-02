@@ -1,0 +1,1300 @@
+# Outputs (projector outputs, masks, blending, output colour, interchange, control I/O) — Before Effects capability register
+# Sources: brief §6, §11I, §14, §16, §17 (multi-projector bundle + manifest), §18, §22; S27 MadMapper features; S28 TouchDesigner Projection Mapping (Stoner, projectorBlend, camSchnappr); S29 Resolume edge blending, Advanced Output, Output Transformation. Electron offscreen-rendering, screen and Display docs checked 2026-10-01.
+
+- id: out.projector-output
+  name: Projector output window
+  sources:
+    - ref: brief §16
+      item: "Per-projector routing, crop/orientation, warp, masks, overlap blending, gamma/color matching"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "As many projector outputs as your GPU can handle"
+      category: "Video Output"
+      checked: true
+    - ref: S29
+      item: "Advanced Output — physical outputs (DVI/HDMI to a projector)"
+      category: "Advanced Output"
+      checked: true
+  artist_can: >-
+    Send a projector's finished picture full-screen to the display port it is plugged into, at the right
+    resolution, for calibration, rehearsal and (later) live shows.
+  projection_example: >-
+    The facade projector on HDMI-2 shows the calibration points while the laptop screen keeps the editor.
+  controls:
+    - { name: "Output on/off", type: "bool", animatable: false }
+    - { name: "Display", type: "select", animatable: false }
+    - { name: "Expected resolution and refresh", type: "int[3]", animatable: false }
+    - { name: "Stage toggles for diagnosis (mask, blend, colour, warp)", type: "bool[]", animatable: false }
+  animation: >-
+    None. Outputs display whatever the show evaluates at the current time.
+  dependencies: [map.projector, map.model-3d, map.surface-2d, out.monitor-assignment, show.control-isolation]
+  implementation: >-
+    One frameless full-screen Electron BrowserWindow per projector, placed on its display from
+    screen.getAllDisplays() (bounds, nativeOrigin, displayFrequency, label). Black background, CSS cursor:none, and
+    powerSaveBlocker 'prevent-display-sleep'. Each output has a fixed WGSL stage order: projector-view render →
+    output mask → blend + black level (linear) → output colour correction (linear matching) → residual mesh warp →
+    display encode + dither → orientation/crop. The same pipeline renders export frames (out.projector-video), so
+    preview and export match.
+  io: >-
+    The stage order is written into every manifest (out.manifest).
+  limitations: >-
+    Windows can scale or remap outputs (DPI scaling, HDR mode, GPU scaling). The app compares DIP bounds with native
+    pixels (scaleFactor) and asks for 100% scaling and SDR mode on projector displays.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A "Connect your projector" card detects the new display and asks "Is this your projector?" while a big number
+      shows on it.
+    defaults: >-
+      The non-primary external display, at its native resolution.
+    automation: >-
+      Detection, placement, sleep prevention and resolution checks.
+    usability_check: >-
+      Users get the calibration pattern onto a newly plugged-in projector in under 1 minute.
+  acceptance: >-
+    AS-1 physical projection. Mini scene "output-vs-export": a live output frame grab equals the exported projector
+    frame (8-bit exact after encode, or within 1 code value).
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+    - "journey: projector-output-window step — full-screen output on chosen display at projector resolution, identify/grid/checker/white/black/colors patterns, open/close; display identification overlays. Physical projection NOT yet verified on hardware."
+
+- id: out.monitor-assignment
+  name: Display assignment
+  sources:
+    - ref: brief §16
+      item: "Monitor assignment"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S29
+      item: "Advanced Output — save and switch screen setups across venues"
+      category: "Advanced Output"
+      checked: true
+  artist_can: >-
+    Choose which physical display each projector output goes to. The app remembers and restores the choice next
+    time, even if Windows renumbers the displays.
+  projection_example: >-
+    After a reboot, Projector Left and Projector Right go back to the correct HDMI ports automatically.
+  controls:
+    - { name: "Output → display map", type: "map", animatable: false }
+    - { name: "Display layout view", type: "view", animatable: false }
+    - { name: "Re-match now", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output, out.identify]
+  implementation: >-
+    Assignments are stored by display fingerprint (Electron Display.label, native size, displayFrequency,
+    nativeOrigin, internal) and fuzzy-matched on startup. The screen 'display-added', 'display-removed' and
+    'display-metrics-changed' events re-place windows. The app warns when a projector display is mirrored (identical
+    bounds) or running at a non-native mode.
+  io: >-
+    Saved with the venue's output configuration.
+  limitations: >-
+    Windows display IDs and labels are not guaranteed stable across driver updates or port changes; ambiguous
+    matches ask the user (out.identify).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag an output tile onto a display tile in a simple picture of the connected screens.
+    defaults: >-
+      Projector 1 → the first external display.
+    automation: >-
+      Automatic re-matching and hot-plug handling.
+    usability_check: >-
+      After unplugging and replugging the projector, the output returns without user action in at least 9 of 10
+      trials.
+  acceptance: >-
+    AS-5. Mini scene "replug".
+  status: prototype
+  evidence:
+    - "journey: projector-output-window step — full-screen output on chosen display at projector resolution, identify/grid/checker/white/black/colors patterns, open/close; display identification overlays. Physical projection NOT yet verified on hardware."
+
+- id: out.identify
+  name: Output identification
+  sources:
+    - ref: brief §16
+      item: "Output identification"
+      category: "Multiple projectors and output management"
+      checked: true
+  artist_can: >-
+    Flash a big number and name on every connected display or projector to see which is which, matched by
+    highlighted tiles in the app.
+  projection_example: >-
+    Three projectors show "1 LEFT", "2 CENTRE", "3 RIGHT" on the building, and the app highlights the matching tiles.
+  controls:
+    - { name: "Identify all", type: "action", animatable: false }
+    - { name: "Blink one output", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output]
+  implementation: >-
+    A temporary overlay pass on each output window (or a short-lived window on unassigned displays) showing number,
+    name, resolution and refresh in large high-contrast type. Blink mode alternates full white and black for spotting
+    far-away projectors.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      An "Identify" button on the outputs panel.
+    defaults: >-
+      Shows for 5 seconds.
+    automation: >-
+      Runs automatically when a new display appears.
+    usability_check: >-
+      Users name which physical projector is Output 2 in under 15 seconds.
+  acceptance: >-
+    AS-5.
+  status: prototype
+  evidence:
+    - "journey: projector-output-window step — full-screen output on chosen display at projector resolution, identify/grid/checker/white/black/colors patterns, open/close; display identification overlays. Physical projection NOT yet verified on hardware."
+
+- id: out.test-pattern
+  name: Numbered output test patterns
+  sources:
+    - ref: brief §16
+      item: "Numbered test patterns"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "Built-in Grids and Test Pattern"
+      category: "Video Output"
+      checked: true
+    - ref: S29
+      item: "Test cards used during edge-blend setup"
+      category: "Edge blending"
+      checked: true
+  artist_can: >-
+    Show standard patterns on any projector: numbered grid, centre crosshair, focus pattern, colour bars, grey ramps,
+    solid colours, overlap check and black-level check.
+  projection_example: >-
+    Focus both projectors with the focus pattern, then check that the blend is smooth with a 50% grey field.
+  controls:
+    - { name: "Pattern", type: "enum", animatable: false }
+    - { name: "Grid spacing / numbering", type: "int", animatable: false }
+    - { name: "Pass through output stages", type: "bool", animatable: false }
+  animation: >-
+    Optional moving bar for motion and tearing checks.
+  dependencies: [out.projector-output]
+  implementation: >-
+    WGSL generators at native output raster, stamped with the output number. They can bypass or pass through the
+    mask, blend and colour stages to check each stage. They reuse the generator effects (e.g.
+    fx.generate.checkerboard, fx.generate.grid) where suitable.
+  io: >-
+    Patterns can be exported as PNG/video for testing external players.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A "Test patterns" menu on each output, with pictures of each pattern.
+    defaults: >-
+      Numbered grid.
+    automation: >-
+      The guided calibration and blend steps pick the right pattern automatically.
+    usability_check: >-
+      Users show the focus pattern on Projector 1 in ≤2 actions.
+  acceptance: >-
+    AS-5 physical checks.
+  status: prototype
+  evidence:
+    - "journey: projector-output-window step — full-screen output on chosen display at projector resolution, identify/grid/checker/white/black/colors patterns, open/close; display identification overlays. Physical projection NOT yet verified on hardware."
+
+- id: out.crop-orientation
+  name: Output crop and orientation
+  sources:
+    - ref: brief §16
+      item: "Crop/orientation"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S29
+      item: "Output Transformation — flip horizontal/vertical"
+      category: "Advanced Output"
+      checked: true
+  artist_can: >-
+    Flip or rotate an output for ceiling, rear or portrait mounting, and crop or offset it to part of a display.
+  projection_example: >-
+    A ceiling-mounted projector needs a 180° rotation; a portrait-mounted projector for a tall column needs 90°.
+  controls:
+    - { name: "Rotate (0, 90, 180, 270)", type: "enum", animatable: false }
+    - { name: "Flip H / V", type: "bool[2]", animatable: false }
+    - { name: "Crop / offset", type: "rect", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output]
+  implementation: >-
+    A final pixel-exact remap pass (no resampling for 90° steps and flips), with the crop as a viewport. Recorded in
+    the manifest, so external players or the projector's own menu do not apply it again.
+  io: >-
+    Manifest stage "orientation".
+  limitations: >-
+    If the projector's own ceiling/rear mode is on, do not flip here as well; the guided check asks.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "How is the projector mounted?" with pictures: table, ceiling, behind the screen, sideways.
+    defaults: >-
+      Table mount, no flip.
+    automation: >-
+      Maps the mounting answer to rotation/flip and asks about the projector's own setting.
+    usability_check: >-
+      Users set up a ceiling-mounted projector correctly on the first try (at least 4 of 5).
+  acceptance: >-
+    Mini scene "ceiling-mount".
+  status: not-started
+  evidence: []
+
+- id: out.routing
+  name: Per-projector routing
+  sources:
+    - ref: brief §16
+      item: "Per-projector routing"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S29
+      item: "Advanced Output — input selection and slices"
+      category: "Advanced Output"
+      checked: true
+  artist_can: >-
+    Decide what each projector shows: which venue surfaces or 2D surfaces, which show or scene, or a slice of a
+    larger canvas — including the same content on several outputs.
+  projection_example: >-
+    Projector 1 covers the left wing, Projector 2 the right wing plus the tower; a third output sends a stage-monitor
+    view to a TV.
+  controls:
+    - { name: "Source (projector camera, 2D surfaces, canvas slice)", type: "enum", animatable: false }
+    - { name: "Include / exclude surfaces or roles", type: "region-ref[]", animatable: false }
+    - { name: "Slice rectangle", type: "rect", animatable: false }
+  animation: >-
+    None (routing is installation setup). Cue-based output switching belongs to show.cue-list.
+  dependencies: [out.projector-output, map.binding, out.installation-space]
+  implementation: >-
+    A routing graph per output. The show is evaluated once per frame into shared content textures, then rendered N
+    times (once per output camera or slice), so cost scales with outputs, not with content evaluation.
+  io: >-
+    Routing is recorded per output in the manifest.
+  limitations: >-
+    GPU memory and fill rate limit the output count. The app measures and reports this instead of promising a number.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Automatic for model-based venues: each projector shows what it can see. In 2D setups, drag a slice on the
+      canvas onto an output.
+    defaults: >-
+      Every projector renders all surfaces it covers.
+    automation: >-
+      Coverage-based routing and the overlap hand-off to out.edge-blend.
+    usability_check: >-
+      Users send a canvas slice to a second output in under 1 minute.
+  acceptance: >-
+    AS-5.
+  status: not-started
+  evidence: []
+
+- id: out.output-mask
+  name: Output (installation) masks
+  sources:
+    - ref: brief §6
+      item: "Keep creative masks separate from physical output masks"
+      category: "Masks, mattes, compositing"
+      checked: true
+    - ref: S29
+      item: "Output Transformation — Masks and Crops (arbitrary points, invert)"
+      category: "Advanced Output"
+      checked: true
+    - ref: S27
+      item: "Bezier Masking / Feathering"
+      category: "Surfaces"
+      checked: true
+  artist_can: >-
+    Stop light hitting things it must not — doors, windows with people behind them, trees, the audience, a
+    neighbour's wall — whatever the show does creatively.
+  projection_example: >-
+    An artistic glow spreads beyond the windows in the composition, but the output mask keeps the entrance doors dark.
+  controls:
+    - { name: "Mask shapes (from keep-dark regions, or drawn on the output)", type: "path[]", animatable: false }
+    - { name: "Feather", type: "px", animatable: false }
+    - { name: "Safety margin", type: "cm", animatable: false }
+    - { name: "Invert", type: "bool", animatable: false }
+  animation: >-
+    Not animatable by default (installation safety). Show-time mask changes are cue-level, not keyframes.
+  dependencies: [map.region, map.calibration, out.projector-output]
+  implementation: >-
+    Rendered in venue space from keep-dark regions, projected through the calibration, plus output-space polygons
+    (Skia path → coverage texture). Multiplied in linear light after the projector render and before blending. A
+    separate object type from mask.bezier: no shared IDs, not editable from the creative timeline.
+  io: >-
+    Baked into projector videos, or exported as mask images when a player applies masks (out.mapping-data-export).
+    Recorded in the manifest stage ledger.
+  limitations: >-
+    Accuracy depends on calibration, and projector light scatters and defocuses, so a margin is added. Masks cannot
+    stop reflections or spill from light bouncing off surfaces.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Mark a region "Keep dark" and the mask is created automatically; "Draw a no-light area" on the output for
+      anything else.
+    defaults: >-
+      2 px feather, 5 cm safety margin.
+    automation: >-
+      Generated from keep-dark regions and updated on recalibration.
+    usability_check: >-
+      With a glow effect applied, users confirm the door stays dark (automated pixel check plus user confirmation)
+      without any manual mask work.
+  acceptance: >-
+    AS-1. Mini scene "glow-vs-door": zero output pixels above black inside the door mask.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: out.residual-warp
+  name: Residual output mesh warp
+  sources:
+    - ref: S29
+      item: "Output Transformation — perspective warp; bezier warp with subdivisions"
+      category: "Advanced Output"
+      checked: true
+    - ref: S28
+      item: "Stoner — mesh warper; displacement map output for the Remap TOP"
+      category: "Projection Mapping"
+      checked: true
+    - ref: S27
+      item: "Mesh Warping"
+      category: "Surfaces"
+      checked: true
+  artist_can: >-
+    Fix the last small misalignments of a whole projector output with a fine Bezier grid, after calibration.
+  projection_example: >-
+    The facade bulges 2 cm at mid-height. A 9×9 grid nudge brings every window outline back on its edge.
+  controls:
+    - { name: "Grid size", type: "int[2]", animatable: false }
+    - { name: "Grid points with Bezier handles", type: "point2d[]", animatable: false }
+    - { name: "Initialise from calibration errors", type: "action", animatable: false }
+    - { name: "Reset", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output, map.calibration-refine]
+  implementation: >-
+    A per-output Bezier patch grid (default 5×5, up to 33×33) evaluated to a UV-offset texture (rgba16float),
+    consumed by a WGSL remap pass with bicubic filtering. It can be initialised from calibration residuals with a
+    thin-plate spline. Stored in the calibration version.
+  io: >-
+    Exportable as a float EXR remap (like Stoner's displacement map) for players that warp themselves.
+  limitations: >-
+    An image-space correction, valid for this projector's view of a static surface. Large corrections point to a
+    calibration or model problem, and stretching lowers effective resolution.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Calibration → "Fine-tune" → "Fix small leftovers", or drag points on the projector directly.
+    defaults: >-
+      5×5 grid, auto-initialised.
+    automation: >-
+      Initialisation from residuals, and a warning when warps are large.
+    usability_check: >-
+      Users correct a deliberate 10 px local offset in under 2 minutes.
+  acceptance: >-
+    Mini scene "refine-bulge". AS-1 physical.
+  status: not-started
+  evidence: []
+
+- id: out.edge-blend
+  name: Edge blending
+  sources:
+    - ref: brief §16
+      item: "Overlap blending; matching content and aligned geometry are prerequisites"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S29
+      item: "Edge blending — Gamma (R, G, B), Power, Luminance; at least 15% overlap recommended; slices mirror physical overlap"
+      category: "Edge blending"
+      checked: true
+    - ref: S27
+      item: "Soft-Edge blending"
+      category: "Masking & Blending"
+      checked: true
+    - ref: S28
+      item: "projectorBlend (NxM arrays); camSchnappr auto blend masks"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Make two or more overlapping projectors look like one seamless image by fading each one out across the overlap.
+  projection_example: >-
+    Two projectors overlap by 20% across the centre of a 30 m facade, and the seam disappears on a grey test field.
+  controls:
+    - { name: "Overlap (auto from calibration / manual width)", type: "enum + px", animatable: false }
+    - { name: "Curve power", type: "float", animatable: false }
+    - { name: "Luminance (midpoint)", type: "float", animatable: false }
+    - { name: "Gamma R / G / B", type: "float[3]", animatable: false }
+    - { name: "Show overlap zone", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration-3d, map.coverage, out.routing, out.test-pattern, out.color-match]
+  implementation: >-
+    For model-based setups, the overlap comes from calibrated projector cameras over the venue geometry. Per-projector
+    weight textures use w_i = d_i^p / Σ_j d_j^p, where d is the surface-space distance to that projector's coverage
+    edge (Raskar-style), shaped by Resolume-like power/luminance/gamma controls. Weights are applied in linear light
+    in WGSL. For 2D setups, rectangular edge ramps are used per output. Weights are cached as rgba16float textures
+    and rebuilt when the calibration version changes.
+  io: >-
+    Baked into projector videos, or exported as blend-ramp images for players (out.mapping-data-export). Recorded in
+    the stage ledger.
+  limitations: >-
+    Needs aligned geometry and matching content. Differences in brightness, colour, focus and surface angle stay
+    visible and need out.color-match. Blending cannot fix misalignment. Physical checking is required.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Automatic when projectors overlap: "Blend the overlap", with a grey test field and three plain sliders (Softness,
+      Brightness in the middle, Colour balance).
+    defaults: >-
+      Auto overlap, power 2, luminance 0.5, gamma 2.2.
+    automation: >-
+      Overlap detection and weight computation.
+    usability_check: >-
+      Physical test: users reduce a visible seam on a grey field to "not noticeable from 10 m" (rated by 2 observers)
+      in under 10 minutes.
+  acceptance: >-
+    AS-5 (geometry crosses an overlap; blend checked physically).
+  status: not-started
+  evidence: []
+
+- id: out.black-level
+  name: Black-level compensation
+  sources:
+    - ref: S29
+      item: "Black level compensation — brightens non-overlapping regions; cannot fully eliminate the double-grey problem"
+      category: "Edge blending"
+      checked: true
+    - ref: brief §16
+      item: "Black-level compensation must account for residual light in overlaps; it cannot create physical darkness"
+      category: "Multiple projectors and output management"
+      checked: true
+  artist_can: >-
+    Reduce the grey band visible in dark scenes where projectors overlap, by lifting the black of the non-overlap
+    areas to match.
+  projection_example: >-
+    A night-sky scene no longer shows a lighter vertical stripe where two projectors overlap.
+  controls:
+    - { name: "Black lift per zone", type: "float", animatable: false }
+    - { name: "Edge softness", type: "px", animatable: false }
+    - { name: "Black-level test pattern", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.edge-blend, out.test-pattern]
+  implementation: >-
+    A per-output additive lift mask in linear light: lift = (n_max − n_local) × measured black floor, feathered at
+    zone edges. The black floor is matched by eye with a black test pattern and one slider per zone, or estimated
+    from a camera later (map.structured-light infrastructure).
+  io: >-
+    Baked, or exported as a lift map. Recorded in the stage ledger.
+  limitations: >-
+    Lifts black everywhere outside overlaps, so contrast drops. It cannot create darkness, and the black floor varies
+    with ambient light and projector temperature.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Blend step → "Even out dark scenes", with a black test field and one slider.
+    defaults: >-
+      Off until the user runs the step.
+    automation: >-
+      Zone map from overlap counts.
+    usability_check: >-
+      Physical test: users reduce the overlap band visibility on a black field (rated by 2 observers) in under
+      5 minutes, and can say what it costs (lower contrast).
+  acceptance: >-
+    AS-5.
+  status: not-started
+  evidence: []
+
+- id: out.color-match
+  name: Projector gamma and colour matching
+  sources:
+    - ref: brief §16
+      item: "Gamma/color matching; treat surface response and optical differences as measured limitations"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S29
+      item: "Edge blending — Gamma (Red, Green, Blue)"
+      category: "Edge blending"
+      checked: true
+  artist_can: >-
+    Make projectors of different models or ages match in brightness, white point and gamma, so blended areas and
+    neighbouring walls look consistent.
+  projection_example: >-
+    A newer, bluer projector is matched to an older one on adjacent walls.
+  controls:
+    - { name: "Gain / offset / gamma per channel", type: "float[9]", animatable: false }
+    - { name: "Match brightness to dimmest", type: "bool", animatable: false }
+    - { name: "Side-by-side matching assistant", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.output-color, out.test-pattern]
+  implementation: >-
+    A per-output 3×3 matrix plus per-channel 1D curves in linear light, inside the out.output-color stage. Guided
+    visual matching uses split-field patterns (both projectors in the overlap showing the same swatch). Camera-
+    assisted estimation in the vision sidecar is an advanced option.
+  io: >-
+    Baked, or exported as a per-output 1D/3D LUT (.cube). Recorded in the stage ledger.
+  limitations: >-
+    Matching lowers every projector to the weakest one's range. Visual matching is subjective, and differences caused
+    by surface material or angle are not projector issues. Colorimeter support is an open question (not planned).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Blend step → "Match colours": "Which side looks warmer?" style comparisons, with 2–3 controls.
+    defaults: >-
+      Identity correction.
+    automation: >-
+      Iterative comparisons converge on gains/gamma.
+    usability_check: >-
+      Physical test: users reduce a visible white-point mismatch to "not distracting" (2 observers) in under
+      10 minutes.
+  acceptance: >-
+    AS-5 (colour checked physically).
+  status: not-started
+  evidence: []
+
+- id: out.output-color
+  name: Output colour correction (separate from the artistic grade)
+  sources:
+    - ref: brief §11I
+      item: "Separate the show's artistic grade from each projector's output correction"
+      category: "Color and channels"
+      checked: true
+    - ref: brief §14
+      item: "Output transforms and correct metadata"
+      category: "Color precision and image quality"
+      checked: true
+  artist_can: >-
+    Keep each projector's output correction (brightness, gamma, colour balance, output transform) apart from the
+    show's creative colour grade, so neither can disturb the other.
+  projection_example: >-
+    The show is graded warm for the story; the projector correction compensates a cool lamp. Exports to a second
+    venue keep the grade but drop the old correction.
+  controls:
+    - { name: "Output transform (sRGB/Rec.709 2.2, 2.4, OCIO display/view, LUT)", type: "enum", animatable: false }
+    - { name: "Brightness / gamma / balance", type: "float[]", animatable: false }
+    - { name: "Dither", type: "bool", animatable: false }
+  animation: >-
+    None. Creative grades stay in compositions (fx.color.curves etc.).
+  dependencies: [color.management, color.lut, out.projector-output]
+  implementation: >-
+    A separate output-pipeline stage. Linear-light correction (including out.color-match) runs first. After the
+    residual warp comes the output transform from the scene-linear working space to the projector signal: analytic
+    sRGB/gamma in WGSL, or an OCIO display/view baked to a 3D LUT by the PyOpenColorIO sidecar. Then
+    triangular-noise dither to 8/10 bit. Creative grades remain effects in compositions.
+  io: >-
+    Recorded in the manifest stage ledger. Exportable as .cube for players.
+  limitations: >-
+    A monitor preview cannot guarantee a physical match. SDR projectors stay SDR even with HDR sources.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Output → "Projector picture" with Brightness / Contrast / Warmth, clearly labelled "affects this projector
+      only".
+    defaults: >-
+      sRGB-like gamma 2.2 transform, no correction, dither on.
+    automation: >-
+      Chooses the transform from the output preset.
+    usability_check: >-
+      Users can say whether a change affects "the show" or "this projector" for 4 of 4 example controls.
+  acceptance: >-
+    AS-5. Mini scene "grade-vs-output": swapping the output correction leaves master exports bit-identical.
+  status: not-started
+  evidence: []
+
+- id: out.calibration-profile
+  name: Per-output calibration profiles
+  sources:
+    - ref: brief §16
+      item: "Calibration profiles"
+      category: "Multiple projectors and output management"
+      checked: true
+  artist_can: >-
+    Save a projector's complete correction (alignment, warp, masks, blend, colour) as a named profile, then reuse or
+    swap it ("Summer rig", "Replacement projector").
+  projection_example: >-
+    A replacement projector arrives. Load the old profile as a starting point, then refine only the colour match.
+  controls:
+    - { name: "Save profile", type: "action", animatable: false }
+    - { name: "Apply profile (all or selected parts)", type: "action", animatable: false }
+    - { name: "Export / import file", type: "file", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration-versions, out.output-color, out.edge-blend, out.residual-warp]
+  implementation: >-
+    A profile is a named, per-output subset of a calibration version, exported as a JSON + EXR package. Applying it
+    runs ops that create a new calibration version (never edits in place).
+  io: >-
+    A .beprofile package (JSON + EXR/PNG maps).
+  limitations: >-
+    A profile stores settings, not physical positions; after hardware changes it is a starting point.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Outputs panel → "Save this projector's setup" / "Load a saved setup".
+    defaults: >-
+      Named after the projector and date.
+    automation: >-
+      A new calibration version is created on apply.
+    usability_check: >-
+      Users load a saved setup onto a replacement output in under 1 minute.
+  acceptance: >-
+    AS-5.
+  status: not-started
+  evidence: []
+
+- id: out.installation-space
+  name: Installation-wide coordinates
+  sources:
+    - ref: brief §16
+      item: "Installation-wide coordinates"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S29
+      item: "Advanced Output — input map vs output transformation"
+      category: "Advanced Output"
+      checked: true
+  artist_can: >-
+    Work in one coordinate system for the whole installation (metres in the venue, or one large canvas for 2D
+    setups), so content crosses projector boundaries without per-projector layout.
+  projection_example: >-
+    A light sweep crosses from Projector 1's area into Projector 2's without any per-projector keyframes.
+  controls:
+    - { name: "Canvas size (2D multi-output)", type: "int[2]", animatable: false }
+    - { name: "Output slices on canvas", type: "rect[]", animatable: false }
+  animation: >-
+    Content animates in installation space; projectors only sample it.
+  dependencies: [map.venue, out.routing]
+  implementation: >-
+    Venue world coordinates (map.venue) are the single authority for model-based setups. 2D multi-output setups use
+    a virtual canvas spanning all outputs, with each output a slice (comparable to Resolume's input map). Content is
+    always authored in surface or venue space.
+  io: >-
+    Canvas/slice layout is recorded in the manifest.
+  limitations: >-
+    None beyond the routing limits.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Invisible: users place content on the building, never "on Projector 2".
+    defaults: >-
+      Venue metres; the canvas sized to cover all outputs.
+    automation: >-
+      Slice layout proposed from output arrangement.
+    usability_check: >-
+      Users animate an object across two projectors without opening per-output settings.
+  acceptance: >-
+    AS-5 (geometry crosses an overlap).
+  status: not-started
+  evidence: []
+
+- id: out.sync
+  name: Consistent timing across outputs
+  sources:
+    - ref: brief §16
+      item: "Consistent timing across outputs"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: brief §17
+      item: "Matching video durations alone does not guarantee synchronized external playback"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Have all projector outputs show the same frame at the same moment during live playback, and know how well that
+    holds on the actual hardware.
+  projection_example: >-
+    A fast light sweep crossing the overlap does not tear or double between the two projectors.
+  controls:
+    - { name: "Output topology (spanning window, per-display windows)", type: "enum", animatable: false }
+    - { name: "Frame-counter test pattern", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output, out.routing, show.transport]
+  implementation: >-
+    One show clock (flicks) in one renderer process renders frame N for every output in the same tick. Topology
+    options, most robust first: (1) one borderless window spanning adjacent outputs, or NVIDIA Surround / AMD
+    Eyefinity grouping, giving a single swap chain; (2) per-display windows opened from the same renderer
+    (window.open, same process, one GPUDevice) — feasibility to prototype in milestone A; (3) separate processes
+    with a frame-number handshake. A frame-counter test pattern photographed by a camera across outputs verifies
+    the result.
+  io: >-
+    Sync method and measured offsets are recorded in the bundle manifest.
+  limitations: >-
+    True genlock/frame lock needs pro GPUs or sync hardware, not available on GeForce cards. Windows DWM composition
+    can add per-display offsets. Measure on the actual hardware; no universal guarantee.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Automatic. Output health shows "In step" or "Outputs may drift — run the timing check".
+    defaults: >-
+      Spanning window when the displays form a contiguous row at the same refresh rate.
+    automation: >-
+      Topology choice and refresh-rate checks.
+    usability_check: >-
+      Technical check rather than novice: measured inter-output offset is 0 frames in at least 99% of a 10-minute
+      camera capture on target hardware (tolerance to be set after hardware is known).
+  acceptance: >-
+    AS-5. AS-6 (audio timing measured).
+  status: not-started
+  evidence: []
+
+- id: out.projector-video
+  name: Projector video export
+  sources:
+    - ref: brief §17
+      item: "Installation-specific video for each projector, with selected correction baked in"
+      category: "Rendering, export, and delivery"
+      checked: true
+    - ref: brief §0.8
+      item: "Files for my projector setup"
+      category: "Make export a guided outcome"
+      checked: true
+  artist_can: >-
+    Export the exact video a projector needs — its raster, with mapping and the chosen corrections baked in — to play
+    from any media player or the projector's USB player.
+  projection_example: >-
+    A 1920×1080 H.264 file of the mapped facade show plays from the projector's built-in media player.
+  controls:
+    - { name: "Output", type: "select", animatable: false }
+    - { name: "Stages to bake (mapping, mask, blend, colour, warp, orientation)", type: "flags", animatable: false }
+    - { name: "Preset (USB player, media server, high quality)", type: "enum", animatable: false }
+    - { name: "Range", type: "time range", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-output, out.manifest, out.bake-once, render.queue, render.encode, render.verify]
+  implementation: >-
+    An offline render through render.queue using the same output pipeline as live output, at the projector's native
+    raster from an immutable snapshot. Encoded by the FFmpeg sidecar (render.encode) and verified by render.verify
+    (resolution, fps, frame count, duration, audio). Writes out.manifest next to the file.
+  io: >-
+    MP4/H.264 by default. HEVC, ProRes, DNxHR and HAP per tested support.
+  limitations: >-
+    A baked file is tied to this calibration version; recalibration means re-export. The manifest makes this visible.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Export → "Files for my projector setup".
+    defaults: >-
+      All stages baked, H.264 at the projector's native raster and the show's frame rate.
+    automation: >-
+      Preset choice from the player type, verification, and the manifest.
+    usability_check: >-
+      Users export a projector file that plays correctly on the target player without touching codec settings
+      (at least 4 of 5).
+  acceptance: >-
+    AS-1 and B milestone guided path: master + projector video exported and verified.
+  status: not-started
+  evidence: []
+
+- id: out.manifest
+  name: Output manifest with stage ledger
+  sources:
+    - ref: brief §17
+      item: "Manifest with output identity, calibration version, timing, codec, dimensions, and correction stages"
+      category: "Rendering, export, and delivery"
+      checked: true
+    - ref: brief §17
+      item: "Specify which stages are baked and which are expected in playback software"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Get a readable record with every projector export of what it is, where it goes, how it was made, and which
+    corrections are already inside it.
+  projection_example: >-
+    A technician opens the manifest and sees "Projector 2 RIGHT, calibration v4, warp baked, colour expected in
+    player".
+  controls:
+    - { name: "Include human-readable summary", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [render.verify, map.calibration-versions, map.binding]
+  implementation: >-
+    A schema-versioned JSON sidecar (Zod-validated), `<name>.manifest.json`, containing: app version; project, show,
+    venue and binding IDs/hashes; calibration version hash; and per output {id, name, display fingerprint, raster,
+    refresh, orientation, file, codec, pixel format, colour transform, rational fps, frame count, duration, start
+    timecode, audio layout/offset, SHA-256}. It also holds the stage ledger {mapping, output mask, blend, black level,
+    output colour, residual warp, orientation: baked | expected-in-player | not-used} and the render.verify results.
+    A plain-text summary is written alongside.
+  io: >-
+    JSON + TXT next to exports, also embedded in bundles.
+  limitations: >-
+    External players do not read the manifest; it informs people and re-imports only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Written automatically. A "What's in this file?" link appears in the export result.
+    defaults: >-
+      Always on.
+    automation: >-
+      Fully automatic.
+    usability_check: >-
+      Shown the summary, users correctly say whether warping is already in the file (at least 4 of 5).
+  acceptance: >-
+    AS-5 (matching exported output bundles). Schema test on every export.
+  status: not-started
+  evidence: []
+
+- id: out.export-bundle
+  name: Multi-projector export bundle
+  sources:
+    - ref: brief §17
+      item: "Multi-projector bundles must include a manifest; matching durations do not guarantee synchronized playback"
+      category: "Rendering, export, and delivery"
+      checked: true
+    - ref: brief §22
+      item: "AS-5 matching exported output bundles"
+      category: "Acceptance shows"
+      checked: true
+  artist_can: >-
+    Export one folder with a video per projector, the shared audio, an overview preview and the manifest, ready for a
+    media server or several players.
+  projection_example: >-
+    A three-projector facade show as one folder: P1.mov, P2.mov, P3.mov, show.wav, preview.mp4, manifest.json and
+    README.txt.
+  controls:
+    - { name: "Outputs to include", type: "flags", animatable: false }
+    - { name: "Shared preset", type: "select", animatable: false }
+    - { name: "Separate or embedded audio", type: "enum", animatable: false }
+    - { name: "Zip", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.projector-video, out.manifest, out.sync, render.queue, render.verify]
+  implementation: >-
+    A bundle job renders all outputs from one immutable snapshot in a single pass per frame (shared content
+    evaluation), so frame counts are identical. It writes the folder layout, checksums and a README with the
+    required sync method, then verifies equal frame counts, durations and audio offsets.
+  io: >-
+    Folder or zip. Delivered through deliver.* destinations.
+  limitations: >-
+    Equal durations do not make separate players play in sync. The README states which sync method the bundle
+    assumes (one multi-output player, network sync, or timecode).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Export → "Files for my projector setup" automatically becomes a bundle when there are 2+ projectors.
+    defaults: >-
+      All outputs, shared preset, separate WAV plus embedded audio in P1.
+    automation: >-
+      Layout, naming, checksums and verification.
+    usability_check: >-
+      Users export a 2-projector bundle and find its folder without assistance.
+  acceptance: >-
+    AS-5.
+  status: not-started
+  evidence: []
+
+- id: out.bake-once
+  name: Never apply mapping, blending or output colour twice
+  sources:
+    - ref: brief §17
+      item: "Never apply mapping, blending, or output color correction twice"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Trust that warping, blending and projector colour correction happen exactly once — in the app, in an exported
+    file, or in external playback software.
+  projection_example: >-
+    Re-importing an exported projector file as a source raises "This file already contains Projector 1's mapping —
+    use it as-is on that output?" instead of warping it again.
+  controls:
+    - { name: "Per-stage choice (bake here / player applies)", type: "enum[]", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.manifest, out.projector-output, proj.project-model]
+  implementation: >-
+    Every texture, media item and export carries a stage ledger. The output pipeline skips or blocks stages already
+    present in a source's ledger and explains why. Before Effects exports embed the ledger in the manifest and in
+    container metadata (FFmpeg -metadata comment), so re-imported files are recognised. Export presets declare
+    "player applies" stages. A property-based test asserts that each stage appears at most once along any render
+    path.
+  io: >-
+    Ledger in manifest and container metadata.
+  limitations: >-
+    Files from other software carry no ledger; the app asks once how such a file was prepared.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Invisible unless a conflict appears, then a plain question with two buttons.
+    defaults: >-
+      Bake all stages for "Files for my projector setup"; bake none for masters.
+    automation: >-
+      Ledger tracking and conflict detection.
+    usability_check: >-
+      In a seeded double-mapping trap, at least 4 of 5 users choose the correct option from the prompt.
+  acceptance: >-
+    Mini scene "double-bake-trap"; AS-5 manifests.
+  status: not-started
+  evidence: []
+
+- id: out.mapping-data-export
+  name: Mapping data export for playback software
+  sources:
+    - ref: brief §17
+      item: "Specify which stages are baked and which are expected in playback software"
+      category: "Rendering, export, and delivery"
+      checked: true
+    - ref: S28
+      item: "Stoner — displacement map for use with the Remap TOP"
+      category: "Projection Mapping"
+      checked: true
+    - ref: S27
+      item: "Video mapping export to MiniMad"
+      category: "Export"
+      checked: true
+  artist_can: >-
+    Export unwarped content plus the mapping data (warp maps, masks, blend ramps, colour LUTs) for playback software
+    that applies the mapping itself.
+  projection_example: >-
+    Send TouchDesigner a per-output remap EXR plus the flat content master instead of a baked video.
+  controls:
+    - { name: "Data to export (remap, mask, blend, LUT, mesh, calibration JSON)", type: "flags", animatable: false }
+    - { name: "Target (generic, player-specific)", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [out.residual-warp, out.output-mask, out.edge-blend, out.manifest, map.uv-content-space]
+  implementation: >-
+    Generic formats: per-output UV remap as 32-bit float EXR (OpenEXR), masks and blend ramps as 16-bit PNG/EXR,
+    venue mesh with UVs as OBJ/glTF, calibration as JSON (intrinsics/extrinsics/homography), colour as .cube. The
+    manifest marks these stages expected-in-player.
+  io: >-
+    EXR/PNG/OBJ/glTF/JSON/.cube.
+  limitations: >-
+    Player-specific formats are an open question: Resolume Advanced Output XML, MadMapper projects, MiniMad and
+    others are undocumented or proprietary, and need a decision on which players matter.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Export → "Files for my projector setup" → "My playback software does the mapping" (advanced choice).
+    defaults: >-
+      Generic EXR/PNG/JSON set.
+    automation: >-
+      Ledger update and README notes.
+    usability_check: >-
+      Pilot technical user imports the remap into TouchDesigner (Remap TOP) and reproduces the baked output within
+      1 px.
+  acceptance: >-
+    Mini scene "remap-roundtrip".
+  status: not-started
+  evidence: []
+
+- id: out.spout
+  name: Spout texture sharing
+  sources:
+    - ref: brief §16
+      item: "Optional live texture/video interchange such as Spout, Syphon, or NDI"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "Spout-Syphon send / receive"
+      category: "Networking & Control"
+      checked: true
+  artist_can: >-
+    Share live frames with other apps on the same Windows PC — send outputs to Resolume/TouchDesigner/OBS, or receive
+    their frames as a source layer.
+  projection_example: >-
+    Send the mapped facade output to Resolume for playback; receive a live TouchDesigner generative feed into a
+    window region.
+  controls:
+    - { name: "Send (per output or composition), sender name", type: "string", animatable: false }
+    - { name: "Receive source", type: "select", animatable: false }
+    - { name: "Format (8-bit, 16-bit float)", type: "enum", animatable: false }
+  animation: >-
+    Received frames act as live footage. Exports need a recorded/baked copy for reproducibility.
+  dependencies: [out.projector-output, show.workspace]
+  implementation: >-
+    A native N-API addon wrapping the Spout2 SDK (SpoutDX, BSD-2). Send path: Electron offscreen rendering with
+    webPreferences.offscreen.useSharedTexture (paint event delivers an OffscreenSharedTexture; release it promptly),
+    passing its handle to SpoutDX. Fallback: WebGPU readback (copyTextureToBuffer + mapAsync) into a D3D11 texture.
+    Receive path: SpoutDX receive → CPU copy → queue.writeTexture. Zero-copy import into WebGPU is assumed
+    unavailable.
+  io: >-
+    Live only.
+  limitations: >-
+    Windows only. The shared-handle details (D3D11 NT handle) and latency are unverified until prototyped. The CPU
+    fallback costs about 8 MB per 1080p RGBA8 frame.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Live inter-app (Spout, NDI) and OSC integration. The plan is export-first: baked projector video and mapping-data export come first. Revisit after show playback is proven. MIDI stays required for timecode sync."
+  milestone: E
+  beginner:
+    action: >-
+      Advanced → "Share with other apps (Spout)".
+    defaults: >-
+      Sender name "Before Effects – Output 1".
+    automation: >-
+      Source discovery.
+    usability_check: >-
+      Pilot user receives the output in Resolume within 2 minutes.
+  acceptance: >-
+    Mini scene "spout-loop": send → receive round trip matches within 1 code value; latency measured.
+  status: not-started
+  evidence: []
+
+- id: out.syphon
+  name: Syphon texture sharing (macOS)
+  sources:
+    - ref: brief §16
+      item: "Spout, Syphon, or NDI when appropriate for the chosen platform"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "Spout-Syphon send / receive"
+      category: "Networking & Control"
+      checked: true
+  artist_can: >-
+    On a Mac, share live frames with other macOS apps.
+  projection_example: >-
+    Not applicable on the Windows target.
+  controls:
+    - { name: "Send / receive", type: "select", animatable: false }
+  animation: >-
+    As for out.spout.
+  dependencies: [out.spout]
+  implementation: >-
+    Would need a native addon using the Syphon framework (Metal/IOSurface) on a macOS build. Not applicable on
+    Windows, where out.spout and out.ndi cover the need.
+  io: >-
+    Live only.
+  limitations: >-
+    Before Effects targets Windows and Syphon is macOS-only. Recommendation: no work unless a macOS build is requested (Spout and NDI cover Windows).
+
+    Syphon is macOS-only, and Before Effects targets Windows. Open question: will a macOS build ever be made? Until
+    then this capability is not applicable and has no Windows implementation.
+  disposition: unresolved
+  superseded_by: null
+  exclusion_reason: null
+  milestone: F
+  beginner:
+    action: >-
+      N/A on Windows.
+    defaults: >-
+      N/A.
+    automation: >-
+      N/A.
+    usability_check: >-
+      N/A unless a macOS build is decided.
+  acceptance: >-
+    None unless adopted.
+  status: not-started
+  evidence: []
+
+- id: out.ndi
+  name: NDI video over network
+  sources:
+    - ref: brief §16
+      item: "Live texture/video interchange such as NDI"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "NDI send / receive"
+      category: "Networking & Control"
+      checked: true
+  artist_can: >-
+    Send outputs to other computers over the network, or receive network video (cameras, other apps) as a source.
+  projection_example: >-
+    Send a preview of all outputs to a tablet at front of house; receive a live camera of the performer as a layer.
+  controls:
+    - { name: "Send (per output or composition), stream name", type: "string", animatable: false }
+    - { name: "Receive source (discovered)", type: "select", animatable: false }
+    - { name: "Audio", type: "bool", animatable: false }
+  animation: >-
+    Received frames act as live footage. Exports need a recorded copy.
+  dependencies: [out.projector-output, show.workspace]
+  implementation: >-
+    The NDI SDK (free download, proprietary licence; fine for personal use, with its redistribution and attribution
+    terms followed) through a native N-API addon (custom, or a community binding such as grandiose). Sends
+    BGRA/UYVY frames from GPU readback with NDIlib_send_send_video_v2 and receives via NDIlib_find + NDIlib_recv into
+    texture uploads.
+  io: >-
+    Live only.
+  limitations: >-
+    Compressed network video adds latency (typically a frame or more) and depends on the network. Not suitable for
+    frame-locked multi-projector sync. SDK and licence version to be verified when implementing.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Live inter-app (Spout, NDI) and OSC integration. The plan is export-first: baked projector video and mapping-data export come first. Revisit after show playback is proven. MIDI stays required for timecode sync."
+  milestone: E
+  beginner:
+    action: >-
+      Advanced → "Send over network (NDI)".
+    defaults: >-
+      Off. Stream named after the output.
+    automation: >-
+      Source discovery.
+    usability_check: >-
+      Pilot user views an output in NDI Studio Monitor within 2 minutes.
+  acceptance: >-
+    Mini scene "ndi-latency": measured glass-to-glass latency recorded.
+  status: not-started
+  evidence: []
+
+- id: out.midi
+  name: MIDI control
+  sources:
+    - ref: brief §16
+      item: "Plan MIDI/OSC and cue controls for live work"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "Midi input / output"
+      category: "Networking & Control"
+      checked: true
+  artist_can: >-
+    Trigger cues, blackout and transport, and ride parameters (intensity, speed, colour), from a MIDI controller,
+    with light feedback on the controller.
+  projection_example: >-
+    A pad controller: pads fire cues, a fader is master intensity, and a red pad is blackout.
+  controls:
+    - { name: "MIDI learn (click control, move hardware)", type: "action", animatable: false }
+    - { name: "Mapping list (message → target, range, curve)", type: "list", animatable: false }
+    - { name: "Feedback to controller", type: "bool", animatable: false }
+  animation: >-
+    Live parameter changes can be recorded to keyframes for reproducible exports.
+  dependencies: [show.cue-list, show.blackout, show.transport]
+  implementation: >-
+    Web MIDI in the renderer (navigator.requestMIDIAccess), allowed through Electron's
+    session.setPermissionRequestHandler for 'midi'. Learn mode maps messages to op-registry targets (cue go, param
+    set). Mappings are saved per controller profile. MIDI out is used for LED feedback.
+  io: >-
+    Controller profiles saved as JSON.
+  limitations: >-
+    Driver quirks vary by device. MIDI clock and timecode chase are out of scope here (see show.timecode).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Show workspace → "Use a controller" → press a pad, then click a cue.
+    defaults: >-
+      Notes trigger cues; CC drives faders.
+    automation: >-
+      Device detection and learn mode.
+    usability_check: >-
+      Users map a pad to blackout and a fader to master intensity in under 2 minutes.
+  acceptance: >-
+    Mini scene "midi-cues".
+  status: not-started
+  evidence: []
+
+- id: out.osc
+  name: OSC control
+  sources:
+    - ref: brief §16
+      item: "Plan MIDI/OSC and cue controls for live work"
+      category: "Multiple projectors and output management"
+      checked: true
+    - ref: S27
+      item: "OSC input / output with OSC Query support"
+      category: "Networking & Control"
+      checked: true
+  artist_can: >-
+    Control cues and parameters from other software or devices on the network (show control, TouchOSC, QLab), and
+    send state back out.
+  projection_example: >-
+    A QLab cue sends /be/cue/go 5 so the projection follows the theatre's show control.
+  controls:
+    - { name: "Listen port / send host and port", type: "int + string", animatable: false }
+    - { name: "Address map (auto-generated, editable)", type: "list", animatable: false }
+    - { name: "OSC learn", type: "action", animatable: false }
+  animation: >-
+    As for out.midi.
+  dependencies: [show.cue-list, show.blackout, show.transport]
+  implementation: >-
+    OSC over UDP in the Electron main process (node-osc or osc.js), forwarded to the renderer over IPC. The address
+    space is generated from the op registry and cue list (/be/cue/go, /be/master/blackout, /be/param/<id>). OSCQuery
+    discovery (as in MadMapper) is optional.
+  io: >-
+    Address map exportable as text/JSON.
+  limitations: >-
+    UDP is unacknowledged, so critical cues may need repetition or a confirmation reply. OSCQuery support is not
+    decided.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Live inter-app (Spout, NDI) and OSC integration. The plan is export-first: baked projector video and mapping-data export come first. Revisit after show playback is proven. MIDI stays required for timecode sync."
+  milestone: E
+  beginner:
+    action: >-
+      Show workspace → "Control from other software" shows the port and copyable addresses.
+    defaults: >-
+      Listening on port 8000, local network only.
+    automation: >-
+      Address list generation.
+    usability_check: >-
+      Pilot user triggers a cue from TouchOSC in under 3 minutes using the shown address list.
+  acceptance: >-
+    Mini scene "osc-cues".
+  status: not-started
+  evidence: []

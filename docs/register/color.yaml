@@ -1,0 +1,758 @@
+# Color precision — Before Effects capability register
+# Sources: S25 (color management: working space, linearize, blend at 1.0 gamma, input/output profiles, display management, Simulate Output, color-managed video formats; checked 2026-10-01), S26 (OpenColorIO and ACES; OCIO effects; checked 2026-10-01), S30 (render color depth), S01 (HDR preview, Lumetri scopes), brief §14. Layer-level OCIO/LUT effects are catalogued as fx.* entries by the effect catalog.
+
+- id: color.management
+  name: Colour management (working, source, display and output spaces)
+  sources:
+    - ref: S25
+      item: Color management workflow — input profile → working space → monitor profile; output profile per output module; Color Engine
+      category: Adjust colors
+      checked: true
+    - ref: brief
+      item: §14 explicit source/working/display/output spaces
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Have every source interpreted correctly, compose in one well-defined working space, see an accurate preview, and
+    export with correct colour conversion and tags — without needing to understand colour science.
+  projection_example: >-
+    An sRGB logo, a Rec.709 video and an HDR EXR sky all look as intended together on the facade master.
+  controls:
+    - { name: Colour engine, type: enum(built-in|ocio), animatable: false }
+    - { name: Working space, type: enum(dynamic), animatable: false }
+    - { name: Display space, type: enum(dynamic), animatable: false }
+    - { name: Default output space, type: enum(dynamic), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.working-space, color.input-interpretation, color.display, color.output-transform, color.bit-depth]
+  implementation: >-
+    Built-in engine: analytic WGSL transforms (sRGB, BT.1886/Rec.709, Display P3, Rec.2020, linear variants, PQ, HLG,
+    ACEScg/ACES2065-1 matrices). OCIO engine: PyOpenColorIO sidecar bakes LUTs (color.ocio). Internal buffers are
+    rgba16float scene-linear premultiplied; every conversion point is explicit in the render graph.
+  io: >-
+    Colour settings saved per project; output tags written per export.
+  limitations: >-
+    A monitor preview cannot guarantee the look on a real surface under real ambient light (color.simulate-output).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Nothing to set: projects start colour-managed. "Colour" appears only in project settings and export Advanced.
+    defaults: >-
+      Linear Rec.709/sRGB primaries working space, sRGB display, Rec.709 output tags.
+    automation: >-
+      Reads source colour metadata, converts automatically, tags exports.
+    usability_check: >-
+      In the guided path no user is asked a colour-space question; exports verify as correctly tagged (render.verify).
+  acceptance: >-
+    Mini scene "mixed-sources": sRGB PNG, Rec.709 H.264 and EXR sources match reference patches within ΔE 1 in export.
+  status: not-started
+  evidence: []
+
+- id: color.working-space
+  name: Working space and linear compositing
+  sources:
+    - ref: S25
+      item: Working color space; Linearize working color space; Blend colors using 1.0 gamma
+      category: Adjust colors
+      checked: true
+  artist_can: >-
+    Composite in linear light so blends, glows, motion blur and fades behave like real light, and pick colours that
+    mean the same thing everywhere.
+  projection_example: >-
+    Overlapping light sweeps add up naturally on the facade instead of turning muddy at the overlap.
+  controls:
+    - { name: Working space, type: enum(linear-rec709|acescg|linear-rec2020|linear-p3), animatable: false }
+    - { name: Legacy display-referred blending (compat), type: bool, animatable: false }
+    - { name: Colour picker space, type: enum(display|working), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.bit-depth]
+  implementation: >-
+    All compositing in scene-linear rgba16float with premultiplied alpha; colour pickers convert display-referred picks to
+    working values (including >1.0 for HDR emission). A per-effect "expects display-referred" flag inserts
+    linear↔display conversions where an effect's maths needs it (color.conversion-boundaries).
+  io: >-
+    none
+  limitations: >-
+    Linear blending changes the look of some AE habits (e.g. Screen-mode glows); a compat toggle exists per composition.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; linear is default.
+    defaults: >-
+      Linear Rec.709 primaries.
+    automation: >-
+      n/a
+    usability_check: >-
+      Users judge overlapping light sweeps as natural in an A/B test against display-referred blending.
+  acceptance: >-
+    Mini scene "light-overlap": two 50% lights sum to the analytic linear value.
+  status: not-started
+  evidence: []
+
+- id: color.input-interpretation
+  name: Source colour interpretation
+  sources:
+    - ref: S25
+      item: Interpret Footage — Media Color Space, Override Media Color Space, Preserve RGB, interpretation rules; embedded ICC profiles; color-managed video formats (ProRes, H.264/HEVC, XAVC, camera RAW)
+      category: Adjust colors
+      checked: true
+    - ref: brief
+      item: §3 record source colour space; §14 input interpretation
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Have each image or video interpreted from its embedded tags or profile, override it when wrong, or preserve its raw
+    numbers for data images.
+  projection_example: >-
+    A phone video tagged HLG and an sRGB PNG both look right; a normal map is marked "data" so it is never colour-converted.
+  controls:
+    - { name: Detected colour space, type: display, animatable: false }
+    - { name: Override colour space, type: enum(dynamic), animatable: false }
+    - { name: Range, type: enum(auto|limited|full), animatable: false }
+    - { name: Preserve RGB (data/raw), type: bool, animatable: false }
+    - { name: Interpretation rules, type: rule-list, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.management, proj.project-model]
+  implementation: >-
+    FFprobe stream tags (color_primaries, color_trc, colorspace, color_range) and PNG/TIFF ICC/cICP via the decoder
+    sidecar; ICC profiles evaluated with LittleCMS (lcms2) in the sidecar to bake a 3D LUT when not analytic; EXR
+    chromaticities honoured; camera log spaces via OCIO (color.aces).
+  io: >-
+    Interpretation stored per asset; rules file importable/exportable.
+  limitations: >-
+    Untagged files are guessed (sRGB for images, Rec.709 for HD video) and flagged in the asset panel.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Asset panel badge "Colours: automatic (Rec.709)"; click to change.
+    defaults: >-
+      Automatic from metadata.
+    automation: >-
+      Flags untagged or contradictory metadata with a plain explanation.
+    usability_check: >-
+      A user fixes a washed-out clip by choosing the suggested interpretation in under 30 s.
+  acceptance: >-
+    Test pack of tagged/untagged sources decodes to reference values within 1 code value (8-bit equivalent).
+  status: not-started
+  evidence: []
+
+- id: color.display
+  name: Display transform and display colour management
+  sources:
+    - ref: S25
+      item: Use Display Color Management (per viewer); monitor profile
+      category: Adjust colors
+      checked: true
+    - ref: S26
+      item: Display Color Space menu in the Composition panel (OCIO)
+      category: OpenColorIO and ACES
+      checked: true
+  artist_can: >-
+    See the working image correctly converted for the monitor (sRGB, Display P3 or an HDR display), per viewer, with the
+    option to view raw values.
+  projection_example: >-
+    On a wide-gamut laptop, saturated reds look the same as on the studio monitor.
+  controls:
+    - { name: Display space, type: enum(srgb|display-p3|rec709-bt1886|hdr-pq), animatable: false }
+    - { name: Display colour management, type: bool, animatable: false }
+    - { name: View transform (OCIO), type: enum(dynamic), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.management]
+  implementation: >-
+    WebGPU canvas configured with format rgba16float and colorSpace srgb or display-p3 (toneMapping extended on HDR
+    displays); the display transform runs as the final WGSL pass of the viewer only, never in renders.
+  io: >-
+    none
+  limitations: >-
+    Chromium does not apply arbitrary monitor ICC profiles to WebGPU canvases; calibrated-display accuracy relies on OS
+    calibration or an OCIO view.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; viewer picks the display automatically.
+    defaults: >-
+      Matches the OS display (sRGB or P3).
+    automation: >-
+      Detects HDR/wide-gamut displays via Electron screen info.
+    usability_check: >-
+      n/a for novices; expert check: test pattern matches reference on sRGB and P3 displays.
+  acceptance: >-
+    Viewer pixel readback equals the analytic display transform of working values.
+  status: not-started
+  evidence: []
+
+- id: color.output-transform
+  name: Output transforms and colour metadata
+  sources:
+    - ref: S25
+      item: Output Module color profile; Convert To Linear Light; Embed profile; rendering intent; Preserve RGB on output
+      category: Adjust colors
+      checked: true
+    - ref: S26
+      item: Render Queue Output Color Space (OCIO)
+      category: OpenColorIO and ACES
+      checked: true
+    - ref: brief
+      item: §14 output transforms and correct metadata; §17 never apply output colour correction twice
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export each file in the colour space its destination expects, with correct tags so players interpret it right.
+  projection_example: >-
+    The H.264 review copy is tagged Rec.709, the EXR master stays linear, and the projector file carries the projector's
+    output correction exactly once.
+  controls:
+    - { name: Output colour space, type: enum(dynamic), animatable: false }
+    - { name: Write colour tags / embed profile, type: bool, animatable: false }
+    - { name: Linear output (float formats), type: bool, animatable: false }
+    - { name: Preserve RGB (no conversion), type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.management, render.encode, color.banding-dither, out.projector-output, render.stage-declaration]
+  implementation: >-
+    Output transform is a WGSL pass at the end of the render graph (or a baked OCIO LUT) followed by quantisation and
+    dither; FFmpeg receives already-encoded values plus tags (-color_primaries/-color_trc/-colorspace/-color_range,
+    MOV colr atoms; PNG gAMA/cHRM/cICP where the build supports it; EXR chromaticities via OpenEXR).
+  io: >-
+    Tags verified by render.verify; the applied transform recorded in the stage declaration.
+  limitations: >-
+    Players may ignore tags (some media servers assume Rec.709 full range); export presets for known players set the
+    safest convention.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Handled by export presets; Advanced → Colour for experts.
+    defaults: >-
+      Video presets Rec.709 limited range; image sequences sRGB; EXR linear.
+    automation: >-
+      Chooses output space from the export outcome and records it in history.
+    usability_check: >-
+      No guided-path export requires a colour choice; verification passes for all presets.
+  acceptance: >-
+    Exported colour-bar test re-imported matches source within 1 code value per preset.
+  status: not-started
+  evidence: []
+
+- id: color.bit-depth
+  name: Bit depth and processing precision (8/16/32f)
+  sources:
+    - ref: S25
+      item: 8-bpc vs 16/32-bpc recommendations; linearized working space needs 16/32 bpc
+      category: Adjust colors
+      checked: true
+    - ref: S30
+      item: Render settings — Color Depth
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Work at high precision by default, choose full 32-bit float where heavy grading or HDR needs it, and see which
+    effects limit precision.
+  projection_example: >-
+    A slow sunrise gradient across the whole facade stays smooth after strong grading.
+  controls:
+    - { name: Processing precision, type: enum(16f|32f), animatable: false }
+    - { name: Effect precision badge, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.working-space]
+  implementation: >-
+    Default rgba16float buffers; a 32f mode switches compositor targets to rgba32float (effects declare supported
+    precision). 8-bit and 16-bit integer data appear only at decode and encode boundaries. AE 8/16/32 bpc project modes
+    map to 16f/16f/32f.
+  io: >-
+    Output bit depth is per format (8/10/12/16-bit, half, float).
+  limitations: >-
+    rgba16float has ~11 bits of mantissa: fine for 10-bit output, but extreme gain on dark values benefits from 32f;
+    32f doubles memory use.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None by default; "Maximum precision" toggle in project settings.
+    defaults: >-
+      16-bit float.
+    automation: >-
+      Suggests 32f when a composition stacks large exposure/grade changes.
+    usability_check: >-
+      n/a for novices; expert check: precision badge visible on every effect.
+  acceptance: >-
+    Gradient test survives +6 stops / −6 stops round trip without visible banding at 16f.
+  status: not-started
+  evidence: []
+
+- id: color.ocio
+  name: OpenColorIO configurations
+  sources:
+    - ref: S26
+      item: Color Engine OCIO color managed; OCIO Config (built-in, Custom); Working Color Space; Display Color Space; Show all; OCIO effects (File, Color Space, Display, Look, CDL Transform)
+      category: OpenColorIO and ACES
+      checked: true
+  artist_can: >-
+    Use a studio OCIO configuration (built-in ACES or a custom .ocio file) for working, input, display and output
+    spaces, looks and view transforms.
+  projection_example: >-
+    Match a VFX vendor's ACES pipeline so their EXR renders drop straight into the show.
+  controls:
+    - { name: OCIO config, type: enum(builtin-cg|builtin-studio|custom-file), animatable: false }
+    - { name: Working / display / view / look, type: enum(dynamic), animatable: false }
+    - { name: Show all colour spaces, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.management, color.lut]
+  implementation: >-
+    PyOpenColorIO in the sidecar resolves processors and bakes each needed transform to a 65³ 3D LUT with a 1D log2
+    shaper for scene-linear input; LUTs uploaded as rgba16float 3D textures and applied in WGSL with tetrahedral
+    interpolation; baked results cached by config hash + transform.
+  io: >-
+    Custom configs referenced by path and collected with the project.
+  limitations: >-
+    Baked LUTs approximate analytic OCIO transforms (error measured per transform and shown); requires the Python sidecar.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Colour-pipeline parity item (OCIO/ACES, scopes, HDR or viewer-only LUT) not needed for projection workflows now. Core colour management, LUTs and projector simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only: Project settings → Colour → "Use OCIO/ACES".
+    defaults: >-
+      Built-in ACES CG config when enabled.
+    automation: >-
+      Bakes LUTs in the background; warns if a custom config fails to load.
+    usability_check: >-
+      Expert loads a custom config and sees its spaces listed in under 60 s.
+  acceptance: >-
+    Baked transforms match PyOpenColorIO CPU reference within ΔE 0.5 on a test chart.
+  status: not-started
+  evidence: []
+
+- id: color.aces
+  name: ACES workflow
+  sources:
+    - ref: S26
+      item: ACES workflow via OCIO (ACES 2 configuration)
+      category: OpenColorIO and ACES
+      checked: true
+  artist_can: >-
+    Work in ACEScg, bring in camera log footage with the right input transforms, and output through ACES output
+    transforms suited to SDR projection.
+  projection_example: >-
+    Graded S-Log3 drone footage and CG renders share one ACEScg working space and output through an SDR Rec.709 transform.
+  controls:
+    - { name: Input transform (IDT), type: enum(dynamic), animatable: false }
+    - { name: Output transform, type: enum(dynamic), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.ocio, color.input-interpretation]
+  implementation: >-
+    OCIO built-in ACES configs (OCIO 2.4+ ships ACES 2.0 CG and Studio configs), baked via color.ocio.
+  io: >-
+    ACES2065-1 EXR interchange supported via chromaticities and config spaces.
+  limitations: >-
+    ACES output transforms are designed for displays, not projector-plus-surface systems; final look is checked on site.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Colour-pipeline parity item (OCIO/ACES, scopes, HDR or viewer-only LUT) not needed for projection workflows now. Core colour management, LUTs and projector simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only.
+    defaults: >-
+      SDR Rec.709 output transform for video, ACEScg for EXR.
+    automation: >-
+      Recognises common camera log metadata and suggests the IDT.
+    usability_check: >-
+      Expert brings in S-Log3 footage with the right IDT on the first suggestion.
+  acceptance: >-
+    Mini scene "aces-mix": log footage and EXR render match vendor reference frames within tolerance.
+  status: not-started
+  evidence: []
+
+- id: color.lut
+  name: LUT import and application
+  sources:
+    - ref: S26
+      item: OCIO File Transform (apply a LUT or CDL); convert to LUT space, apply, convert back
+      category: OpenColorIO and ACES
+      checked: true
+    - ref: brief
+      item: §11-I LUT-based grading; §14 LUT preview; architecture .cube import
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Apply .cube (and other) LUTs as a grade, with the input space the LUT expects, and control its strength.
+  projection_example: >-
+    Apply the film-look LUT the show designer supplied to the whole master, at 70% strength.
+  controls:
+    - { name: LUT file, type: file, animatable: false }
+    - { name: LUT input space, type: enum(dynamic), animatable: false }
+    - { name: Interpolation, type: enum(trilinear|tetrahedral), animatable: false }
+    - { name: Strength, type: percent, animatable: true }
+  animation: >-
+    Strength keyframable (crossfade looks).
+  dependencies: [color.working-space, fx.utility.apply-color-lut]
+  implementation: >-
+    TypeScript parser for .cube (1D/3D, DOMAIN_MIN/MAX); other formats (.3dl, .csp, .spi3d, CDL .cc/.ccc) loaded through
+    PyOpenColorIO. Applied as WGSL 3D-texture lookup with automatic working→LUT-space and back conversion so a
+    display-referred LUT never receives scene-linear data.
+  io: >-
+    LUTs referenced and collected with the project.
+  limitations: >-
+    LUTs clip out-of-range values; HDR values above the LUT domain are clamped unless a shaper is supplied.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drag a .cube file onto a layer or composition; "Look strength" slider.
+    defaults: >-
+      Input space guessed as Rec.709 display-referred; tetrahedral; 100%.
+    automation: >-
+      Wraps the LUT in the right conversions automatically.
+    usability_check: >-
+      A novice applies a supplied LUT and sets it to 50% in under 30 s.
+  acceptance: >-
+    Reference .cube applied to a test chart matches a Resolve/OCIO reference within 1 code value.
+  status: not-started
+  evidence: []
+
+- id: color.view-lut
+  name: LUT and look preview (viewer only)
+  sources:
+    - ref: brief
+      item: §14 LUT preview
+      category: Product requirement
+      checked: true
+    - ref: S25
+      item: Simulate Output applies only to previews
+      category: Adjust colors
+      checked: true
+  artist_can: >-
+    Preview a LUT or look in the viewer without baking it into the project, compare on/off, then apply it if wanted.
+  projection_example: >-
+    Try three night-time looks on the facade preview before committing to one.
+  controls:
+    - { name: Viewer LUT / look, type: file, animatable: false }
+    - { name: Compare (split / toggle), type: enum(off|split|toggle), animatable: false }
+    - { name: Apply to composition, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.lut, color.display, preview.snapshot-compare]
+  implementation: >-
+    Viewer-only WGSL LUT pass before the display transform; never part of the render graph; a persistent badge says
+    "Preview look — not in export".
+  io: >-
+    none
+  limitations: >-
+    Viewer looks are not exported unless applied.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Colour-pipeline parity item (OCIO/ACES, scopes, HDR or viewer-only LUT) not needed for projection workflows now. Core colour management, LUTs and projector simulation stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Look strip in the viewer: hover a look to preview, click to apply.
+    defaults: >-
+      Off.
+    automation: >-
+      Clear badge whenever a preview-only look is active.
+    usability_check: >-
+      In a test, 9 of 10 users correctly say whether the look will be in the export.
+  acceptance: >-
+    Export with a viewer look active is identical to export without it.
+  status: not-started
+  evidence: []
+
+- id: color.diagnostics
+  name: Clipping and gamut diagnostics
+  sources:
+    - ref: brief
+      item: §14 clipping/gamut diagnostics
+      category: Product requirement
+      checked: true
+    - ref: S01
+      item: Adjust exposure in the Composition panel (32-bpc viewing)
+      category: View and preview
+      checked: false
+  artist_can: >-
+    See where the image clips, goes out of the output gamut, goes negative or exceeds 1.0, and look into highlights
+    with a viewer-only exposure control.
+  projection_example: >-
+    Spot that a saturated cyan sweep will clip on the Rec.709 projector file before rendering the whole show.
+  controls:
+    - { name: Overlay, type: enum(off|clipping|out-of-gamut|over-range|negative|false-colour), animatable: false }
+    - { name: Target gamut, type: enum(dynamic), animatable: false }
+    - { name: Viewer exposure (stops), type: float, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.output-transform, color.display]
+  implementation: >-
+    Viewer-only WGSL overlay computing the output transform in-shader and flagging channels outside [0,1] (or the
+    target gamut), zebra-striped; exposure applied before the display transform in the viewer only.
+  io: >-
+    Optional diagnostic report per export (percentage of clipped pixels per frame).
+  limitations: >-
+    Diagnoses the file, not the projector's real gamut or the wall colour.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Check colours" toggle shows zebra stripes where colours will be lost.
+    defaults: >-
+      Target = selected export preset's output space.
+    automation: >-
+      Export preflight warns if more than 1% of pixels clip in sampled frames.
+    usability_check: >-
+      A user finds a clipping area and fixes it with a suggested grade in under 2 minutes.
+  acceptance: >-
+    Synthetic chart: flagged pixels exactly equal analytically out-of-range pixels.
+  status: not-started
+  evidence: []
+
+- id: color.scopes
+  name: Scopes (waveform, vectorscope, histogram, parade)
+  sources:
+    - ref: S01
+      item: Lumetri Scopes panel
+      category: Adjust colors
+      checked: false
+  artist_can: >-
+    Read brightness and colour of the image on a waveform, vectorscope, histogram and RGB parade to grade accurately.
+  projection_example: >-
+    Balance two adjacent scenes so the facade's overall brightness does not jump at the cut.
+  controls:
+    - { name: Scope type, type: enum(waveform|parade|vectorscope|histogram|cie), animatable: false }
+    - { name: Scale, type: enum(display|nits|linear), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.display]
+  implementation: >-
+    WGSL compute scatter into atomic histogram textures on a downsampled frame, drawn as a viewer panel.
+  io: >-
+    none
+  limitations: >-
+    Computed on the preview resolution.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Colour-pipeline parity item (OCIO/ACES, scopes, HDR or viewer-only LUT) not needed for projection workflows now. Core colour management, LUTs and projector simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced panel; guided users get "Brightness match" automation instead.
+    defaults: >-
+      Waveform.
+    automation: >-
+      "Match brightness to previous scene" uses scope data.
+    usability_check: >-
+      Expert reads clipping and colour cast from scopes on a test image.
+  acceptance: >-
+    Scope of a test chart matches analytic distribution.
+  status: not-started
+  evidence: []
+
+- id: color.hdr-source
+  name: HDR source handling for SDR projection
+  sources:
+    - ref: brief
+      item: §14 support HDR source assets without claiming an SDR projector becomes HDR
+      category: Product requirement
+      checked: true
+    - ref: S01
+      item: Enhanced HDR support / HDR preview
+      category: Adjust colors
+      checked: false
+  artist_can: >-
+    Use HDR video (PQ/HLG), EXR and HDR images as sources, with highlights handled gracefully when output to SDR projectors.
+  projection_example: >-
+    An HDR fireworks clip keeps colour in its bright bursts on the SDR projector file instead of clipping to white.
+  controls:
+    - { name: Source HDR interpretation, type: enum(auto|pq|hlg|linear), animatable: false }
+    - { name: Highlight handling to SDR, type: enum(tone-map|soft-clip|clip), animatable: false }
+    - { name: Source peak (nits), type: float, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.input-interpretation, color.output-transform, color.display]
+  implementation: >-
+    PQ/HLG decoded to scene-linear with documented reference-white scaling (203 nits = 1.0); SDR outputs use a
+    hue-preserving tone-map (or ACES 2.0 SDR output under OCIO); HDR displays may preview in HDR, labelled "your
+    projector output is SDR".
+  io: >-
+    HDR export only to formats/presets that declare HDR metadata (expert use); projector presets are SDR.
+  limitations: >-
+    An SDR projector cannot show HDR; tone mapping is a creative compromise. The app never labels projector output as HDR.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Colour-pipeline parity item (OCIO/ACES, scopes, HDR or viewer-only LUT) not needed for projection workflows now. Core colour management, LUTs and projector simulation stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Automatic; HDR clips show an "HDR source" badge with "Looks fine on projector" preview.
+    defaults: >-
+      Tone-map for SDR outputs.
+    automation: >-
+      Detects PQ/HLG from metadata and picks highlight handling.
+    usability_check: >-
+      Users can tell from the UI that the projector output is SDR (9 of 10 in a quiz).
+  acceptance: >-
+    HDR test clip exports to SDR without hue shifts beyond tolerance in highlight patches.
+  status: not-started
+  evidence: []
+
+- id: color.banding-dither
+  name: Banding and dither policy
+  sources:
+    - ref: brief
+      item: §14 alpha, glow and gradients survive the pipeline without banding
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get smooth gradients and glows in 8-bit and 10-bit outputs without visible banding.
+  projection_example: >-
+    A large dark-blue sky gradient across the facade does not show steps in the H.264 file.
+  controls:
+    - { name: Dither, type: enum(off|blue-noise|ordered), animatable: false }
+    - { name: Dither amplitude (LSB), type: float, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.bit-depth, color.output-transform]
+  implementation: >-
+    Quantisation and RGB→YUV conversion happen in WGSL (exact matrices) with a seeded blue-noise dither (fixed per
+    frame index), so FFmpeg receives already-quantised planes and no swscale dithering varies the result.
+  io: >-
+    Dither applied only at integer outputs; float outputs never dithered.
+  limitations: >-
+    Heavy compression can still band; 10-bit presets recommended for big gradients where the player supports them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; on by default.
+    defaults: >-
+      Blue-noise dither, ±0.5 LSB, for all 8/10-bit outputs.
+    automation: >-
+      Export preflight suggests a 10-bit preset when large smooth gradients are detected.
+    usability_check: >-
+      Viewers see no banding on a supplied gradient test in the default H.264 export.
+  acceptance: >-
+    Gradient test: no visible bands in H.264 at default settings; dithered output bit-identical across two exports.
+  status: not-started
+  evidence: []
+
+- id: color.conversion-boundaries
+  name: Effect precision and conversion boundaries
+  sources:
+    - ref: brief
+      item: §14 document effect precision and conversion boundaries
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    See, for any layer, where colour conversions and precision limits occur in its effect chain.
+  projection_example: >-
+    Find that a legacy-style effect works display-referred and is why a glow edge looks different from the rest.
+  controls:
+    - { name: Pipeline view (per layer), type: display, animatable: false }
+    - { name: Effect colour expectation, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.working-space, proj.effect-stack]
+  implementation: >-
+    Every effect pass declares colour-space expectation, precision and alpha convention; the render-graph compiler
+    inserts conversions and exposes them in a pipeline inspector.
+  io: >-
+    none
+  limitations: >-
+    Expert diagnostic only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Not shown in the guided path; Advanced → "How this layer is processed".
+    defaults: >-
+      Hidden.
+    automation: >-
+      n/a
+    usability_check: >-
+      Expert identifies the conversion points of a 5-effect stack in under 60 s.
+  acceptance: >-
+    Every registered effect has a declared space/precision; compiler test fails otherwise.
+  status: not-started
+  evidence: []
+
+- id: color.simulate-output
+  name: Projector and surface simulation preview
+  sources:
+    - ref: S25
+      item: View > Simulate Output (output profile, simulation profile, Preserve RGB)
+      category: Adjust colors
+      checked: true
+    - ref: brief
+      item: §14 surface colour, ambient light and projector limitations are installation constraints
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Preview roughly how the output will look from a projector onto a coloured surface under some ambient light, to
+    catch problems early.
+  projection_example: >-
+    Preview a pastel scene on red brick and see that the blues will turn murky, before going on site.
+  controls:
+    - { name: Projector profile (gamut / white / gamma / contrast), type: enum(dynamic), animatable: false }
+    - { name: Surface albedo / photo, type: color, animatable: false }
+    - { name: Ambient light level, type: percent, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.display, map.venue, map.region]
+  implementation: >-
+    Viewer-only WGSL simulation: output transform → projector model (primaries, white, black level) → multiply by
+    surface albedo (from a venue photo or swatch) → add ambient → display transform. Clearly labelled approximate.
+  io: >-
+    none
+  limitations: >-
+    An approximation; it cannot replace on-site testing. Surface albedo from a photo is uncalibrated unless a colour chart is used.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Preview on the wall" toggle using the venue photo.
+    defaults: >-
+      Generic projector, venue photo albedo, low ambient.
+    automation: >-
+      Estimates surface colour per region from the venue photo.
+    usability_check: >-
+      Users can name which colours will suffer on brick after toggling the preview.
+  acceptance: >-
+    Labelled approximate; compare to an on-site photo when hardware is available.
+  status: not-started
+  evidence: []

@@ -1,0 +1,2189 @@
+# Rendering and export — Before Effects capability register
+# Sources: S30 (basics of rendering and exporting: Render Queue, render settings, output modules, templates, logs, Skip Existing Files, Media Encoder, supported formats; checked 2026-10-01), S31 (Multi-Frame Rendering, CPU reserve, render queue info; checked 2026-10-01), brief §0.8, §17, §20, §22 (AS-6). Multi-projector bundle manifests and Google Drive delivery are covered by out.*/deliver.* entries.
+
+- id: render.queue
+  name: Render queue (batch rendering)
+  sources:
+    - ref: S30
+      item: Render Queue panel — render items, statuses (Unqueued, Queued, Rendering, Done, Failed, User Stopped), reorder, Comment column, render many items unattended in a batch
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Queue several compositions or exports, reorder them, add notes, and render them all unattended in one batch.
+  projection_example: >-
+    Queue the facade master, the audience preview and the projector file overnight.
+  controls:
+    - { name: Add to queue, type: action, animatable: false }
+    - { name: Item status, type: enum(unqueued|queued|rendering|done|failed|stopped), animatable: false }
+    - { name: Reorder / remove / duplicate, type: action, animatable: false }
+    - { name: Comment, type: string, animatable: false }
+    - { name: Render all, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.snapshot, render.background, render.encode, render.progress-logs, render.presets]
+  implementation: >-
+    Queue state lives in the main process (persisted JSON so it survives app restarts); each item references an
+    immutable project snapshot and runs as a job in a hidden renderer process; the editor stays responsive.
+  io: >-
+    Queue persisted with the project and in app state.
+  limitations: >-
+    One GPU: jobs run sequentially by default; concurrent jobs share VRAM budgets (preview.memory-budget).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Save a video" adds a job automatically; an "Exports" drawer shows the queue.
+    defaults: >-
+      New jobs start immediately unless "Queue for later" is chosen.
+    automation: >-
+      Retains finished items with links to their files and verification results.
+    usability_check: >-
+      A first-time user starts an export and later finds the finished file from the Exports drawer without help.
+  acceptance: >-
+    AS-6: three queued items render unattended; queue survives an app restart.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: queue in main + hidden render worker; export frame 150 matched the queued snapshot (0.02 avg diff) while the editor hid all layers (25.1 diff vs edited show)"
+
+- id: render.offline
+  name: Offline frame-accurate rendering
+  sources:
+    - ref: brief
+      item: §17 offline frame-accurate rendering independently of preview speed
+      category: Product requirement
+      checked: true
+    - ref: S30
+      item: What is rendering (creation of frames from a composition)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Render every frame at full quality and exact time, no matter how slow the scene is, with no dropped or duplicated frames.
+  projection_example: >-
+    A heavy collapse scene that previews at 6 fps renders every frame perfectly for a 60 fps projector file.
+  controls:
+    - { name: Quality, type: enum(final), animatable: false }
+  animation: >-
+    Every property evaluated at exact frame times (integer flicks).
+  dependencies: [proj.composition, anim.keyframe.core, render.determinism, preview.export-parity]
+  implementation: >-
+    Frame n is evaluated at t = start + n × frameDuration in flicks (exact for 23.976/29.97/59.94 via rational rates);
+    the same core evaluation and WGSL/three.js passes as preview at final quality; never real-time paced.
+  io: >-
+    Feeds render.encode.
+  limitations: >-
+    Render time scales with scene cost; estimate provided by render.estimate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Implicit in every export.
+    defaults: >-
+      Final quality always.
+    automation: >-
+      n/a
+    usability_check: >-
+      Users understand from the progress UI that export does not depend on preview speed (quiz 9 of 10).
+  acceptance: >-
+    AS-6: frame count and per-frame timestamps exact for 24, 25, 29.97, 30, 50, 59.94, 60 fps exports.
+  status: not-started
+  evidence: []
+
+- id: render.snapshot
+  name: Immutable render snapshots
+  sources:
+    - ref: brief
+      item: §17 immutable render snapshots so editing can continue
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Keep editing while an export runs, knowing the export renders exactly the version that was queued.
+  projection_example: >-
+    Start the master render, then keep refining the next scene without affecting the running export.
+  controls:
+    - { name: Snapshot version, type: display, animatable: false }
+    - { name: Re-render with current edits, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [proj.project-model, render.queue]
+  implementation: >-
+    On enqueue the core serialises the project state (structural sharing, copy-on-write) plus an asset manifest with
+    content hashes; render processes load only the snapshot; assets changed on disk mid-render are detected by hash.
+  io: >-
+    Snapshot hash stored in export history.
+  limitations: >-
+    Footage replaced on disk during a render fails the job with a clear message rather than mixing versions.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; a note says "Rendering the version from 14:02 — keep working".
+    defaults: >-
+      Always snapshot.
+    automation: >-
+      Offers "Re-render with latest changes" when the project changes after queueing.
+    usability_check: >-
+      Users keep editing during export without asking whether it is safe.
+  acceptance: >-
+    AS-6: edits during render do not alter output frames (hash comparison).
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: queue in main + hidden render worker; export frame 150 matched the queued snapshot (0.02 avg diff) while the editor hid all layers (25.1 diff vs edited show)"
+
+- id: render.background
+  name: Background render jobs
+  sources:
+    - ref: S30
+      item: Render with Adobe Media Encoder to keep working while files process
+      category: Render and export
+      checked: true
+    - ref: S31
+      item: "% CPU reserved for other applications"
+      category: Multi-Frame Rendering
+      checked: true
+  artist_can: >-
+    Render in the background while working, with control over how much of the machine the render may use.
+  projection_example: >-
+    A long 4K master renders while the user edits the next scene with a responsive preview.
+  controls:
+    - { name: Resource share, type: enum(fast-export|balanced|keep-editor-smooth), animatable: false }
+    - { name: CPU reserved (%), type: percent, animatable: false }
+    - { name: Pause while previewing, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.snapshot, preview.memory-budget, preview.concurrent-frames]
+  implementation: >-
+    Hidden BrowserWindow renderer with its own WebGPU device per job; the encoder runs in a utility process; OS priority
+    and frame-in-flight limits throttle the job when the editor is active; VRAM budgets shared via the main process.
+  io: >-
+    none
+  limitations: >-
+    One GPU is shared; the editor and render slow each other under heavy load.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; export runs in the background automatically.
+    defaults: >-
+      Balanced.
+    automation: >-
+      Lowers render priority while the user scrubs, raises it when idle.
+    usability_check: >-
+      Editor preview stays interactive (≥ 15 fps on the starter scene) during a background export.
+  acceptance: >-
+    AS-6: long target-resolution render continues while the editor is used.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: queue in main + hidden render worker; export frame 150 matched the queued snapshot (0.02 avg diff) while the editor hid all layers (25.1 diff vs edited show)"
+
+- id: render.settings
+  name: Render settings
+  sources:
+    - ref: S30
+      item: Render settings — Quality, Resolution, Disk Cache, Proxy Use, Effects, Solo Switches, Guide Layers, Color Depth, Frame Blending, Motion Blur, Time Span, Frame Rate, Skip Existing Files
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Override quality, resolution, effects, motion blur, frame blending, proxies, frame rate and time span per export
+    without changing the composition.
+  projection_example: >-
+    Render a quick half-resolution draft for review with motion blur off, then the full master.
+  controls:
+    - { name: Quality, type: enum(final|draft), animatable: false }
+    - { name: Resolution, type: enum(full|half|third|quarter|custom), animatable: false }
+    - { name: Proxy use, type: enum(never|current|always), animatable: false }
+    - { name: Effects / solo / guide layers, type: enum(current|all-on|all-off), animatable: false }
+    - { name: Motion blur / frame blending, type: enum(current|on-for-checked|off), animatable: false }
+    - { name: Frame rate, type: enum(comp|custom), animatable: false }
+    - { name: Precision, type: enum(project|16f|32f), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.offline, preview.proxy, color.bit-depth]
+  implementation: >-
+    Settings are a typed object applied to the snapshot evaluation; render-setting overrides never mutate the project.
+  io: >-
+    Saved in presets (render.presets) and in history.
+  limitations: >-
+    Field rendering and pulldown are tracked separately (render.fields-pulldown).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Hidden behind export outcomes; "Draft for review" outcome sets them.
+    defaults: >-
+      Final quality, full resolution, never proxies.
+    automation: >-
+      Warns if a final export would use proxies or disabled effects.
+    usability_check: >-
+      No guided export requires opening render settings.
+  acceptance: >-
+    Draft and final renders differ only in the overridden settings (checked in history diff).
+  status: not-started
+  evidence: []
+
+- id: render.presets
+  name: Render and output presets
+  sources:
+    - ref: S30
+      item: Render settings templates (Best, Draft, DV, Multi-Machine); output module templates (Lossless…); Make Template; Save All/Load; default templates
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Save and reuse combinations of render settings and output formats, set defaults, and share presets between projects.
+  projection_example: >-
+    A "Venue A projector" preset with the right resolution, frame rate and codec is reused for every show at that venue.
+  controls:
+    - { name: Preset list, type: enum(dynamic), animatable: false }
+    - { name: Save as preset, type: action, animatable: false }
+    - { name: Set default, type: action, animatable: false }
+    - { name: Import/export presets, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.settings, render.encode]
+  implementation: >-
+    Presets are versioned JSON (render settings + output module + naming + verification expectations); built-in presets
+    are only those that passed the codec probe on this machine.
+  io: >-
+    Preset files portable between machines; unsupported codecs flagged on import.
+  limitations: >-
+    Presets referencing unavailable encoders are disabled with an explanation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Remember these settings" checkbox after a custom export.
+    defaults: >-
+      Built-ins: Share (H.264), Master (ProRes 422 HQ), Transparent (ProRes 4444), Image sequence (PNG), Projector (per output).
+    automation: >-
+      Remembers the last outcome per project.
+    usability_check: >-
+      A user re-exports with yesterday's settings in two clicks.
+  acceptance: >-
+    Preset round trip (save, load on another machine) reproduces identical settings.
+  status: not-started
+  evidence: []
+
+- id: render.export-outcomes
+  name: Guided export outcomes
+  sources:
+    - ref: brief
+      item: §0.8 a video to share, a high-quality master, a transparent animation, or files for my projector setup
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Choose what the export is for instead of a codec; the app picks a compatible preset and destination and shows
+    estimated time and size.
+  projection_example: >-
+    "Files for my projector" produces the correct resolution, frame rate and codec for the venue's playback setup.
+  controls:
+    - { name: Outcome, type: enum(share|master|transparent|projector|preview-for-review), animatable: false }
+    - { name: Quality, type: enum(good|better|best), animatable: false }
+    - { name: Destination, type: path, animatable: false }
+    - { name: Advanced settings, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.presets, render.estimate, ux.guided-workflow, render.projector-bake, deliver.google-drive]
+  implementation: >-
+    Outcome → preset resolver using venue/projector data, composition properties (alpha, size, fps, audio) and the codec
+    probe; compatibility conflicts surface as plain-language choices.
+  io: >-
+    Destination remembered per project.
+  limitations: >-
+    "Projector" outcome needs a configured projector; otherwise it explains what is missing.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Save a video" → four big choices → Export.
+    defaults: >-
+      Share, Better, project's Exports folder.
+    automation: >-
+      Picks codec, pixel format, colour transform and audio layout; estimates time and size.
+    usability_check: >-
+      Within the §0.10 20-minute task, users start a compatible export without selecting a codec.
+  acceptance: >-
+    Each outcome produces a file that passes render.verify on the starter project.
+  status: not-started
+  evidence: []
+
+- id: render.naming
+  name: Output naming templates
+  sources:
+    - ref: S30
+      item: Output To file-naming templates (Add Property, custom template, default, absolute paths); Use Default File Name And Folder
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Name exports automatically from project, composition, date, version and settings, with saved templates and default folders.
+  projection_example: >-
+    Every export lands as "Facade_v12_ProjA_3840x2160_30p.mov" in the venue's delivery folder.
+  controls:
+    - { name: Template, type: string, animatable: false }
+    - { name: Tokens, type: enum(project|comp|date|time|version|width|height|fps|codec|output|frame), animatable: false }
+    - { name: Default folder, type: path, animatable: false }
+    - { name: Never overwrite (auto-increment), type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.presets]
+  implementation: >-
+    Token templates resolved at enqueue; filenames sanitised for Windows/macOS; collisions auto-increment.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Filename field pre-filled; edit like a normal file name.
+    defaults: >-
+      [project]_[comp]_v[version] in the project's Exports folder; never overwrite.
+    automation: >-
+      Increments version automatically.
+    usability_check: >-
+      Users never overwrite a previous export accidentally in testing.
+  acceptance: >-
+    Template test covers all tokens and illegal characters.
+  status: not-started
+  evidence: []
+
+- id: render.time-range
+  name: Time-range and single-frame export
+  sources:
+    - ref: S30
+      item: Time Span (Length of Comp, Work Area Only, Custom)
+      category: Render and export
+      checked: true
+    - ref: S01
+      item: Composition > Save Frame As
+      category: Render and export
+      checked: false
+  artist_can: >-
+    Export the whole composition, the work area, a custom range, a range between markers, or just the current frame.
+  projection_example: >-
+    Export only the 20-second finale to test on site, plus a still of the key frame for the client.
+  controls:
+    - { name: Range, type: enum(whole|work-area|custom|between-markers|current-frame), animatable: false }
+    - { name: In / out, type: time, animatable: false }
+    - { name: Handles, type: time, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.offline, proj.composition]
+  implementation: >-
+    Range converted to exact frame indices in flicks; still export renders one frame through the same pipeline to PNG/TIFF/EXR.
+  io: >-
+    none
+  limitations: >-
+    Temporal effects and simulations need pre-roll before the range start; handled via checkpoints/pre-roll automatically.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Export dialog "What to export: Everything / Selected part / This frame".
+    defaults: >-
+      Everything.
+    automation: >-
+      Adds simulation pre-roll silently so partial exports match the full render.
+    usability_check: >-
+      A user exports a 10 s section in under 30 s.
+  acceptance: >-
+    Partial export frames are identical to the same frames from a full export.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: Export dialog Half size + preview range produced a 960x540, 90-frame file (ffprobe verified); preview at Quarter still exported 1920x1080"
+
+- id: render.encode
+  name: Encoding pipeline (output modules)
+  sources:
+    - ref: S30
+      item: Output modules and output module settings (format, compression, channels, color, audio); embedded encoder
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Turn rendered frames into files of the chosen format, codec, pixel format, channels and audio, efficiently and correctly.
+  projection_example: >-
+    Frames stream straight into a ProRes master as they render, without temporary image files.
+  controls:
+    - { name: Format / codec, type: enum(dynamic), animatable: false }
+    - { name: Pixel format / bit depth, type: enum(dynamic), animatable: false }
+    - { name: Channels, type: enum(rgb|rgba|alpha-only), animatable: false }
+    - { name: Alpha mode, type: enum(premultiplied|straight), animatable: false }
+    - { name: Rate control, type: enum(quality|bitrate|lossless), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.offline, color.output-transform, color.banding-dither, render.codec-probe]
+  implementation: >-
+    Final rgba16float frame → WGSL output transform, dither and packing to the target layout (yuv420p, yuv422p10le,
+    yuva444p10le, rgba64le…) → copyTextureToBuffer into an async readback ring (N MAP_READ buffers) → transfer to an
+    Electron utility process → FFmpeg stdin as rawvideo with exact rational frame rate; per-frame hashes logged.
+  io: >-
+    Requires the bundled FFmpeg (full GPL build) and ffprobe.
+  limitations: >-
+    PCIe readback bandwidth caps throughput at very high resolutions; ring depth tuned per resolution.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Hidden behind outcomes; Advanced shows codec, pixel format and alpha mode.
+    defaults: >-
+      From the chosen outcome.
+    automation: >-
+      Picks pixel layout and alpha mode the codec supports.
+    usability_check: >-
+      No guided export exposes encoder terms unless a compatibility decision is needed.
+  acceptance: >-
+    4K30 ProRes 422 HQ encode sustains ≥ real time on the target machine for a simple scene; frames hash-match the render log.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: render.multi-output
+  name: Multiple encodes from one render
+  sources:
+    - ref: S30
+      item: Multiple output modules per render item (e.g. movie plus alpha matte; several formats from one render)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Render once and get several files at the same time — e.g. a ProRes master, an H.264 review copy and a PNG sequence.
+  projection_example: >-
+    One render of the show produces the projector HAP file and a small MP4 for the client.
+  controls:
+    - { name: Outputs, type: output-list, animatable: false }
+    - { name: Add output, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode]
+  implementation: >-
+    Each rendered frame is packed once per output (cheap WGSL passes from the same frame) and fanned out to one FFmpeg
+    process per output; the slowest encoder applies back-pressure.
+  io: >-
+    Each output verified separately.
+  limitations: >-
+    Outputs needing different render settings (e.g. resolution of the render itself) need separate items.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Tick more than one outcome in "Save a video".
+    defaults: >-
+      Share + Master when "Also make a master" is ticked.
+    automation: >-
+      Resizes per output (render.output-resize) from one full-resolution render.
+    usability_check: >-
+      A user gets two files from one export in one action.
+  acceptance: >-
+    All outputs decode to frames consistent with the single render (lossless outputs bit-exact).
+  status: not-started
+  evidence: []
+
+- id: render.output-resize
+  name: Output crop, resize and padding
+  sources:
+    - ref: S30
+      item: Output module crop, stretch or shrink after rendering
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Crop, scale or pad an output after rendering, e.g. a smaller review copy or padding to a size a codec requires.
+  projection_example: >-
+    Make a 1080p review copy from a 5760×1080 three-projector render, letterboxed.
+  controls:
+    - { name: Crop (T/L/B/R), type: int, animatable: false }
+    - { name: Resize to, type: size, animatable: false }
+    - { name: Fit, type: enum(fit|fill|stretch), animatable: false }
+    - { name: Resample filter, type: enum(lanczos|bicubic|bilinear), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode]
+  implementation: >-
+    WGSL resample/crop in the pack stage (linear light, Lanczos), padding to codec multiples (HAP ×4, 4:2:0 even sizes).
+  io: >-
+    none
+  limitations: >-
+    Projector outputs must not be resized after mapping; such presets lock this control.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Quality choice "Small / Full size" in outcomes.
+    defaults: >-
+      Full size.
+    automation: >-
+      Pads silently to codec-required multiples and reports it.
+    usability_check: >-
+      A user makes a small review copy without seeing crop controls.
+  acceptance: >-
+    Resized output matches reference Lanczos downscale within tolerance.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: Export dialog Half size + preview range produced a 960x540, 90-frame file (ffprobe verified); preview at Quarter still exported 1920x1080"
+
+- id: render.image-sequence
+  name: Image sequence export
+  sources:
+    - ref: S30
+      item: Still-image formats (PSD, Cineon/DPX, IFF, JPEG, OpenEXR, PNG, Radiance HDR, SGI, Targa, TIFF)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Export numbered image sequences (PNG, TIFF, EXR, JPEG, DPX) for lossless masters, transparency or hand-off.
+  projection_example: >-
+    A PNG sequence with alpha is handed to the venue's media server team.
+  controls:
+    - { name: Format, type: enum(png|tiff|exr|jpeg|dpx), animatable: false }
+    - { name: Frame padding, type: int, animatable: false }
+    - { name: Start number, type: int, animatable: false }
+    - { name: One folder per sequence, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.resume-sequence, render.missing-frames]
+  implementation: >-
+    Frames written per-file via FFmpeg image encoders (png, tiff, mjpeg, dpx, exr) or OpenEXR bindings for multi-layer,
+    each written to a temp name and renamed atomically; per-frame hash recorded in a sequence manifest.
+  io: >-
+    Sequence manifest (JSON) alongside the frames.
+  limitations: >-
+    PSD, IFF, SGI, Targa and Radiance outputs are not offered unless a need appears (Radiance is read-only via EXR conversion).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Outcome "Image sequence" or Master → "As images".
+    defaults: >-
+      PNG with alpha when the comp has transparency, 6-digit padding, own folder.
+    automation: >-
+      Creates the folder and manifest automatically.
+    usability_check: >-
+      A user exports a PNG sequence and finds the folder in one click from history.
+  acceptance: >-
+    AS-6 sequence render; manifest matches files.
+  status: not-started
+  evidence: []
+
+- id: render.audio
+  name: Audio export
+  sources:
+    - ref: S30
+      item: Audio Output in output module settings; audio-only formats (AIFF, MP3, WAV)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Include the mixed soundtrack in video files or export audio on its own, with correct sync, sample rate and channels.
+  projection_example: >-
+    The projector file carries the show soundtrack in sync; a separate WAV goes to the venue's sound desk.
+  controls:
+    - { name: Include audio, type: enum(auto|on|off), animatable: false }
+    - { name: Codec, type: enum(pcm-24|pcm-16|aac|mp3|flac), animatable: false }
+    - { name: Sample rate, type: enum(44100|48000|96000), animatable: false }
+    - { name: Channels, type: enum(stereo|mono), animatable: false }
+    - { name: Loudness normalise, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [audio.levels, render.encode]
+  implementation: >-
+    Deterministic offline mix (OfflineAudioContext with shared AudioWorklet DSP) rendered once to a float WAV cache,
+    then muxed by FFmpeg (pcm_s24le in MOV/WAV, aac or libmp3lame where chosen), starting at exactly t=0 of the range.
+  io: >-
+    Audio-only exports: WAV, AIFF, MP3, FLAC.
+  limitations: >-
+    Some players need audio in specific codecs (e.g. AAC in MP4); presets handle this. Lossy encoders add priming delay,
+    compensated with edit lists where the container supports them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic when the composition has audio; "Also save the soundtrack" checkbox.
+    defaults: >-
+      AAC 320 kb/s in MP4, PCM 24-bit in MOV, 48 kHz.
+    automation: >-
+      Warns if audio is muted or missing in a composition that had music.
+    usability_check: >-
+      Users never get a silent export by accident in testing.
+  acceptance: >-
+    AS-6: measured A/V offset in the exported file ≤ 1 ms (sample-accurate start); duration within one frame.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: render.progress-logs
+  name: Progress, logs and clear failures
+  sources:
+    - ref: S30
+      item: Log (Errors Only, Plus Settings, Plus Per Frame Info); render status messages; Info (concurrent frames, frame time); chime on completion; notifications
+      category: Render and export
+      checked: true
+    - ref: S31
+      item: Render Queue info — what's rendering, time remaining, progress, system usage
+      category: Multi-Frame Rendering
+      checked: true
+  artist_can: >-
+    See progress, time remaining and current speed, get notified when done, and get a plain explanation and a fix when
+    something fails, with full logs available.
+  projection_example: >-
+    A render fails at frame 1,203 because a video file went offline; the message names the file and offers "Relink".
+  controls:
+    - { name: Progress (frames / time left / fps), type: display, animatable: false }
+    - { name: Log level, type: enum(errors|settings|per-frame), animatable: false }
+    - { name: Notify on completion, type: bool, animatable: false }
+    - { name: Show details / open log, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.queue, ux.guided-workflow]
+  implementation: >-
+    Structured job events (JSONL) from render and encoder processes; errors mapped to user-facing messages with the
+    affected item and an action (relink, retry, free space, choose compatible preset); OS notifications via Electron.
+  io: >-
+    Logs stored per job next to export history.
+  limitations: >-
+    Driver-level GPU crashes give limited detail; the app records device-lost reasons where available.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Progress bar in the Exports drawer; plain message cards for failures.
+    defaults: >-
+      Errors-only log plus settings; notification on.
+    automation: >-
+      Separates "Rendering", "Encoding" and "Uploading" phases in plain words (§0.8).
+    usability_check: >-
+      Given a missing-file failure, 9 of 10 users fix it from the message without help.
+  acceptance: >-
+    Fault-injection tests (missing file, disk full, encoder crash, GPU lost) each produce a correct message and action.
+  status: implemented
+  evidence:
+    - "Renders panel (top bar): per-job phase, frames, fps, ETA, size estimate, free-space check before queueing (statfs), history kept in userData/render-history.json; main.log records each job"
+
+- id: render.estimate
+  name: Estimated time and size
+  sources:
+    - ref: S30
+      item: Estimated size of the rendered composition
+      category: Render and export
+      checked: true
+    - ref: brief
+      item: §0.8 show estimated time and size
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    See roughly how long an export will take and how big it will be before starting it.
+  projection_example: >-
+    See that a 10-minute ProRes 4444 master will need 180 GB and choose HAP instead.
+  controls:
+    - { name: Estimated size, type: display, animatable: false }
+    - { name: Estimated time, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, preview.profiler]
+  implementation: >-
+    Size from codec data-rate models (ProRes/DNxHR/HAP nominal rates, bitrate for H.264/HEVC, sampled-frame compression
+    ratios for PNG/EXR); time from profiler-sampled frame costs plus encoder throughput; refined live during render.
+  io: >-
+    none
+  limitations: >-
+    Estimates are approximate and labelled so; heavy-variance scenes refine after a few hundred frames.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Shown under each outcome choice.
+    defaults: >-
+      Always shown when enough information exists.
+    automation: >-
+      Samples a few frames in the background to estimate.
+    usability_check: >-
+      Estimates within ±30% for starter projects.
+  acceptance: >-
+    Logged estimate vs actual for 20 renders; median error under 25%.
+  status: implemented
+  evidence:
+    - "Renders panel (top bar): per-job phase, frames, fps, ETA, size estimate, free-space check before queueing (statfs), history kept in userData/render-history.json; main.log records each job"
+
+- id: render.disk-space
+  name: Disk-space checks
+  sources:
+    - ref: S30
+      item: Render pauses when the output disk runs out of space; resume after freeing space
+      category: Render and export
+      checked: true
+    - ref: brief
+      item: §17 disk-space checks
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Be warned before starting if the export will not fit, and have a running export pause (not fail) if space runs low.
+  projection_example: >-
+    The overnight master pauses at 95% full instead of producing a truncated file.
+  controls:
+    - { name: Preflight check, type: display, animatable: false }
+    - { name: Pause threshold, type: size, animatable: false }
+    - { name: Resume, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.estimate, render.cancel-retry]
+  implementation: >-
+    fs.statfs on the destination before and during the job; encoder back-pressure pauses frame production below the
+    threshold; movie outputs resume into the same FFmpeg process when possible, sequences resume by frame.
+  io: >-
+    none
+  limitations: >-
+    Network and cloud-synced folders may report free space inaccurately.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Warning before export with "Choose another drive" / "Smaller file" options.
+    defaults: >-
+      Pause below 2 GB or 2% free.
+    automation: >-
+      Suggests a destination with enough space.
+    usability_check: >-
+      Users resolve a not-enough-space warning without losing the render.
+  acceptance: >-
+    Fault injection: filling the disk pauses the job; freeing space resumes with a valid file.
+  status: implemented
+  evidence:
+    - "Renders panel (top bar): per-job phase, frames, fps, ETA, size estimate, free-space check before queueing (statfs), history kept in userData/render-history.json; main.log records each job"
+
+- id: render.cancel-retry
+  name: Cancel, pause, resume and retry
+  sources:
+    - ref: S30
+      item: Stop / User Stopped status with new queued item continuing from where it stopped; duplicate to re-render
+      category: Render and export
+      checked: true
+    - ref: brief
+      item: §17 cancel/retry
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Cancel, pause or retry any export, and re-run a finished one, without losing completed work where avoidable.
+  projection_example: >-
+    Pause the master to free the GPU for a client preview, then resume.
+  controls:
+    - { name: Pause / resume, type: action, animatable: false }
+    - { name: Cancel (keep partial / delete partial), type: action, animatable: false }
+    - { name: Retry, type: action, animatable: false }
+    - { name: Duplicate, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.queue, render.resume-sequence]
+  implementation: >-
+    Job state machine in the main process; pause stops frame production while keeping processes alive; cancelled
+    movie outputs are finalised or removed; retry reuses the same snapshot unless the user chooses latest edits.
+  io: >-
+    Partial movie files are clearly named (.partial) until verified.
+  limitations: >-
+    Paused movie encodes keep VRAM/RAM allocated; long pauses release and resume by re-render from the last keyframe-safe point.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Pause / Stop / Try again buttons on each export card.
+    defaults: >-
+      Cancel deletes partial movie files; keeps sequence frames.
+    automation: >-
+      Retry offers "same version" vs "with latest changes".
+    usability_check: >-
+      A user pauses and resumes an export in two clicks and the result verifies.
+  acceptance: >-
+    AS-6: paused/resumed movie verifies; retried job produces identical frames.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: cancel at frame ~20, retry re-rendered from the kept snapshot and passed its file check"
+
+- id: render.resume-sequence
+  name: Resumable image-sequence rendering
+  sources:
+    - ref: S30
+      item: Skip Existing Files (re-render only missing frames of a sequence)
+      category: Render and export
+      checked: true
+    - ref: brief
+      item: §17 resumable image-sequence rendering; §22 AS-6 interrupted sequence resumes without missing or duplicated frames
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Resume an interrupted sequence render (crash, power cut, cancel) and get every frame exactly once.
+  projection_example: >-
+    After a power cut at frame 9,000 of a 20,000-frame EXR master, the render continues from the last good frame.
+  controls:
+    - { name: Resume, type: action, animatable: false }
+    - { name: Validate existing frames, type: enum(size|header|hash), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.image-sequence, render.snapshot, render.missing-frames]
+  implementation: >-
+    Frames written to temp names then atomically renamed; the sequence manifest (JSONL) records frame index, size and
+    hash; on resume, frames present with valid header and matching snapshot hash are skipped; mismatched snapshot
+    prompts re-render or continue.
+  io: >-
+    Manifest stored with the sequence.
+  limitations: >-
+    Stateful simulations restart from the nearest checkpoint before the first missing frame.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      After a crash, the Exports drawer shows "Continue where it stopped".
+    defaults: >-
+      Header validation plus manifest hash.
+    automation: >-
+      Detects interrupted jobs on app start.
+    usability_check: >-
+      A user resumes an interrupted export in one click.
+  acceptance: >-
+    AS-6: kill the process mid-render, resume, verify no missing or duplicated frames and all hashes match a clean render.
+  status: not-started
+  evidence: []
+
+- id: render.missing-frames
+  name: Missing and corrupt frame detection
+  sources:
+    - ref: brief
+      item: §17 detection of missing frames
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Be told exactly which frames are missing, empty or corrupt in a sequence or movie, and re-render just those.
+  projection_example: >-
+    A USB drive glitch left three zero-byte EXRs; the app lists and re-renders them.
+  controls:
+    - { name: Scan, type: action, animatable: false }
+    - { name: Problem frames, type: list, animatable: false }
+    - { name: Re-render problems, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.image-sequence, render.verify]
+  implementation: >-
+    Sequence scan against expected indices and manifest (gaps, duplicates, zero-byte, truncated, header decode); movies
+    checked by full decode (ffmpeg -xerror -f null) and frame counting.
+  io: >-
+    Scan results appended to export history.
+  limitations: >-
+    Silent bit-rot inside compressed frames is only detected by hash comparison (manifest required).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic after every export; "Check again" on a history item.
+    defaults: >-
+      Always on.
+    automation: >-
+      Offers one-click re-render of only the problem frames.
+    usability_check: >-
+      A user repairs a sequence with missing frames in one action.
+  acceptance: >-
+    Fault-injected gaps, duplicates and truncations are all detected.
+  status: not-started
+  evidence: []
+
+- id: render.history
+  name: Export history
+  sources:
+    - ref: brief
+      item: §17 export history; §0.8 show the finished file and destination
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    See every past export with its settings, project version, location, verification result and logs; open its folder,
+    play it, or export again with the same settings.
+  projection_example: >-
+    Find which version of the show was sent to the venue last Friday and re-export it with today's fixes.
+  controls:
+    - { name: History list, type: list, animatable: false }
+    - { name: Show in folder / play, type: action, animatable: false }
+    - { name: Export again, type: action, animatable: false }
+    - { name: Compare settings, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.queue, render.verify, render.snapshot]
+  implementation: >-
+    Append-only history store per project (JSON) with snapshot hash, settings, stage declaration, outputs, verification
+    and log paths; snapshots retained on request so old versions can be re-rendered.
+  io: >-
+    Travels with the project; deliveries (deliver.*) add upload records.
+  limitations: >-
+    Re-rendering an old version requires its snapshot and assets to be retained.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Exports" drawer → history list with thumbnails.
+    defaults: >-
+      Keeps records forever, snapshots for the last 10 exports.
+    automation: >-
+      Marks files that were moved or deleted.
+    usability_check: >-
+      Users find yesterday's export without help (§0.10 target).
+  acceptance: >-
+    AS-7: history shows export and upload records; "Export again" reproduces identical settings.
+  status: implemented
+  evidence:
+    - "Renders panel (top bar): per-job phase, frames, fps, ETA, size estimate, free-space check before queueing (statfs), history kept in userData/render-history.json; main.log records each job"
+
+- id: render.verify
+  name: Automatic output verification
+  sources:
+    - ref: brief
+      item: §17 automatic verification of resolution, frame rate, frame count, duration, alpha and sound
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Trust that every export has the intended resolution, frame rate, frame count, duration, transparency, colour tags
+    and sound, with problems shown in plain words.
+  projection_example: >-
+    The projector file is verified as 3840×2160, 60 fps, 36,000 frames, no alpha, 48 kHz stereo before it leaves the studio.
+  controls:
+    - { name: Verification report, type: display, animatable: false }
+    - { name: Deep check (full decode + frame hashes), type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.audio]
+  implementation: >-
+    After finalisation: ffprobe JSON (width, height, r_frame_rate, nb_read_frames with -count_frames, duration, pix_fmt,
+    colour tags, audio streams); full decode for errors; alpha check (pix_fmt has alpha and sampled alpha not constant
+    when expected); lossless outputs compared frame-by-frame to the render log hashes (framemd5), lossy outputs by PSNR
+    on sampled frames; audio duration and start offset compared to video.
+  io: >-
+    Report stored in export history and shown on the export card.
+  limitations: >-
+    Verification proves the file, not that a particular playback device will play it in sync.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic; green tick "Checked: 3840×2160, 60 fps, 10:00, sound OK".
+    defaults: >-
+      Standard checks always; deep check for masters and projector files.
+    automation: >-
+      Re-verifies after copy/upload where possible.
+    usability_check: >-
+      Users can state from the export card whether the file has transparency and sound (9 of 10).
+  acceptance: >-
+    Fault-injected outputs (wrong fps, dropped frame, missing audio, stripped alpha) each fail verification with a clear message.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: render.determinism
+  name: Deterministic, reproducible renders
+  sources:
+    - ref: brief
+      item: §20 deterministic time, seeded randomness, shared preview/export semantics
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Re-export a project and get the same frames, so fixes do not cause unexpected changes elsewhere.
+  projection_example: >-
+    After fixing one scene, re-exporting the master changes only that scene's frames.
+  controls:
+    - { name: Determinism report (frame hash diff), type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.offline, track.matte-cache, audio.analysis]
+  implementation: >-
+    Integer flick time, stateless seeded RNG, no wall-clock inputs, frozen ML caches, cached audio analysis, fixed
+    sampling patterns, ordered GPU reductions where possible; per-frame hashes of the rgba16float output logged and
+    compared across renders.
+  io: >-
+    Hash logs in history.
+  limitations: >-
+    Bit-identity is promised for the same machine, driver and app version; across GPUs/drivers the target is a measured
+    tolerance. Encoders (NVENC) may produce different bytes for identical frames; comparison uses decoded frames.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Not visible; history can show "What changed since last export".
+    defaults: >-
+      Always on.
+    automation: >-
+      Highlights changed frame ranges between two exports.
+    usability_check: >-
+      n/a for novices; expert check: diff report lists only edited ranges.
+  acceptance: >-
+    AS-3/AS-6: two renders of the starter projects produce identical frame hashes; an edit changes only affected frames.
+  status: not-started
+  evidence: []
+
+- id: render.codec-probe
+  name: Tested codec capability matrix
+  sources:
+    - ref: brief
+      item: §17 report real tested support rather than listing extensions the encoder cannot produce correctly
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Only see export formats that actually work on this machine, with alpha, bit depth and size limits stated.
+  projection_example: >-
+    On a laptop without NVENC, H.264 presets automatically use the software encoder; HAP is hidden if the FFmpeg build lacks Snappy.
+  controls:
+    - { name: Capability report, type: display, animatable: false }
+    - { name: Re-run probe, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode]
+  implementation: >-
+    On first run and after FFmpeg/driver updates: parse ffmpeg -encoders / -h encoder=X, then encode and decode a short
+    test clip per preset (size limits, pixel formats, alpha) and record pass/fail; NVENC session test detects
+    driver/API mismatch.
+  io: >-
+    Capability matrix cached in app data; included in bug reports.
+  limitations: >-
+    Probe takes up to a minute; runs in the background.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Not visible; unavailable options simply do not appear (Advanced shows why).
+    defaults: >-
+      Auto.
+    automation: >-
+      Chooses fallbacks (NVENC → software) automatically.
+    usability_check: >-
+      No user ever sees an export fail because a listed codec is unsupported.
+  acceptance: >-
+    Matrix generated on the target machine and stored as evidence for each codec entry.
+  status: not-started
+  evidence: []
+
+- id: render.codec-h264
+  name: H.264 (MP4/MOV)
+  sources:
+    - ref: brief
+      item: §17 MP4/H.264
+      category: Product requirement
+      checked: true
+    - ref: S30
+      item: QuickTime (MOV); Export H.264 from After Effects
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Export widely playable H.264 video for sharing, review and many playback systems.
+  projection_example: >-
+    A share copy for the client and a projector file for a simple single-projector media player.
+  controls:
+    - { name: Encoder, type: enum(auto|nvenc|x264), animatable: false }
+    - { name: Quality, type: enum(good|better|best|bitrate), animatable: false }
+    - { name: Profile / level, type: enum(high|high10), animatable: false }
+    - { name: Keyframe interval, type: int, animatable: false }
+    - { name: Container, type: enum(mp4|mov), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.codec-probe, color.output-transform]
+  implementation: >-
+    FFmpeg h264_nvenc (preset p6–p7, VBR/CQ) or libx264 (CRF, preset slow), yuv420p 8-bit, Rec.709 tags, +faststart,
+    closed GOP; libx264 used automatically above NVENC's 4096-pixel limit.
+  io: >-
+    No alpha. 4:2:0 chroma. Typical hardware decoders cap at 4096×2304 (level 5.1/5.2).
+  limitations: >-
+    Very wide multi-projector canvases exceed many hardware decoders even when the encoder succeeds; presets warn and
+    suggest HEVC, HAP or ProRes. Fine coloured detail suffers from 4:2:0.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "A video to share" outcome.
+    defaults: >-
+      NVENC if probed OK, else x264; Better quality; MP4; 1 s keyframe interval.
+    automation: >-
+      Picks level and encoder from resolution and frame rate.
+    usability_check: >-
+      The share export plays in the OS default player and a browser on first try.
+  acceptance: >-
+    Verified plays in Windows Media Player, VLC and Chromium; render.verify passes.
+  status: not-started
+  evidence: []
+
+- id: render.codec-hevc
+  name: HEVC / H.265
+  sources:
+    - ref: brief
+      item: §17 investigate HEVC
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export smaller, higher-quality files, including 10-bit and resolutions above 4K, for players that support HEVC.
+  projection_example: >-
+    A 7680×1080 two-projector canvas plays from one HEVC file on a media server that decodes HEVC 8K.
+  controls:
+    - { name: Encoder, type: enum(auto|nvenc|x265), animatable: false }
+    - { name: Bit depth, type: enum(8|10), animatable: false }
+    - { name: Chroma, type: enum(420|422), animatable: false }
+    - { name: Quality, type: enum(good|better|best|bitrate), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.codec-probe]
+  implementation: >-
+    FFmpeg hevc_nvenc (up to 8192×8192; Blackwell NVENC adds 4:2:2 10-bit) or libx265; Main/Main10; hvc1 tag for MOV/MP4 compatibility.
+  io: >-
+    No alpha offered (HEVC-with-alpha playback support is too narrow). HEVC decode licensing varies by player/OS.
+  limitations: >-
+    Player support must be confirmed on the venue's playback machine; 4:2:2 HEVC decode is rare.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Offered by "Files for my projector" when the player supports it, or Share → Smaller file.
+    defaults: >-
+      NVENC, Main10, 4:2:0.
+    automation: >-
+      Chosen automatically for canvases above 4096 px wide when the target player supports HEVC.
+    usability_check: >-
+      Users never pick HEVC manually in the guided path.
+  acceptance: >-
+    Probe evidence plus playback test on the target player.
+  status: not-started
+  evidence: []
+
+- id: render.codec-prores-422
+  name: ProRes 422 (Proxy, LT, 422, HQ)
+  sources:
+    - ref: brief
+      item: §17 investigate ProRes
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export high-quality, edit-friendly masters that keep detail through further processing.
+  projection_example: >-
+    The show master is ProRes 422 HQ, from which projector files and review copies are made.
+  controls:
+    - { name: Profile, type: enum(proxy|lt|standard|hq), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.codec-probe]
+  implementation: >-
+    FFmpeg prores_ks profiles 0–3, yuv422p10le, vendor apl0, MOV with PCM audio.
+  io: >-
+    10-bit 4:2:2, no alpha. Data rates ≈ 220 Mb/s (HQ, 1080p30) scaling with pixels and fps.
+  limitations: >-
+    FFmpeg ProRes is not Apple-certified; widely compatible but some strict systems may reject it.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "A high-quality master" outcome.
+    defaults: >-
+      HQ.
+    automation: >-
+      Warns about size for long shows and suggests DNxHR/HAP alternatives where relevant.
+    usability_check: >-
+      Users export a master without choosing a codec.
+  acceptance: >-
+    Decodes in FFmpeg, DaVinci Resolve and QuickTime-based players; PSNR vs source above threshold.
+  status: not-started
+  evidence: []
+
+- id: render.codec-prores-4444
+  name: ProRes 4444 / 4444 XQ with alpha
+  sources:
+    - ref: brief
+      item: §17 transparent intermediates; ProRes
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export high-quality video with transparency or full 4:4:4 colour.
+  projection_example: >-
+    A transparent animated logo sting is handed to the venue's media server to layer over live content.
+  controls:
+    - { name: Profile, type: enum(4444|4444xq), animatable: false }
+    - { name: Alpha, type: bool, animatable: false }
+    - { name: Alpha mode, type: enum(straight|premultiplied), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.transparent-intermediates]
+  implementation: >-
+    FFmpeg prores_ks profile 4/5, yuva444p10le, alpha_bits 16, MOV.
+  io: >-
+    Alpha 16-bit; large files.
+  limitations: >-
+    Receiving software must honour the alpha mode; the app writes straight alpha by default and states it.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "A transparent animation" outcome (video form).
+    defaults: >-
+      4444, alpha on, straight.
+    automation: >-
+      Checks the composition actually has transparency and warns if not.
+    usability_check: >-
+      Users export a transparent animation without codec choices.
+  acceptance: >-
+    Alpha round trip matches source alpha within 1 code value; edges show no fringe when re-composited.
+  status: not-started
+  evidence: []
+
+- id: render.codec-dnxhr
+  name: DNxHR (LB, SQ, HQ, HQX, 444)
+  sources:
+    - ref: brief
+      item: §17 investigate DNxHR
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export Avid-family masters as an alternative to ProRes, especially for Windows-based workflows.
+  projection_example: >-
+    A media server that prefers DNxHR in MXF receives the master in that form.
+  controls:
+    - { name: Profile, type: enum(lb|sq|hq|hqx|444), animatable: false }
+    - { name: Container, type: enum(mov|mxf), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.codec-probe]
+  implementation: >-
+    FFmpeg dnxhd encoder with -profile:v dnxhr_lb/sq/hq (yuv422p), dnxhr_hqx (yuv422p10le), dnxhr_444 (yuv444p10le); MXF OP1a or MOV.
+  io: >-
+    No alpha via FFmpeg.
+  limitations: >-
+    Resolution/frame-size constraints validated by the probe; MXF compatibility varies by receiving system.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Master → "Other format" or a player preset requiring it.
+    defaults: >-
+      HQ in MOV.
+    automation: >-
+      Chosen automatically by player presets that require it.
+    usability_check: >-
+      n/a for novices; expert exports DNxHR HQX in one dialog.
+  acceptance: >-
+    Probe evidence plus decode test in Resolve.
+  status: not-started
+  evidence: []
+
+- id: render.codec-hap
+  name: HAP
+  sources:
+    - ref: brief
+      item: §17 investigate HAP
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export GPU-decoded HAP video that media servers (Resolume, MadMapper, TouchDesigner, etc.) play smoothly at high resolutions.
+  projection_example: >-
+    A 4K facade show plays smoothly from HAP on the venue's media server.
+  controls:
+    - { name: Compressor, type: enum(snappy|none), animatable: false }
+    - { name: Chunks, type: int, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.codec-probe]
+  implementation: >-
+    FFmpeg hap encoder -format hap (BC1/DXT1), MOV; requires an FFmpeg build with libsnappy; frame dimensions padded to
+    multiples of 4.
+  io: >-
+    No alpha; ≈ 4 bits/pixel before Snappy (≈ 250 Mb/s at 1080p30, ≈ 1 Gb/s at 4K30): disk throughput matters.
+  limitations: >-
+    FFmpeg's texture compressor favours speed over quality (visible blocking on gradients); a higher-quality GPU BC1
+    compressor could be added later. No audio in many HAP playback setups (players vary).
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Files for my projector" with a media-server preset.
+    defaults: >-
+      Snappy, chunks = 4 for 4K.
+    automation: >-
+      Pads dimensions and warns about drive speed for the file's data rate.
+    usability_check: >-
+      Users get a HAP file without knowing the term.
+  acceptance: >-
+    Plays in at least one HAP-capable player at target fps; probe evidence.
+  status: not-started
+  evidence: []
+
+- id: render.codec-hap-alpha
+  name: HAP Alpha
+  sources:
+    - ref: brief
+      item: §17 investigate HAP; transparent intermediates
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export HAP with transparency for layering in media servers.
+  projection_example: >-
+    A transparent particle overlay layered over live camera feed in a media server.
+  controls:
+    - { name: Compressor, type: enum(snappy|none), animatable: false }
+    - { name: Chunks, type: int, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.codec-hap, render.transparent-intermediates]
+  implementation: >-
+    FFmpeg hap encoder -format hap_alpha (BC3/DXT5), MOV.
+  io: >-
+    ≈ 8 bits/pixel before Snappy.
+  limitations: >-
+    Alpha precision limited by BC3 (interpolated 8-bit alpha blocks); fine gradients in alpha may step.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "A transparent animation" → "For a media server".
+    defaults: >-
+      Snappy.
+    automation: >-
+      Chosen when the transparent outcome targets a media server.
+    usability_check: >-
+      Users export a transparent HAP without codec choices.
+  acceptance: >-
+    Alpha edges acceptable in a media-server composite test.
+  status: not-started
+  evidence: []
+
+- id: render.codec-hap-q
+  name: HAP Q
+  sources:
+    - ref: brief
+      item: §17 investigate HAP
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export higher-quality HAP (YCoCg) for content with gradients and fine colour detail.
+  projection_example: >-
+    A slow sky gradient on the facade plays without the blocking visible in standard HAP.
+  controls:
+    - { name: Compressor, type: enum(snappy|none), animatable: false }
+    - { name: Chunks, type: int, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.codec-hap]
+  implementation: >-
+    FFmpeg hap encoder -format hap_q (scaled YCoCg in BC3), MOV.
+  io: >-
+    ≈ 8 bits/pixel before Snappy; no alpha.
+  limitations: >-
+    HAP Q Alpha and HAP R (BC7) are not produced by FFmpeg's encoder; they would need a custom encoder (open item).
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Projector outcome → Quality "Best" on media-server presets.
+    defaults: >-
+      Snappy.
+    automation: >-
+      Suggested when gradients are detected.
+    usability_check: >-
+      n/a for novices beyond the quality choice.
+  acceptance: >-
+    Gradient test shows visibly less blocking than HAP at equal resolution.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: render.codec-png
+  name: PNG (sequence)
+  sources:
+    - ref: S30
+      item: PNG (.png)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Export lossless 8- or 16-bit PNG frames with or without transparency.
+  projection_example: >-
+    A lossless PNG master of a 30-second sting for archive and re-encoding.
+  controls:
+    - { name: Bit depth, type: enum(8|16), animatable: false }
+    - { name: Alpha, type: bool, animatable: false }
+    - { name: Compression level, type: int, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.image-sequence]
+  implementation: >-
+    FFmpeg png encoder (rgb24, rgba, rgb48be, rgba64be) per frame with atomic writes; sRGB tagging.
+  io: >-
+    Straight alpha (PNG convention).
+  limitations: >-
+    Large and slow to write at 4K; 16-bit doubles size.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Image sequence" or "A transparent animation" → "As images".
+    defaults: >-
+      8-bit, alpha if present, level 3.
+    automation: >-
+      16-bit chosen for masters with smooth gradients.
+    usability_check: >-
+      Users export a PNG sequence without seeing bit-depth options.
+  acceptance: >-
+    Bit-exact round trip of the quantised frame.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: render.codec-tiff
+  name: TIFF (sequence)
+  sources:
+    - ref: S30
+      item: TIFF (.tif)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Export 8- or 16-bit TIFF frames, with alpha, for print-style or legacy pipelines.
+  projection_example: >-
+    A media-server vendor that ingests TIFF sequences receives them directly.
+  controls:
+    - { name: Bit depth, type: enum(8|16), animatable: false }
+    - { name: Compression, type: enum(none|lzw|deflate|packbits), animatable: false }
+    - { name: Alpha, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.image-sequence]
+  implementation: >-
+    FFmpeg tiff encoder (rgb24, rgba, rgb48le, rgba64le).
+  io: >-
+    No float TIFF via FFmpeg (use EXR for float).
+  limitations: >-
+    Alpha associated/unassociated flag handling varies across readers; verified on import.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Image sequence → "Other format: TIFF".
+    defaults: >-
+      16-bit LZW.
+    automation: >-
+      n/a
+    usability_check: >-
+      n/a for novices.
+  acceptance: >-
+    Round trip bit-exact.
+  status: not-started
+  evidence: []
+
+- id: render.codec-exr
+  name: OpenEXR (sequence)
+  sources:
+    - ref: S30
+      item: OpenEXR (.exr)
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Export half or full float EXR frames in scene-linear for HDR masters and multi-pass hand-off.
+  projection_example: >-
+    A linear EXR master is graded later in another tool without losing highlight detail.
+  controls:
+    - { name: Precision, type: enum(half|float), animatable: false }
+    - { name: Compression, type: enum(none|rle|zip1|zip16|piz|dwaa), animatable: false }
+    - { name: Multi-layer passes, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.image-sequence, pass.exr-write, color.output-transform]
+  implementation: >-
+    Single-layer RGBA via FFmpeg exr encoder (half/float, none/RLE/ZIP1/ZIP16); PIZ/DWA and multi-layer via OpenEXR
+    Python bindings in the sidecar; chromaticities attribute written.
+  io: >-
+    Premultiplied alpha (EXR convention), scene-linear.
+  limitations: >-
+    Large files; DWA is lossy.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Master → "Best (for further grading)".
+    defaults: >-
+      Half, ZIP16, linear.
+    automation: >-
+      Uses the sidecar path automatically when passes are included.
+    usability_check: >-
+      n/a for novices.
+  acceptance: >-
+    Round trip float values within half-precision tolerance; chromaticities read back correctly.
+  status: not-started
+  evidence: []
+
+- id: render.codec-av1
+  name: AV1
+  sources:
+    - ref: brief
+      item: §17 target delivery formats according to playback, quality and platform needs
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export very efficient AV1 video for players that support it.
+  projection_example: >-
+    A small, high-quality web preview of the show.
+  controls:
+    - { name: Encoder, type: enum(nvenc|svt-av1), animatable: false }
+    - { name: Bit depth, type: enum(8|10), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.codec-probe]
+  implementation: >-
+    FFmpeg av1_nvenc (RTX 40/50) or libsvtav1.
+  io: >-
+    No alpha.
+  limitations: >-
+    Decision 2026-10-02: offered as an advanced export option through the RTX 50-series AV1 encoder (av1_nvenc), with honest player-compatibility notes.
+
+    Open question: does any playback target (venue players, review platforms) need AV1 over H.264/HEVC? Not in the brief's list.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Share → "Smallest file" (if adopted).
+    defaults: >-
+      NVENC 10-bit.
+    automation: >-
+      n/a
+    usability_check: >-
+      n/a until resolved.
+  acceptance: >-
+    Decision recorded.
+  status: not-started
+  evidence: []
+
+- id: render.transparent-intermediates
+  name: Transparent intermediates
+  sources:
+    - ref: S30
+      item: High-quality movie with or without alpha channel; movie and alpha matte via multiple output modules
+      category: Render and export
+      checked: true
+    - ref: brief
+      item: §17 transparent intermediates; containers do not guarantee transparency support
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export animations with transparency in a format that really carries it, choose straight or premultiplied alpha, or
+    get a separate matte video for codecs without alpha.
+  projection_example: >-
+    A transparent firefly layer for a media server, plus a fill/matte pair of H.264 files for a player without alpha support.
+  controls:
+    - { name: Format, type: enum(prores-4444|png|exr|hap-alpha|fill-matte-pair), animatable: false }
+    - { name: Alpha mode, type: enum(straight|premultiplied), animatable: false }
+    - { name: Matte colour, type: enum(black|white), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.codec-prores-4444, render.codec-png, render.codec-hap-alpha, render.multi-output, render.verify]
+  implementation: >-
+    Alpha-capable formats are selected only from the probed matrix; fill/matte pairs are two outputs of one render
+    (fill unpremultiplied over black, matte as luma).
+  io: >-
+    Alpha mode written into history and, where the container allows, metadata.
+  limitations: >-
+    H.264/HEVC outputs never claim alpha; MOV or MP4 containers alone do not imply transparency.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "A transparent animation" outcome.
+    defaults: >-
+      ProRes 4444 straight; PNG if "As images".
+    automation: >-
+      Verifies alpha exists and is not fully opaque; warns about fringes if premultiplication mismatches are likely.
+    usability_check: >-
+      Users export transparency that composites without fringes in a test player.
+  acceptance: >-
+    §6 acceptance: exported alpha produces no unexplained dark or bright fringes when re-composited.
+  status: not-started
+  evidence: []
+
+- id: render.audience-preview
+  name: Audience and venue preview videos
+  sources:
+    - ref: brief
+      item: §17 audience/venue preview videos for review
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export a video of the show as it would look on the building from an audience viewpoint, for clients and collaborators.
+  projection_example: >-
+    A walkthrough-style preview of the facade show from the main square, sent for approval.
+  controls:
+    - { name: Viewpoint / camera, type: layer-ref, animatable: true }
+    - { name: Venue look, type: enum(photo|model-lit|night-model), animatable: false }
+    - { name: Watermark "Preview", type: bool, animatable: false }
+  animation: >-
+    Preview camera may move (walk past) using a keyframed camera.
+  dependencies: [map.venue, map.model-3d, 3d.camera-multi, render.codec-h264, color.simulate-output]
+  implementation: >-
+    Render job type that renders the venue model (or the venue photo plane) textured with the show via the same
+    projective/UV mapping as projector output, from the audience camera; encoded as H.264.
+  io: >-
+    Labelled as preview; never mistaken for a projector file (filename and watermark).
+  limitations: >-
+    Approximate optical preview; not a lighting simulation of the real projectors.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "A video to share" → "Show it on the building".
+    defaults: >-
+      Saved audience viewpoint, venue photo look, watermark on.
+    automation: >-
+      Builds the preview scene automatically.
+    usability_check: >-
+      A user exports an on-building preview in two actions.
+  acceptance: >-
+    AS-2/AS-7 review copies; preview never used as projector output (stage declaration says "preview").
+  status: not-started
+  evidence: []
+
+- id: render.content-master
+  name: Content master layouts
+  sources:
+    - ref: brief
+      item: §17 reusable content masters in an appropriate defined layout — composition, surface atlas or individual regions
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export the show's content in a reusable form (the composition, a surface atlas or per-region files) that can be
+    mapped again later or by other playback software.
+  projection_example: >-
+    A composition master for the facade show is reused when the projector is moved next season.
+  controls:
+    - { name: Layout, type: enum(composition|surface-atlas|regions), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.encode, render.stage-declaration, render.surface-atlas, render.region-outputs]
+  implementation: >-
+    Layout chooses which render graph root is exported (composition, atlas compositor, or region crops); stage
+    declaration marks the master as pre-mapping content.
+  io: >-
+    Master plus a layout manifest (JSON) describing coordinates.
+  limitations: >-
+    A complex 3D show may not have one universal flat master (brief §17); the app says which layouts are meaningful.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "A high-quality master" → layout chosen automatically, changeable in Advanced.
+    defaults: >-
+      Composition layout.
+    automation: >-
+      Suggests atlas/regions when the show is region-based.
+    usability_check: >-
+      Users export a master without understanding layouts.
+  acceptance: >-
+    AS-7: master re-imported and rebound to another venue reproduces the show.
+  status: not-started
+  evidence: []
+
+- id: render.surface-atlas
+  name: Surface-atlas content master
+  sources:
+    - ref: brief
+      item: §17 surface atlas
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export all surfaces' content packed into one atlas frame using the venue's UV layout, with a manifest, for media
+    servers that map by UV.
+  projection_example: >-
+    A building's 40 regions are delivered as one 8K atlas video that the media server maps onto its own model.
+  controls:
+    - { name: Atlas size, type: size, animatable: false }
+    - { name: Padding (px), type: int, animatable: false }
+    - { name: Packing, type: enum(venue-uv|auto-pack), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [map.model-3d, map.region, map.surface-2d, render.content-master]
+  implementation: >-
+    Renders show content into the venue UV space (texture-space rendering) with gutter dilation; large atlases tiled
+    beyond the WebGPU 8192/16384 texture limit and stitched before encode.
+  io: >-
+    Atlas video + manifest (region → UV rect, texel density).
+  limitations: >-
+    Audience-viewpoint projective illusions do not survive UV-space masters correctly; the app warns per region.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Master → Layout "For a media server (atlas)".
+    defaults: >-
+      Venue UV layout, 8 px padding.
+    automation: >-
+      Chooses atlas size from texel density.
+    usability_check: >-
+      n/a for novices beyond the layout choice.
+  acceptance: >-
+    Atlas re-mapped onto the venue model matches the projector render within tolerance.
+  status: not-started
+  evidence: []
+
+- id: render.region-outputs
+  name: Per-region content outputs
+  sources:
+    - ref: brief
+      item: §17 individual regions
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export one file per region (e.g. per window) cropped to the region's own frame.
+  projection_example: >-
+    Each of 12 windows gets its own clip for a pixel-mapping player that addresses windows individually.
+  controls:
+    - { name: Regions, type: region-refs, animatable: false }
+    - { name: Size per region, type: enum(native|fixed), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [map.region, render.content-master, render.multi-output]
+  implementation: >-
+    One render pass per frame with N region crops packed in WGSL and fanned out to N encoders (or N sequences).
+  io: >-
+    Files named by region role; manifest lists them.
+  limitations: >-
+    Many simultaneous encoders are limited by NVENC session count and CPU; the job batches regions when needed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Master → "One file per window/region".
+    defaults: >-
+      Native size, H.264 or PNG per preset.
+    automation: >-
+      Names files by region name.
+    usability_check: >-
+      A user exports per-window files in under 60 s.
+  acceptance: >-
+    Region files re-assembled match the composition master in those areas.
+  status: not-started
+  evidence: []
+
+- id: render.projector-bake
+  name: Installation-specific projector video
+  sources:
+    - ref: brief
+      item: §17 installation-specific video for each projector, with selected correction baked in
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Export the exact video a given projector should play, with mapping, masks, blending and output colour correction
+    baked in as selected.
+  projection_example: >-
+    Projector A's file, mapped onto the venue model from its calibrated position, plays straight from a simple player on site.
+  controls:
+    - { name: Projector, type: projector-ref, animatable: false }
+    - { name: Baked stages, type: flags(mapping|output-mask|blend|output-colour|residual-warp), animatable: false }
+    - { name: Calibration version, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [out.projector-output, out.output-mask, out.edge-blend, map.calibration, map.projector, render.stage-declaration]
+  implementation: >-
+    Render job whose graph root is the projector output pipeline (venue geometry from the calibrated projector camera,
+    content via UV/projective texturing, output masks, blend, output colour, residual warp) at the projector's native
+    resolution and rate; multi-projector manifests are produced by out.*/deliver.*.
+  io: >-
+    Records calibration version and baked stages in history and stage declaration.
+  limitations: >-
+    A file is only correct for the calibration it was rendered with; recalibration invalidates it (flagged in history).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Files for my projector" outcome.
+    defaults: >-
+      All stages baked for standalone players.
+    automation: >-
+      Chooses resolution, frame rate, codec and stages from the projector/player profile.
+    usability_check: >-
+      A first-time user exports the projector file for a calibrated single projector without extra settings.
+  acceptance: >-
+    Milestone B guided path: projector file plays on hardware aligned to the calibration; stage declaration correct.
+  status: not-started
+  evidence: []
+
+- id: render.stage-declaration
+  name: Baked-stage declaration (never apply twice)
+  sources:
+    - ref: brief
+      item: §17 specify which stages are baked and which are expected in playback software; never apply mapping, blending or output colour correction twice
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Know, for every export, which stages are already baked in and which the playback software must still do, and be
+    stopped from double-applying them.
+  projection_example: >-
+    A media server that does its own blending receives files with blending off, and the app says so in the export record.
+  controls:
+    - { name: Declared stages, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.history, out.projector-output]
+  implementation: >-
+    Every render job carries a stage record (content, mapping, output mask, blend, output colour, residual warp, colour
+    transform) with versions; the render graph refuses to apply a stage the source already contains (e.g. re-exporting
+    a projector file through a projector pipeline).
+  io: >-
+    Written into history and into sidecar JSON next to the file.
+  limitations: >-
+    Third-party playback software cannot be checked; the sidecar documents expectations.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Shown in plain words on the export card: "Includes mapping and blending. Your player should not blend."
+    defaults: >-
+      Generated automatically.
+    automation: >-
+      Blocks double application with an explanation.
+    usability_check: >-
+      Users can say from the export card whether their player must blend (9 of 10).
+  acceptance: >-
+    Test: attempting to re-map a projector file is blocked; declarations match actual pipeline.
+  status: not-started
+  evidence: []
+
+- id: render.post-actions
+  name: Post-render actions
+  sources:
+    - ref: S30
+      item: Post-render actions; drag output module to Project panel to import result
+      category: Render and export
+      checked: true
+  artist_can: >-
+    After rendering, automatically import the result, replace a composition's usage with it, or set it as a proxy.
+  projection_example: >-
+    A heavy particle precomp is rendered and swapped in for its uses to keep the main show light.
+  controls:
+    - { name: Action, type: enum(none|import|import-and-replace|set-proxy), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.queue, proj.precompose, preview.prerender]
+  implementation: >-
+    Post-action is an operation applied after verification passes, undoable, linking the rendered file to the source
+    composition's dependency hash so it is flagged stale when the source changes.
+  io: >-
+    none
+  limitations: >-
+    Replaced usage loses live edits until reverted.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Mostly automatic via pre-render (preview.prerender); explicit choice in Advanced.
+    defaults: >-
+      None.
+    automation: >-
+      Flags stale replacements.
+    usability_check: >-
+      n/a for novices.
+  acceptance: >-
+    Replaced usage renders identically to the live comp at the time of render.
+  status: not-started
+  evidence: []
+
+- id: render.cli
+  name: Headless command-line rendering
+  sources:
+    - ref: S30
+      item: Automate rendering (aerender)
+      category: Render and export
+      checked: false
+  artist_can: >-
+    Render projects from a script or scheduled task without opening the editor.
+  projection_example: >-
+    A nightly script re-renders all venue files after the day's edits.
+  controls:
+    - { name: CLI arguments (project / comp / preset / output), type: string, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.queue, render.encode, ai.mcp-server]
+  implementation: >-
+    Electron app launched with a --render flag (hidden window, WebGPU available) driving the same job runner; the MCP
+    server exposes the same render operation.
+  io: >-
+    Exit codes and JSON reports.
+  limitations: >-
+    Requires a GPU session; not usable on headless servers without a display adapter.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Not a novice feature; the assistant can use it.
+    defaults: >-
+      n/a
+    automation: >-
+      n/a
+    usability_check: >-
+      Expert renders a project from a one-line command.
+  acceptance: >-
+    CLI render frames hash-identical to GUI render.
+  status: not-started
+  evidence: []
+
+- id: render.network
+  name: Watch-folder and multi-machine rendering
+  sources:
+    - ref: S30
+      item: Enable Watch Folder Render; Maximum Number Of Machines; Multi-Machine Settings
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Split a render across several computers.
+  projection_example: >-
+    Two PCs share a long 8K master render.
+  controls:
+    - { name: Watch folder, type: path, animatable: false }
+    - { name: Machines, type: int, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.resume-sequence, render.cli]
+  implementation: >-
+    Candidate: sequence frame-range claiming via lock files in a shared folder, each machine running render.cli.
+  io: >-
+    Shared storage.
+  limitations: >-
+    Single machine for now. Recommendation: revisit only if a second capable machine becomes available.
+
+    Open question: is there more than one capable machine for a personal-use setup? Determinism across different GPUs is
+    only tolerance-level.
+  disposition: unresolved
+  superseded_by: null
+  exclusion_reason: null
+  milestone: F
+  beginner:
+    action: >-
+      n/a until resolved.
+    defaults: >-
+      n/a
+    automation: >-
+      n/a
+    usability_check: >-
+      n/a until resolved.
+  acceptance: >-
+    Decision recorded.
+  status: not-started
+  evidence: []
+
+- id: render.fields-pulldown
+  name: Field rendering and 3:2 pulldown
+  sources:
+    - ref: S30
+      item: Field Render; 3:2 Pulldown
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Render interlaced fields or apply pulldown for legacy broadcast equipment.
+  projection_example: >-
+    A legacy interlaced playback deck at an old venue.
+  controls:
+    - { name: Field order, type: enum(off|upper|lower), animatable: false }
+    - { name: Pulldown phase, type: enum(off|wssww|sswww|swwws|wwsss|wsssw), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.settings]
+  implementation: >-
+    Candidate: render at double rate and interleave in the pack stage.
+  io: >-
+    Interlaced flags in output.
+  limitations: >-
+    Decision 2026-10-02: kept for imported footage interpretation (deinterlace / remove pulldown on import with FFmpeg bwdif); interlaced output is not offered for projectors.
+
+    Open question: will any projection playback target require interlaced output? Projectors and media servers are progressive.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Render-queue or output-module parity detail, or a format no projection delivery needs now. H.264, HEVC, ProRes, HAP family, PNG sequence, audio, verification and projector bake stay required."
+  milestone: F
+  beginner:
+    action: >-
+      n/a until resolved.
+    defaults: >-
+      Off.
+    automation: >-
+      n/a
+    usability_check: >-
+      n/a until resolved.
+  acceptance: >-
+    Decision recorded.
+  status: not-started
+  evidence: []
+
+- id: render.ame-queue
+  name: Adobe Media Encoder queue
+  sources:
+    - ref: S30
+      item: Add to Adobe Media Encoder Queue; Queue in AME
+      category: Render and export
+      checked: true
+  artist_can: >-
+    Send renders to a separate encoding application so work can continue.
+  projection_example: >-
+    Keep animating while a long export encodes.
+  controls:
+    - { name: none (see render.background), type: none, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [render.background, render.encode, render.queue]
+  implementation: >-
+    No separate encoder app: background jobs with snapshots and the FFmpeg pipeline provide the outcome.
+  io: >-
+    none
+  limitations: >-
+    Superseded by render.background (with render.snapshot and render.encode): the useful outcome — keep working while
+    encoding to many formats — is covered without a second application.
+  disposition: superseded
+  superseded_by: render.background
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Not shown; export always runs in the background.
+    defaults: >-
+      n/a
+    automation: >-
+      n/a
+    usability_check: >-
+      Users keep working during export (see render.background).
+  acceptance: >-
+    Covered by AS-6 background render evidence.
+  status: not-started
+  evidence: []
+
+- id: render.blender
+  name: Blender rendering of linked scenes as show content
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Deep optional Blender integration: rendering"
+      category: "Blender integration"
+      checked: true
+  artist_can: >-
+    Render a linked Blender scene (final-quality Cycles or fast EEVEE) in the background and use the result as video
+    or an image sequence assigned to areas, with alpha and depth if wanted.
+  projection_example: >-
+    Render a 20 s Cycles shot of a storm cloud and assign it to the roof area.
+  controls:
+    - { name: "Engine (Cycles, EEVEE)", type: "enum", animatable: false }
+    - { name: "Camera and frame range", type: "ref + time[2]", animatable: false }
+    - { name: "Resolution and samples", type: "int[2]", animatable: false }
+    - { name: "Passes (alpha, depth)", type: "flags", animatable: false }
+    - { name: "Stale warning", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [3d.blender-link, render.background, render.queue, pass.exr-read, proj.import-media, render.determinism]
+  implementation: >-
+    Render jobs run headless Blender with a generated script on the render queue (render.queue) and write PNG or EXR
+    sequences with optional depth. The result is registered as an asset with a hash of the render settings and the
+    .blend, and is marked stale when either changes.
+  io: >-
+    Writes image sequences or video as an ordinary asset.
+  limitations: >-
+    Blender renders are offline and can take hours. Results differ by GPU and Blender version, so reruns are not
+    bit-identical across machines.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Linked scene, "Render in Blender" with a quality choice.
+    defaults: >-
+      EEVEE at the scene resolution, full range, with alpha.
+    automation: >-
+      Queues the job in the background and imports the result when it finishes.
+    usability_check: >-
+      A first-time user renders a Blender shot and assigns it to an area in under 3 clicks after the render.
+  acceptance: >-
+    Mini scene "blender-shot": a Blender render becomes content on an area; stale detection works.
+  status: not-started
+  evidence: []

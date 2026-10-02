@@ -1,0 +1,1266 @@
+# Preview, cache and performance — Before Effects capability register
+# Sources: S31 (Multi-Frame Rendering, Speculative Preview / Cache Frames When Idle; checked 2026-10-01), S30 (render settings Disk Cache, Proxy Use; checked), S10 (Adaptive Resolution with 3D; checked), S22 (transcode tip; checked), S01 (previews, RAM preview, Fast Previews, proxies, Media & Disk Cache, Composition Profiler, GPU, channels, snapshots, Mercury Transmit), brief §18 and §20. Live show operation is covered by show.* entries.
+
+- id: preview.scrub
+  name: Responsive scrubbing
+  sources:
+    - ref: brief
+      item: §18 responsive scrubbing
+      category: Product requirement
+      checked: true
+    - ref: S01
+      item: Scrubbing the current-time indicator; Fast Previews
+      category: View and preview
+      checked: false
+  artist_can: >-
+    Drag the playhead and see the image follow immediately, refining to full quality when the drag stops.
+  projection_example: >-
+    Scrub through a dense 3D collapse to find the exact frame where a brick should start falling.
+  controls:
+    - { name: Scrub quality, type: enum(auto|draft|full), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.cache, preview.quality, preview.decode]
+  implementation: >-
+    Scrub requests are cancellable and coalesced (latest-wins); cached frames shown instantly; uncached frames render at
+    reduced resolution first then refine; decoders keep keyframe indices for fast random access.
+  io: >-
+    none
+  limitations: >-
+    Long-GOP footage and stateful simulations scrub slower until proxies/checkpoints exist.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag the playhead.
+    defaults: >-
+      Auto quality.
+    automation: >-
+      Builds proxies and checkpoints in the background when scrubbing is slow.
+    usability_check: >-
+      On starter scenes, first visible feedback within 100 ms of a scrub move on the target machine.
+  acceptance: >-
+    Measured scrub latency logged for the starter project and AS-3 scene.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.playback
+  name: Real-time playback preview
+  sources:
+    - ref: S01
+      item: Preview panel — play/stop, range (work area, around current time), loop, frame rate, skip frames, play from current time, cache before playback
+      category: View and preview
+      checked: false
+  artist_can: >-
+    Play the composition with sound, loop a range, and choose whether to drop frames for real-time playback or wait to
+    cache every frame.
+  projection_example: >-
+    Loop the 8-bar chorus while adjusting how the windows pulse.
+  controls:
+    - { name: Play / stop, type: action, animatable: false }
+    - { name: Range, type: enum(work-area|around-playhead|whole|custom), animatable: false }
+    - { name: Loop, type: enum(loop|once|ping-pong), animatable: false }
+    - { name: Mode, type: enum(real-time-drop-frames|cache-then-play), animatable: false }
+    - { name: Skip frames, type: int, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.cache, audio.preview-sync, preview.dropped-frames]
+  implementation: >-
+    Playback scheduler keyed to the audio clock; frames served from the RAM cache or rendered just in time; in
+    real-time mode late frames are dropped and counted.
+  io: >-
+    none
+  limitations: >-
+    Heavy scenes need caching or lower quality for real-time playback.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Space bar / big Play button.
+    defaults: >-
+      Loop work area, real-time with frame drops shown.
+    automation: >-
+      Suggests "cache first" when playback drops many frames.
+    usability_check: >-
+      First-time users start, stop and loop a preview without help.
+  acceptance: >-
+    Starter scene plays at full frame rate at Auto quality; dropped frames reported accurately.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.quality
+  name: Preview resolution and quality
+  sources:
+    - ref: S01
+      item: Composition panel resolution (Full, Half, Third, Quarter, Custom, Auto); Fast Previews (Adaptive Resolution, Off/Final Quality); layer quality; Region of Interest
+      category: View and preview
+      checked: false
+    - ref: S10
+      item: Adaptive Resolution supports 3D rendering
+      category: Advanced 3D renderer
+      checked: true
+  artist_can: >-
+    Trade preview resolution and effect quality for speed, limit rendering to a region of interest, and switch to final
+    quality to check details.
+  projection_example: >-
+    Preview a 16K-wide multi-projector canvas at quarter resolution, or only the region around one window at full quality.
+  controls:
+    - { name: Resolution, type: enum(auto|full|half|third|quarter|custom), animatable: false }
+    - { name: Fast previews, type: enum(off|adaptive|draft-3d), animatable: false }
+    - { name: Region of interest, type: rect2d, animatable: false }
+    - { name: Layer quality, type: enum(draft|best), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.fidelity-disclosure, 3d.quality-modes]
+  implementation: >-
+    Render graph evaluated at a scale factor (effects declare how parameters scale with resolution so looks stay
+    consistent); ROI clips work to tiles intersecting the region; adaptive mode lowers scale during interaction.
+  io: >-
+    none
+  limitations: >-
+    Some effects (e.g. noise detail, thin strokes) look different at reduced resolution; disclosed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Viewer quality chip "Auto / Full".
+    defaults: >-
+      Auto (full when idle, lower while moving).
+    automation: >-
+      Picks resolution from measured frame cost.
+    usability_check: >-
+      Users can switch to full quality to check a detail in one click.
+  acceptance: >-
+    Scaled previews match downscaled full renders within tolerance for scale-aware effects.
+  status: not-started
+  evidence: []
+
+- id: preview.decode
+  name: Fast, frame-exact media decode
+  sources:
+    - ref: brief
+      item: architecture — WebCodecs for fast preview decode where exact enough; FFmpeg sidecar decode
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Scrub and play footage of many formats quickly while always seeing the exact frame that will be exported.
+  projection_example: >-
+    A 4K HEVC drone clip scrubs smoothly in a window region and shows exactly the frame the export will use.
+  controls:
+    - { name: Decode path, type: enum(auto|hardware|software), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [proj.project-model, color.input-interpretation]
+  implementation: >-
+    Demux with a frame index; WebCodecs VideoDecoder (hardware) for H.264/HEVC/VP9/AV1 where a per-asset exactness test
+    matches FFmpeg-decoded reference frames; FFmpeg sidecar (NVDEC or software) otherwise, including ProRes/DNxHR;
+    HAP decoded by Snappy + direct BC texture upload (WebGPU texture-compression-bc). Export always uses the
+    reference-exact path.
+  io: >-
+    Frame index cached per asset.
+  limitations: >-
+    Variable-frame-rate sources are conformed to a constant rate on import with a notice.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None.
+    defaults: >-
+      Auto.
+    automation: >-
+      Chooses decode path per asset after a quick exactness test.
+    usability_check: >-
+      n/a for novices; check: no preview/export frame mismatch on the test media pack.
+  acceptance: >-
+    Test pack: preview frame N equals export frame N (hash) for every supported format.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: preview.proxy
+  name: Proxies and media conversion
+  sources:
+    - ref: S01
+      item: Placeholders and proxies; Create Proxy; Set Proxy; proxy indicators
+      category: Work with footage items
+      checked: false
+    - ref: S30
+      item: Render settings — Proxy Use
+      category: Render and export
+      checked: true
+    - ref: S22
+      item: Use transcoded (scaled-down) footage for better performance
+      category: Remove objects from your videos
+      checked: true
+  artist_can: >-
+    Work with lightweight stand-ins for heavy footage or compositions, switch them on or off, and always export from originals.
+  projection_example: >-
+    8K drone footage gets a 2K proxy so the facade show stays responsive; the final master uses the 8K original.
+  controls:
+    - { name: Proxy status, type: enum(none|building|ready|in-use), animatable: false }
+    - { name: Use proxies, type: bool, animatable: false }
+    - { name: Proxy resolution, type: enum(half|quarter|custom), animatable: false }
+    - { name: Proxy format, type: enum(prores-proxy|h264-intra|png), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.decode, render.settings, render.background]
+  implementation: >-
+    Background FFmpeg jobs transcode heavy or poorly seekable media to all-intra proxies (ProRes Proxy or intra H.264)
+    keyed by source hash; composition proxies are pre-rendered (preview.prerender); proxies keep source timing and
+    pixel-aspect so they are drop-in; render settings default to originals.
+  io: >-
+    Proxies stored in the disk cache folder, regenerable, optionally collected.
+  limitations: >-
+    Proxies are not used for exports unless explicitly chosen (draft renders).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; heavy clips get proxies automatically with a small "fast copy" badge.
+    defaults: >-
+      Auto-proxy for sources above 4K, long-GOP 10-bit, or codecs WebCodecs cannot decode.
+    automation: >-
+      Builds proxies on import in the background and swaps them in when ready.
+    usability_check: >-
+      Users never need to create a proxy manually for the supplied media pack.
+  acceptance: >-
+    Export with proxies "in use" in the viewer still renders from originals (verified by hash).
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: preview.cache
+  name: RAM frame cache
+  sources:
+    - ref: S01
+      item: RAM preview cache; cache indicators (green bar)
+      category: View and preview
+      checked: false
+    - ref: brief
+      item: §18 RAM caches
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Replay already-rendered frames instantly, with a timeline bar showing which frames are cached.
+  projection_example: >-
+    After one slow pass, the whole chorus loops in real time while adjusting an unrelated layer's colour.
+  controls:
+    - { name: Cache indicator, type: display, animatable: false }
+    - { name: RAM budget, type: size, animatable: false }
+    - { name: Purge, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.cache-invalidation, preview.memory-budget]
+  implementation: >-
+    Frames cached per render-graph node output keyed by content hash (node params evaluated at t + upstream hashes +
+    quality + engine version); stored as GPU textures (hot) and compressed half-float CPU buffers (warm) under an LRU
+    with budgets; intermediate node caches let unrelated edits reuse upstream results.
+  io: >-
+    none
+  limitations: >-
+    4K rgba16float frames are ~66 MB uncompressed; long ranges spill to the disk cache.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; green bar on the timeline shows ready frames.
+    defaults: >-
+      Budget = 50% of free RAM, capped by settings.
+    automation: >-
+      Manages eviction automatically.
+    usability_check: >-
+      Users explain the green bar correctly after one tooltip (8 of 10).
+  acceptance: >-
+    Cached frames are bit-identical to fresh renders; editing one layer keeps unaffected node caches.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.disk-cache
+  name: Persistent disk cache
+  sources:
+    - ref: S30
+      item: Render settings — Disk Cache (Read Only, Current Settings)
+      category: Render and export
+      checked: true
+    - ref: S01
+      item: Media & Disk Cache preferences (folder, maximum size, empty cache)
+      category: Memory, storage, performance
+      checked: false
+  artist_can: >-
+    Keep rendered frames between sessions on a fast drive so reopening a project does not mean re-rendering everything.
+  projection_example: >-
+    Next morning the heavy fluid scene previews instantly from yesterday's disk cache.
+  controls:
+    - { name: Cache folder, type: path, animatable: false }
+    - { name: Maximum size, type: size, animatable: false }
+    - { name: Empty cache, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.cache, preview.cache-invalidation]
+  implementation: >-
+    Content-addressed store of half-float frames (LZ4/zstd-compressed tiles or EXR DWAA for large frames) keyed by the
+    same node hashes as the RAM cache; LRU eviction by size; safe across crashes (write-then-rename).
+  io: >-
+    Not part of the project; rebuildable. Render jobs may read it (read-only by default).
+  limitations: >-
+    Disk speed matters; network drives are discouraged.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      None; Settings → Storage shows usage and "Free space".
+    defaults: >-
+      Fastest local drive, 50 GB or 10% of free space.
+    automation: >-
+      Chooses the fastest drive and warns when space is low.
+    usability_check: >-
+      Users free cache space from one settings page.
+  acceptance: >-
+    Reopened project shows previously cached frames as ready; hashes match.
+  status: not-started
+  evidence: []
+
+- id: preview.cache-invalidation
+  name: Cache invalidation and dependency tracking
+  sources:
+    - ref: brief
+      item: §18 cache invalidation; §3 replace pre-render cache when dependencies change
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Trust that any cached or pre-rendered frame is current: changing something invalidates exactly the frames it affects.
+  projection_example: >-
+    Changing the colour of one window's glow from 0:30–0:40 re-renders only those frames of that layer and its consumers.
+  controls:
+    - { name: "Why is this frame not cached?", type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [proj.project-model, ux.operation-system]
+  implementation: >-
+    Every op reports changed properties; per-node time-dependency intervals (keyframe spans, expression time-dependence,
+    temporal effects' frame windows) give the affected time ranges; node hashes recomputed lazily; external asset
+    changes detected by file watchers + content hash.
+  io: >-
+    none
+  limitations: >-
+    Expressions reading time or other layers broadly invalidate more frames; reported in the inspector.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None.
+    defaults: >-
+      Always on.
+    automation: >-
+      Fully automatic.
+    usability_check: >-
+      No stale frame observed in a scripted edit/preview test of 1,000 random edits.
+  acceptance: >-
+    Fuzz test: random edits followed by cached vs fresh render comparisons never differ.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.prerender
+  name: Background pre-render of expensive content
+  sources:
+    - ref: S01
+      item: Pre-render a nested composition; Post-Render Action Import & Replace Usage
+      category: Work with compositions
+      checked: false
+    - ref: brief
+      item: §0.6 pre-render expensive content in the background; §3 pre-rendering expensive nested content
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Have slow nested compositions and simulations rendered in the background and used automatically until they change.
+  projection_example: >-
+    The particle storm precomp pre-renders while the user works on lighting; the main show then plays in real time.
+  controls:
+    - { name: Pre-render this, type: action, animatable: false }
+    - { name: Auto pre-render, type: bool, animatable: false }
+    - { name: Status, type: enum(live|rendering|ready|stale), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.disk-cache, preview.cache-invalidation, render.background, proj.precompose, preview.profiler]
+  implementation: >-
+    Node-level pre-render jobs write the node's output frames into the disk cache at final quality; consumers read them
+    while hashes match; stale results discarded automatically.
+  io: >-
+    none
+  limitations: >-
+    Pre-rendered results consume disk; time-remapped consumers may request frames outside the pre-rendered range.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Suggestion card: "This part is slow — prepare it in the background?"
+    defaults: >-
+      Auto pre-render for nodes the profiler marks as bottlenecks (opt-in once per project).
+    automation: >-
+      Detects, schedules, invalidates and reuses automatically.
+    usability_check: >-
+      A user accepts a pre-render suggestion and sees real-time playback afterwards without further steps.
+  acceptance: >-
+    Pre-rendered and live results are identical; stale state appears immediately after an upstream edit.
+  status: not-started
+  evidence: []
+
+- id: preview.idle-cache
+  name: Cache frames when idle (speculative preview)
+  sources:
+    - ref: S31
+      item: Speculative Preview — Cache Frames When Idle; Idle Delay Before Caching Starts (8 s); Cache Frames (From Current Time, Around Current Time, From Start of Range); Cache Range (Work Area, Work Area Extended by Current Time, Entire Duration)
+      category: Multi-Frame Rendering
+      checked: true
+  artist_can: >-
+    Let the app render ahead while you pause, so the preview is ready when you come back.
+  projection_example: >-
+    During a coffee break the whole 3-minute show caches for a smooth client run-through.
+  controls:
+    - { name: Cache when idle, type: bool, animatable: false }
+    - { name: Idle delay, type: time, animatable: false }
+    - { name: Cache order, type: enum(from-current|around-current|from-range-start), animatable: false }
+    - { name: Cache range, type: enum(work-area|work-area-from-current|entire), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.cache, preview.disk-cache, preview.concurrent-frames]
+  implementation: >-
+    Low-priority scheduler starts after the idle delay and yields instantly to user input.
+  io: >-
+    none
+  limitations: >-
+    Uses power and GPU while idle; disabled on battery by default.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      None; on by default.
+    defaults: >-
+      8 s delay, around current time, work area.
+    automation: >-
+      Pauses on battery power.
+    usability_check: >-
+      Users notice the timeline filling green when idle and understand it (tooltip).
+  acceptance: >-
+    Idle caching never delays a user action by more than one frame time.
+  status: not-started
+  evidence: []
+
+- id: preview.profiler
+  name: Performance profiling and bottleneck finder
+  sources:
+    - ref: S01
+      item: Composition Profiler (render time per layer and effect)
+      category: Memory, storage, performance
+      checked: false
+    - ref: brief
+      item: §0.6 find performance bottlenecks; §18 profiling
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    See which layers and effects make a frame slow and get practical fixes (pre-render, lower quality, proxy) with one click.
+  projection_example: >-
+    The profiler shows a 2,000-particle glow costs 80% of the frame and offers to pre-render it.
+  controls:
+    - { name: Show render times, type: bool, animatable: false }
+    - { name: Bottleneck list, type: display, animatable: false }
+    - { name: Apply suggestion, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.prerender, preview.proxy, preview.quality]
+  implementation: >-
+    WebGPU timestamp queries per pass (where the adapter supports timestamp-query) plus CPU timing per node; aggregated
+    per layer/effect over sampled frames; suggestions generated from rules.
+  io: >-
+    Profile reports exportable as JSON for bug reports.
+  limitations: >-
+    GPU timing granularity varies by driver; numbers are indicative.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Why is it slow?" button when playback drops frames.
+    defaults: >-
+      Top 3 culprits with suggested fixes.
+    automation: >-
+      Profiles the current range in the background and ranks fixes by impact.
+    usability_check: >-
+      A user doubles preview speed on a supplied slow scene by applying one suggestion.
+  acceptance: >-
+    Profiler identifies the injected expensive node in a synthetic test 10 of 10 times.
+  status: not-started
+  evidence: []
+
+- id: preview.gpu
+  name: GPU processing and device recovery
+  sources:
+    - ref: S01
+      item: GPU acceleration (Mercury GPU acceleration; GPU-accelerated effects)
+      category: Memory, storage, performance
+      checked: false
+    - ref: brief
+      item: §18 evaluate GPU processing
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get fast GPU rendering for compositing, effects and 3D, and keep working if the graphics driver resets.
+  projection_example: >-
+    A driver update crash mid-session recovers the viewer without losing edits.
+  controls:
+    - { name: GPU adapter, type: enum(dynamic), animatable: false }
+    - { name: GPU status, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [proj.autosave-recovery]
+  implementation: >-
+    WebGPU (Dawn/D3D12 on Windows) requesting the high-performance adapter and higher limits (maxTextureDimension2D up
+    to adapter limits, timestamp-query, texture-compression-bc, shader-f16); device.lost handler recreates the device
+    and resources from the project state; render jobs restart from the last good frame.
+  io: >-
+    none
+  limitations: >-
+    Target hardware is an RTX 5070 Ti (16 GB); other GPUs work within their limits.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; a short notice appears if the GPU resets.
+    defaults: >-
+      High-performance adapter.
+    automation: >-
+      Recovers automatically.
+    usability_check: >-
+      After an injected device loss, users continue working without data loss.
+  acceptance: >-
+    Fault injection (device.destroy) recovers viewer and resumes a render without corrupt frames.
+  status: not-started
+  evidence: []
+
+- id: preview.concurrent-frames
+  name: Concurrent frame rendering (multi-frame rendering equivalent)
+  sources:
+    - ref: S31
+      item: Multi-Frame Rendering — enable/disable, CPU cores/RAM/GPU scaling, % CPU reserved, effects optimised for MFR
+      category: Multi-Frame Rendering
+      checked: true
+    - ref: brief
+      item: §18 concurrent frame work where dependencies permit; parallel workers must not skip simulation history
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get faster previews and exports by working on several frames at once, automatically, wherever the scene allows it.
+  projection_example: >-
+    A 4K export of a mostly 2D facade show renders roughly twice as fast as one-frame-at-a-time.
+  controls:
+    - { name: Concurrent frames, type: enum(auto|1|2|4|8), animatable: false }
+    - { name: CPU reserved (%), type: percent, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.memory-budget, render.determinism]
+  implementation: >-
+    Several frames in flight: core evaluation in worker threads, GPU work interleaved on the device queue, and for
+    exports optional extra hidden renderer processes (VRAM permitting). Nodes declare temporal/stateful dependencies;
+    stateful simulations are split into contiguous chunks starting from checkpoints so no history is skipped.
+  io: >-
+    none
+  limitations: >-
+    Single-GPU throughput limits gains for GPU-bound scenes; stateful effects serialise.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      None.
+    defaults: >-
+      Auto, 10% CPU reserved.
+    automation: >-
+      Chooses concurrency from VRAM and measured throughput.
+    usability_check: >-
+      n/a for novices.
+  acceptance: >-
+    Concurrent and sequential exports are frame-hash identical; speed-up measured and recorded.
+  status: not-started
+  evidence: []
+
+- id: preview.memory-budget
+  name: Bounded memory and VRAM with out-of-memory handling
+  sources:
+    - ref: brief
+      item: §18 bounded memory/VRAM use; useful out-of-memory handling
+      category: Product requirement
+      checked: true
+    - ref: S01
+      item: Memory & Performance preferences
+      category: Memory, storage, performance
+      checked: false
+  artist_can: >-
+    Work on huge canvases and heavy scenes without crashes; when memory runs short, the app degrades gracefully and says what to do.
+  projection_example: >-
+    A 16K-wide three-projector canvas renders in tiles instead of failing.
+  controls:
+    - { name: RAM / VRAM budget, type: size, animatable: false }
+    - { name: Memory status, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.gpu]
+  implementation: >-
+    Central allocator tracks GPU textures/buffers and CPU caches against budgets; pools reuse textures; GPU OOM caught
+    via pushErrorScope('out-of-memory') and device.lost; fallback order: evict caches → lower preview scale → tiled
+    rendering (for frames over texture limits) → clear message naming the heavy item.
+  io: >-
+    none
+  limitations: >-
+    Some effects cannot tile (global operations); they report their memory need.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      None; a message appears only if a fallback changes what is shown.
+    defaults: >-
+      VRAM budget 80% of adapter memory minus other jobs.
+    automation: >-
+      Applies the fallback chain automatically.
+    usability_check: >-
+      In OOM fault tests, users get a message naming the cause and a fix, never a crash.
+  acceptance: >-
+    16K test canvas exports correctly via tiling; injected OOM never crashes the app.
+  status: not-started
+  evidence: []
+
+- id: preview.dropped-frames
+  name: Dropped-frame display
+  sources:
+    - ref: brief
+      item: §18 display of dropped frames
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    See whether playback is truly real-time, how many frames were dropped and where.
+  projection_example: >-
+    Notice the preview is dropping frames during the drop, so the timing judgement there is unreliable.
+  controls:
+    - { name: FPS / dropped counter, type: display, animatable: false }
+    - { name: Dropped-frame marks on timeline, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.playback]
+  implementation: >-
+    Scheduler records each presented frame vs its due time (rAF/presentation timestamps); counters and timeline marks drawn from that log.
+  io: >-
+    none
+  limitations: >-
+    Display vsync and OS compositor can hide or add drops; measured at the app's presentation point.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Small "Real-time ✓ / 22 of 30 fps" chip in the viewer.
+    defaults: >-
+      Chip always visible during playback.
+    automation: >-
+      Links to "Why is it slow?" when drops occur.
+    usability_check: >-
+      Users correctly say whether playback was real-time after a run (9 of 10).
+  acceptance: >-
+    Synthetic slow scene reports drop counts matching the scheduler log.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.fidelity-disclosure
+  name: Fast-preview compromise disclosure
+  sources:
+    - ref: brief
+      item: §18 a fast but visually different preview must identify its compromises
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Always know when the viewer is not showing the export look and why (lower resolution, draft 3D, proxies, effects off,
+    no motion blur), and switch to the true look.
+  projection_example: >-
+    The badge says "Fast preview: half resolution, motion blur off" while reviewing timing.
+  controls:
+    - { name: Compromise badge, type: display, animatable: false }
+    - { name: Show export look, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.quality, preview.proxy, 3d.quality-modes]
+  implementation: >-
+    The render graph records every quality substitution made for a frame; the viewer badge lists them; "Show export
+    look" renders the current frame through the export path.
+  io: >-
+    none
+  limitations: >-
+    Display differences (monitor vs projector) are covered by color.simulate-output, not this badge.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Badge in the viewer corner; click "Show final".
+    defaults: >-
+      Always on.
+    automation: >-
+      Automatic.
+    usability_check: >-
+      Users identify whether the viewer matches the export from the badge (9 of 10).
+  acceptance: >-
+    Every substitution type triggers the badge in tests.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.export-parity
+  name: Preview/export parity checks
+  sources:
+    - ref: brief
+      item: §20 shared evaluation semantics for preview/export; §22 record preview/export differences
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Rely on "Show final" in the viewer matching the exported frame.
+  projection_example: >-
+    A frame approved in the viewer is exactly the frame in the master file.
+  controls:
+    - { name: Compare viewer frame to export, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.fidelity-disclosure, render.offline]
+  implementation: >-
+    Viewer final quality and export share the same core evaluation and pass graph; automated tests render sampled frames
+    via both paths and compare hashes; a manual "compare" pulls the frame from a finished export and diffs it.
+  io: >-
+    Parity reports stored as evidence.
+  limitations: >-
+    Lossy encodes differ by codec loss; comparisons use decoded lossless outputs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Not visible in normal use.
+    defaults: >-
+      CI test on starter projects.
+    automation: >-
+      Automatic tests.
+    usability_check: >-
+      n/a (engineering guarantee).
+  acceptance: >-
+    Acceptance shows 1–7: sampled frames identical between viewer final and lossless export.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.channel-view
+  name: Channel and alpha views
+  sources:
+    - ref: S01
+      item: Show Channel (RGB, Red, Green, Blue, Alpha, RGB Straight, Alpha Overlay, Alpha Boundary); transparency grid
+      category: View and preview
+      checked: false
+  artist_can: >-
+    View individual colour channels, alpha, straight (unpremultiplied) colour and a transparency grid to check mattes and edges.
+  projection_example: >-
+    Check the performer matte in alpha view for holes before the show render.
+  controls:
+    - { name: Channel, type: enum(rgb|r|g|b|alpha|rgb-straight|alpha-overlay|alpha-boundary), animatable: false }
+    - { name: Transparency grid, type: bool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [color.display]
+  implementation: >-
+    Viewer-only WGSL display modes before the display transform.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Check transparency" toggle in viewer menu.
+    defaults: >-
+      RGB, grid off.
+    automation: >-
+      Cutout tools switch to alpha-overlay automatically while refining.
+    usability_check: >-
+      A user spots a hole in a matte using alpha view in under 30 s.
+  acceptance: >-
+    Channel views match analytic channel extraction.
+  status: not-started
+  evidence: []
+
+- id: preview.snapshot-compare
+  name: Viewer snapshots and before/after compare
+  sources:
+    - ref: S01
+      item: Take Snapshot / Show Snapshot
+      category: View and preview
+      checked: false
+  artist_can: >-
+    Take a snapshot of the viewer and compare it with the current image (toggle, split or difference).
+  projection_example: >-
+    Compare yesterday's glow look with today's tweak side by side.
+  controls:
+    - { name: Take snapshot, type: action, animatable: false }
+    - { name: Compare mode, type: enum(toggle|split|difference|onion), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.cache]
+  implementation: >-
+    Snapshots stored as textures (and optionally on disk with the time/settings); compare rendered as a viewer overlay.
+  io: >-
+    none
+  limitations: >-
+    Snapshots are images, not project states (use undo history or versions for that).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Viewer snapshot compare is an After Effects convenience. Preview resolution, caching and profiling stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Camera icon in the viewer; hold to compare.
+    defaults: >-
+      Toggle compare.
+    automation: >-
+      Recipes auto-snapshot before applying so "before/after" is one hold away.
+    usability_check: >-
+      Users compare before/after of an effect without help.
+  acceptance: >-
+    Snapshot difference mode is zero for an unchanged frame.
+  status: not-started
+  evidence: []
+
+- id: preview.external-monitor
+  name: Full-screen preview on an external display
+  sources:
+    - ref: S01
+      item: Mercury Transmit (video preview to external monitor)
+      category: View and preview
+      checked: false
+  artist_can: >-
+    Send the composition preview full-screen to a second display or a projector for review, without the editor UI.
+  projection_example: >-
+    Preview the content on a rehearsal projector in the studio before calibrated output is set up.
+  controls:
+    - { name: Target display, type: enum(dynamic), animatable: false }
+    - { name: Scale, type: enum(fit|1to1), animatable: false }
+  animation: >-
+    n/a
+  dependencies: [preview.playback, out.projector-output]
+  implementation: >-
+    Borderless Electron window on the chosen display rendering the viewer's frame stream; distinct from calibrated
+    projector outputs owned by out.projector-output (no mapping, masks or blends applied).
+  io: >-
+    none
+  limitations: >-
+    Not a show output; no mapping or blend; labelled in the UI.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Preview on second screen".
+    defaults: >-
+      Fit.
+    automation: >-
+      Detects connected displays.
+    usability_check: >-
+      A user sends the preview to a second display in two clicks.
+  acceptance: >-
+    External preview frame-matches the viewer.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.resolution
+  name: Preview resolution selector (Auto, Full, Half, Quarter, Eighth, Custom)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (preview resolution)
+      checked: true
+  artist_can: >-
+    Choose how many pixels the preview renders, defined by image dimensions (Half of 3840x2160 is 1920x1080), and always see the effective size.
+  projection_example: >-
+    Edit a 4K facade show at Quarter for snappy playback, then check a frame at Full before exporting.
+  controls:
+    - { name: "Resolution", type: "enum(Auto, Full, Half, Quarter, Eighth, Custom)", animatable: false }
+    - { name: "Custom scale or dimensions", type: float, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [preview.playback, preview.display-zoom]
+  implementation: >-
+    The compositor renders at output size x fraction into a canvas whose backing store equals the effective dimensions; display fit is CSS only. Auto adapts only within its own mode and shows the effective size; manual choices are never changed by the app. Hardware limits (max texture size) are reported explicitly.
+  io: >-
+    Never changes project dimensions or export settings.
+  limitations: >-
+    Expected sampling differences between scales (thin lines, very small text).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The "Preview size" menu above the preview.
+    defaults: >-
+      Auto.
+    automation: >-
+      Auto picks a responsive size and labels it.
+    usability_check: >-
+      A first-time user switches to Half and reads the resulting pixel size without help.
+  acceptance: >-
+    Full/Half/Quarter/Eighth produce the exact dimensions for a 3840x2160 composition; exporting after editing at Quarter yields full-resolution files.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.display-zoom
+  name: Display zoom and fit, separate from render resolution
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (fit-to-window and zoom)
+      checked: true
+  artist_can: >-
+    Fit the preview to the panel or zoom in to inspect pixels without changing what is rendered.
+  projection_example: >-
+    Zoom to 200% on a window corner to check a glow edge.
+  controls:
+    - { name: "Fit / 50% / 100% / 200% / custom", type: enum, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [preview.resolution]
+  implementation: >-
+    CSS transform of the canvas with pan; nearest or smooth display filtering; overlays scale with it.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Fit button and zoom menu; mouse wheel with Ctrl.
+    defaults: >-
+      Fit.
+    automation: >-
+      Keeps fit when the window resizes.
+    usability_check: >-
+      Zooming never changes the "Preview size" label.
+  acceptance: >-
+    Changing zoom leaves the effective preview dimensions unchanged.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.views
+  name: Show, 3D projection and Projector output preview views
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (preview views)
+      checked: true
+  artist_can: >-
+    Switch between the show as exported, the content on a 3D model of the building with orbit/pan/zoom, and the exact image a projector will output.
+  projection_example: >-
+    Orbit around the facade to see how the window lights read from the street, then check the projector image.
+  controls:
+    - { name: "View", type: "enum(Show, 3D projection, Projector output)", animatable: false }
+    - { name: "Orbit / pan / zoom", type: camera, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [map.venue-preview, out.projector-output]
+  implementation: >-
+    Show view encodes the composition exactly as export; 3D view renders the venue mesh (flat facade plane or model) with albedo x (ambient + projected content) using a WGSL mesh pass and an orbit camera; projector view runs the output stage.
+  io: >-
+    none
+  limitations: >-
+    The 3D view is a design aid, not a lighting survey.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Three labelled tabs above the preview.
+    defaults: >-
+      Show.
+    automation: >-
+      Frames the building automatically in 3D.
+    usability_check: >-
+      A first-time user finds all three views and orbits the building within a minute.
+  acceptance: >-
+    Each view renders the same frame time; projector view matches exported projector files.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.transport
+  name: Transport controls (play, pause, restart, step, loop, preview range)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (transport)
+      checked: true
+  artist_can: >-
+    Play, pause, restart, step one frame at a time, loop, and limit playback to a chosen range.
+  projection_example: >-
+    Loop the four seconds where the windows light up while adjusting the delay.
+  controls:
+    - { name: "Play/pause, restart, previous/next frame", type: action, animatable: false }
+    - { name: "Loop", type: bool, animatable: false }
+    - { name: "Preview range in/out", type: time-range, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [preview.playback]
+  implementation: >-
+    Frame-exact flick clock; with audio present the audio clock is master; stepping renders accurate frames at the selected quality.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Buttons under the preview; Space, arrow keys, Home.
+    defaults: >-
+      Loop on, range = whole show.
+    automation: >-
+      Range follows the selected effect when asked.
+    usability_check: >-
+      A first-time user steps frame by frame and sets a loop range without help.
+  acceptance: >-
+    Stepping lands on exact frame boundaries; looping a range replays identical frames.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.overlays
+  name: Guides, surface outlines and selection overlays
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (overlays)
+      checked: true
+  artist_can: >-
+    Show or hide region outlines, selection highlights, safe guides and the alignment grid over the preview.
+  projection_example: >-
+    Hide outlines to judge the pure look, show them again to select a column.
+  controls:
+    - { name: "Outlines / selection / guides", type: bool, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [preview.views]
+  implementation: >-
+    SVG overlay layers above the canvas; never rendered into exports.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Overlays" menu next to the view tabs.
+    defaults: >-
+      Outlines on hover, selection on.
+    automation: >-
+      none
+    usability_check: >-
+      Overlays can be hidden in one click and never appear in exported files.
+  acceptance: >-
+    Exports are identical with overlays on or off.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.popout
+  name: Pop-out preview window on another display
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (separate preview window)
+      checked: true
+  artist_can: >-
+    Move the preview into its own window or onto another monitor while keeping editing controls in the main window.
+  projection_example: >-
+    Put the 3D view on a second monitor while editing timing on the laptop.
+  controls:
+    - { name: "Pop out / bring back", type: action, animatable: false }
+    - { name: "Display", type: enum, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [preview.views, preview.transport]
+  implementation: >-
+    Separate Electron window with its own GPU device, synchronised through the main process (project snapshots on change, shared wall-clock transport state).
+  io: >-
+    none
+  limitations: >-
+    Each window renders independently, so very heavy scenes cost GPU time twice.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Pop out" button on the preview.
+    defaults: >-
+      Opens on the largest other display when one exists.
+    automation: >-
+      Keeps time and edits in sync.
+    usability_check: >-
+      A first-time user moves the preview to another window and back.
+  acceptance: >-
+    Edits in the main window appear in the pop-out within one frame of render time; playback stays in sync.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.modes
+  name: Real-time playback vs cache-first accurate playback
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (playback modes)
+      checked: true
+  artist_can: >-
+    Choose between real-time playback that keeps timing and reports skipped frames, and accurate playback that prepares the range first, with target and achieved frame rates shown.
+  projection_example: >-
+    Cache a heavy smoke section at Full, then play it smoothly.
+  controls:
+    - { name: "Playback mode", type: "enum(Real time, Cache first)", animatable: false }
+    - { name: "Effect quality / simulation quality / frame skipping / proxies", type: enum, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [preview.cache, preview.cache-invalidation, preview.resolution]
+  implementation: >-
+    Frame cache of GPU textures keyed by (comp, frame, resolution, quality) within a VRAM budget; edits invalidate only frames whose active layers changed (derived from operation patches); statistics panel with target/achieved fps, dropped frames and cache progress.
+  io: >-
+    none
+  limitations: >-
+    Cache lives in VRAM; disk cache follows (preview.disk-cache).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Smooth playback" button offered when frames drop.
+    defaults: >-
+      Real time.
+    automation: >-
+      Offers caching or a lower preview size for demanding scenes; never forces it.
+    usability_check: >-
+      When playback drops frames, a first-time user follows the offered fix.
+  acceptance: >-
+    Cache-first playback shows zero dropped frames on cached ranges; edits mark only affected frames stale.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: preview.acceptance-performance
+  name: Performance measurement of preview and export for acceptance scenes
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Performance measurement of preview and export for acceptance scenes"
+      category: "Performance"
+      checked: true
+  artist_can: >-
+    See measured numbers for preview and export on the acceptance scenes: frames per second while playing, scrub and
+    seek delay, export time at each size, and memory use, on this machine, so a slow scene is found before the show.
+  projection_example: >-
+    "Windows wake up": preview 60 fps at Half, 30 fps at Full; 4K export 6 min 20 s.
+  controls:
+    - { name: "Scenes to measure", type: "list", animatable: false }
+    - { name: "Resolutions", type: "list", animatable: false }
+    - { name: "Measure preview", type: "action", animatable: false }
+    - { name: "Measure export", type: "action", animatable: false }
+    - { name: "Pass thresholds", type: "table", animatable: false }
+  animation: >-
+    None.
+  dependencies: [preview.profiler, preview.export-parity, render.estimate, show.latency-validation, ux.performance-advisor, render.history]
+  implementation: >-
+    A repeatable benchmark that plays each acceptance scene at each preview resolution, records fps, dropped frames,
+    scrub and seek latency, cache hit rate and GPU, CPU and VRAM use, then exports fixed frame ranges to record time
+    per frame. Results are stored with machine, GPU and driver details, compared with thresholds and earlier runs, and
+    callable by external agents and CI.
+  io: >-
+    Writes a report file (JSON and a readable summary) per run.
+  limitations: >-
+    Numbers are per machine and driver and are not a promise for other hardware. Real projector output and sustained
+    show playback are measured separately (show.latency-validation).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Help, "Check this computer on my scenes".
+    defaults: >-
+      Measures every acceptance scene at Half and Full.
+    automation: >-
+      Runs unattended and writes a plain-language summary.
+    usability_check: >-
+      A first-time user runs the check and understands which scene to simplify.
+  acceptance: >-
+    All acceptance scenes: a benchmark report with fps, latency and export time; thresholds fail a deliberately slow
+    scene.
+  status: not-started
+  evidence: []

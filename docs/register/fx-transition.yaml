@@ -1,0 +1,1039 @@
+# Transition effects — Before Effects capability register
+# Sources: S02 effect list + support matrix (Transition rows), S18 Transition effects page, S01 Cycore plugins page (helpx .../list-of-effects/cycore-plugins.html), brief §0.1, §11G, §15, §16. Live pages read 2026-10-01 through a browser session (WebFetch was blocked with HTTP 403). The Cycore pages give one-line summaries only, so CC control lists come from product knowledge.
+# Shared convention (S18): every transition except Iris Wipe has Transition Completion; 0% = layer fully visible, 100% = layer fully transparent, so the layers underneath show through.
+
+- id: fx.transition.scene-transition-placement
+  name: Transition between scenes
+  sources:
+    - ref: brief
+      item: "§11G — transitions; §0.1 — choose an outcome instead of assembling layers"
+      category: Transitions (product requirement)
+      checked: true
+    - ref: S18
+      item: Transition Completion property (shared by all transition effects)
+      category: Transition
+      checked: true
+  artist_can: >-
+    Drop any transition between two scenes or clips and set its length, without stacking layers, adding keyframes or knowing that the outgoing layer must sit on top.
+  projection_example: >-
+    The "water facade" scene dissolves into the "brick rebuild" scene over 2 seconds on the chorus.
+  controls:
+    - { name: "Transition style", type: "enum (any fx.transition.* effect or recipe)", animatable: false }
+    - { name: "Duration", type: "time", animatable: false }
+    - { name: "Easing", type: "enum (linear, ease in/out, custom curve)", animatable: false }
+    - { name: "Direction (reveal / hide)", type: "enum", animatable: false }
+  animation: >-
+    Generates Transition Completion keyframes (0 to 100%) over the overlap. The curve stays editable in the graph editor.
+  dependencies: [proj.composition, proj.layer, anim.keyframe.core, anim.graph-editor, ux.operation-system, ux.recipe-engine]
+  implementation: >-
+    Core operation that creates or adjusts the overlap between the outgoing and incoming layers or precomps, orders them, applies the chosen transition effect to the outgoing layer, and writes Completion keyframes. The transition is tracked as a recipe instance, so trimming, moving or retiming either clip regenerates the keys while keeping manual overrides. Pixel work is done by the chosen effect's pass.
+  io: >-
+    none
+  limitations: >-
+    Two-input transitions (CC Glass Wipe, CC WarpoMatic, Card Wipe back layer) are wired automatically. Exotic layer stacks (adjustment layers between the clips) are shown, not rearranged.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drag a transition thumbnail onto the cut between two scenes, or select both and choose "Transition between".
+    defaults: >-
+      1 s Block Dissolve-style crossfade with ease in/out, centred on the cut.
+    automation: >-
+      Creates the overlap, layer order, effect and keyframes. Adapts the duration to the music's beat grid when audio exists.
+    usability_check: >-
+      A first-time user adds a transition between two scenes in at most 3 actions and under 20 s, then changes its style from the thumbnail library.
+  acceptance: >-
+    Mini scene "scene-to-scene": retiming either clip keeps the transition centred; preview and export match.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.region-sequenced-wipe
+  name: Wipe across the windows (region-sequenced transition)
+  sources:
+    - ref: brief
+      item: "§11G — build transitions that follow installation regions rather than always sweeping across a rectangular frame"
+      category: Transitions (product requirement)
+      checked: true
+    - ref: brief
+      item: "§0.1 — select windows, choose light up one after another, adjust order and delay"
+      category: User experience
+      checked: true
+  artist_can: >-
+    Reveal or hide content region by region (window after window, column after column) in a chosen order, with each region running its own small transition.
+  projection_example: >-
+    The new scene appears window by window from the ground floor upward, each window doing a quick iris-open, 0.1 s apart.
+  controls:
+    - { name: "Regions", type: "region-ref[] or region group", animatable: false }
+    - { name: "Order (left to right, bottom up, along a path, by distance from a point, random, manual)", type: "enum", animatable: false }
+    - { name: "Delay between regions", type: "time", animatable: true }
+    - { name: "Per-region transition", type: "enum (any fx.transition.* effect)", animatable: false }
+    - { name: "Overall progress", type: "percent", animatable: true }
+    - { name: "Random seed", type: "int", animatable: false }
+  animation: >-
+    Overall progress keyframable. Delay is expression- and audio-drivable (regions trigger on beats).
+  dependencies: [map.region, tool.sequence-light-up, ux.recipe-engine, expr.rigs, fx.transition.linear-wipe, fx.transition.iris-wipe, audio.analysis]
+  implementation: >-
+    WGSL pass reading a rasterised region-ID buffer (from map.region bindings) and a storage buffer of per-region (start, duration, local UV frame) entries computed in the core from the order rule and seeded RNG. Each pixel evaluates the selected base transition's coverage function in its region's local UV, with local progress = clamp((P - start)/duration). Temporal: none. Bounds: unchanged. Precision: coverage in f32; region edges anti-aliased from the ID buffer's coverage channel.
+  io: >-
+    Region roles are stored with the show, so the same transition rebinds to another venue's windows.
+  limitations: >-
+    Needs named regions (brief §15). Pixels outside every region follow a chosen fallback (stay, hide, or a global wipe).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select windows (or a window group) → "Wipe across the windows", then choose the order with an arrow on the canvas.
+    defaults: >-
+      Bottom-up then left-to-right, 0.08 s delay, Linear Wipe per window, total length fitted to 2 s.
+    automation: >-
+      Proposes repeated-region groups. Computes order from region centroids. Fits the delay so the whole sequence matches the requested duration or beat count.
+    usability_check: >-
+      A first-time user reveals a scene window-by-window in at most 3 actions and under 45 s, then reverses the order with one action.
+  acceptance: >-
+    AS-1 and AS-7: the transition rebinds to a second venue with a different window count and keeps order semantics.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.path-following-reveal
+  name: Reveal along a path (roofline reveal)
+  sources:
+    - ref: brief
+      item: "§11G — transitions that follow installation regions; §19 — follow architectural contours"
+      category: Transitions (product requirement)
+      checked: true
+  artist_can: >-
+    Reveal content as if it grows along a drawn or traced path (roofline, arch, cornice), with a soft or glowing leading edge.
+  projection_example: >-
+    The next scene floods in following the roofline from the left gable to the right, the reveal edge glowing as it travels.
+  controls:
+    - { name: "Path", type: "path-ref (shape path, mask or traced edge)", animatable: false }
+    - { name: "Progress", type: "percent", animatable: true }
+    - { name: "Reveal width (distance from path)", type: "float", animatable: true }
+    - { name: "Edge softness", type: "float", animatable: true }
+    - { name: "Leading-edge glow", type: "float + color", animatable: true }
+    - { name: "Direction (start from either end, from middle outward)", type: "enum", animatable: false }
+  animation: >-
+    Progress keyframable at constant speed along the path (arc-length parameterised); expression- and audio-drivable.
+  dependencies: [shape.path, tool.edge-trace, map.region, anim.keyframe.core, fx.blur-sharpen.gaussian-blur]
+  implementation: >-
+    The core flattens the path (CanvasKit) and computes arc length. A WGSL jump-flood pass builds a field storing, for each pixel, the distance to the path and the arc-length parameter of the nearest point; it is cached until the path changes. Coverage = smoothstep(progress·L - s) × smoothstep(width - d), and the glow reuses the Gaussian pass. Temporal: none. Bounds: unchanged (glow expands by its radius). Precision: field in rg32float to keep arc length exact on long paths.
+  io: >-
+    none
+  limitations: >-
+    Self-intersecting paths reveal by nearest segment, which can jump at crossings; the user can split the path. Reveal width is in composition pixels unless a venue-space mode is used (see fx.transition.venue-space-wipe).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Click a roofline (or any traced edge) → "Reveal along this edge", then drag to set the direction.
+    defaults: >-
+      2 s, width = 15% of the region height, soft edge, subtle glow in the scene's accent colour.
+    automation: >-
+      Uses the traced edge from tool.edge-trace. Sets constant-speed timing. Fits the width to the adjacent region.
+    usability_check: >-
+      A first-time user reveals a scene along the roofline in at most 3 actions and under 40 s without drawing a mask.
+  acceptance: >-
+    AS-1 mini scene "roof-reveal": the reveal front moves at constant speed (arc-length error < 1%); preview and export match.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.venue-space-wipe
+  name: Wipe across the whole building (venue-space transitions)
+  sources:
+    - ref: brief
+      item: "§11G — transitions follow installation regions; §16 — installation-wide coordinates across projectors"
+      category: Transitions (product requirement)
+      checked: true
+  artist_can: >-
+    Run any geometric wipe (linear, radial, iris, blinds) in the building's own space, so it sweeps evenly across several surfaces, angled walls and projectors instead of across one flat video frame.
+  projection_example: >-
+    A horizontal wipe travels at constant real-world speed across the front and the angled side wall, crossing the projector overlap without a jump.
+  controls:
+    - { name: "Coordinate space (layer, composition, region UV, venue world)", type: "enum", animatable: false }
+    - { name: "Wipe origin / direction in venue", type: "point3d + vector", animatable: true }
+  animation: >-
+    Origin and direction keyframable; the base transition's own controls stay animatable.
+  dependencies: [map.venue, map.surface-2d, map.model-3d, out.projector-output, fx.transition.linear-wipe, fx.transition.radial-wipe, fx.transition.iris-wipe, fx.transition.venetian-blinds]
+  implementation: >-
+    Wipe coverage functions take a coordinate input instead of hard-coded frame UV. In venue mode, the compositor supplies a position buffer (world position per content texel, from the UV→surface mapping or a 3D render pass), and the coverage is evaluated on that. The same evaluation therefore happens identically in master content and in each projector's output. Temporal: none. Bounds: unchanged. Precision: positions in rgba32float.
+  io: >-
+    Works with both the master content export and per-projector export; no output metadata.
+  limitations: >-
+    Needs venue geometry. With only 2D surfaces, "venue" falls back to surface-atlas space, and real-world speed is approximate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Any wipe's More controls → "Sweep across: this layer / the whole building". "Whole building" is preselected when the content spans several surfaces.
+    defaults: >-
+      Venue space when venue geometry exists; otherwise composition space.
+    automation: >-
+      Detects multi-surface content and switches space automatically. Draws the wipe direction as an arrow on the venue preview.
+    usability_check: >-
+      In a two-surface, two-projector scene, a first-time user makes a wipe cross both surfaces evenly without changing any advanced setting, judged on the venue preview.
+  acceptance: >-
+    AS-5 mini scene "cross-overlap-wipe": the wipe front is continuous across the projector overlap in exported projector files.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.block-dissolve
+  name: Block Dissolve
+  sources:
+    - ref: S02
+      item: Block Dissolve
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: Block Dissolve
+      category: Transition
+      checked: true
+  artist_can: >-
+    Make a layer disappear (or appear) in random rectangular blocks, sharp or soft-edged.
+  projection_example: >-
+    The facade "dissolves" into brick-sized blocks that blink out at random, revealing the new scene.
+  controls:
+    - { name: "Transition Completion", type: "percent", animatable: true }
+    - { name: "Block Width", type: "float", animatable: true }
+    - { name: "Block Height", type: "float", animatable: true }
+    - { name: "Feather", type: "float", animatable: true }
+    - { name: "Soft Edges", type: "bool", animatable: false }
+    - { name: "Random seed (product addition)", type: "int", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.transition.scene-transition-placement]
+  implementation: >-
+    WGSL coverage pass. Each block's threshold is a stateless seeded hash of the block index; coverage = smoothstep around (threshold - completion) with feather, and analytic anti-aliasing at block edges when Soft Edges is on. Output is input × coverage (premultiplied). Temporal: none. Bounds: unchanged. Precision: coverage in f32.
+  io: >-
+    none
+  limitations: >-
+    After Effects positions blocks at pixel precision in Draft quality. Before Effects always uses sub-pixel positioning, so Draft previews may look smoother than in After Effects.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Break into blocks" transition thumbnail.
+    defaults: >-
+      Block size fitted to the brick or panel size of the selected region, Soft Edges on.
+    automation: >-
+      Estimates the brick or block size from the region's traced pattern when available.
+    usability_check: >-
+      A first-time user applies a blocky dissolve between scenes in at most 3 actions and under 20 s.
+  acceptance: >-
+    Mini scene "block-out": the same seed gives identical block order after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.card-wipe
+  name: Card Wipe
+  sources:
+    - ref: S02
+      item: Card Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S18
+      item: Card Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Split the layer into a grid of cards that flip in 3D (in order, along a gradient, or at random) to show another image on their backs.
+  projection_example: >-
+    The whole wall flips brick-by-brick from the old scene to the new one, with slight random wobble, lit from the left.
+  controls:
+    - { name: "Transition Completion / Transition Width", type: "percent", animatable: true }
+    - { name: "Back Layer", type: "layer-ref", animatable: false }
+    - { name: "Rows & Columns (Independent / Columns Follows Rows), Rows, Columns", type: "enum + int", animatable: true }
+    - { name: "Card Scale", type: "float", animatable: true }
+    - { name: "Flip Axis / Flip Direction / Flip Order", type: "enum", animatable: false }
+    - { name: "Gradient Layer", type: "layer-ref", animatable: false }
+    - { name: "Timing Randomness / Random Seed", type: "float + int", animatable: true }
+    - { name: "Camera System (Camera Position, Corner Pins, Comp Camera)", type: "enum", animatable: false }
+    - { name: "Camera Position (X/Y/Z Rotation, X/Y/Z Position, Focal Length, Transform Order)", type: "group", animatable: true }
+    - { name: "Corner Pins (4 corners, Auto Focal Length, Focal Length)", type: "group", animatable: true }
+    - { name: "Lighting and Material (light type, intensity, color, position, depth, ambient, diffuse, specular, highlight sharpness)", type: "group", animatable: true }
+    - { name: "Position Jitter / Rotation Jitter (amount and speed per axis)", type: "group", animatable: true }
+  animation: >-
+    All numeric controls keyframable and expression-linkable. Jitter is a stateless function of time and seed.
+  dependencies: [3d.camera, 3d.light, proj.layer, fx.transition.scene-transition-placement, map.region, fx.simulation.card-dance]
+  implementation: >-
+    Instanced card quads (up to 1000 × 1000, using vertex pulling) are rasterised in a WGSL pass with a depth buffer, or as a three.js instanced mesh when the comp camera is used. Each card's flip time comes from the flip order or gradient sample plus seeded randomness. Front faces sample the layer and back faces sample the Back Layer, with per-card Phong lighting. Temporal: none. Bounds: expands to the composition frame, because rotating cards leave the layer bounds. Precision: rgba16float, with MSAA on card edges.
+  io: >-
+    none
+  limitations: >-
+    After Effects is 8-bpc only; Before Effects renders in float. Rows and columns are uniform in After Effects; the region-aligned grid (cards following real bricks or windows) is a product addition and needs traced regions.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Flip into tiles" transition thumbnail; More controls exposes rows, order and wobble.
+    defaults: >-
+      Grid matched to the region's brick or window layout if known, otherwise 12 × 8. Flip order left to right, slight jitter, comp camera.
+    automation: >-
+      Sets the back layer to the incoming scene and matches the grid to traced regions.
+    usability_check: >-
+      A first-time user makes the wall flip into the next scene in at most 3 actions and under 30 s.
+  acceptance: >-
+    AS-3 support scene: card flip between two wall states; reopen and seek give identical frames.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-glass-wipe
+  name: CC Glass Wipe
+  sources:
+    - ref: S02
+      item: CC Glass Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Glass Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Melt one scene into another through a refractive, glassy edge that follows a gradient.
+  projection_example: >-
+    The brick wall appears to dissolve like melting glass into the underwater scene.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Layer to Reveal", type: "layer-ref", animatable: false }
+    - { name: "Gradient Layer", type: "layer-ref", animatable: false }
+    - { name: "Softness", type: "float", animatable: true }
+    - { name: "Displacement Amount", type: "float", animatable: true }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.gradient-wipe, fx.distort.displacement-map, fx.transition.scene-transition-placement]
+  implementation: >-
+    Gradient-threshold coverage (shared with Gradient Wipe) plus a refraction offset along the gradient's normal near the transition band, sampled with bicubic filtering from both layers. Temporal: reads both layers at t. Bounds: unchanged (displacement samples are clamped). Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Gradient-driven, so a flat gradient gives a hard edge; the recipe supplies a soft noise gradient by default.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Melt like glass" transition thumbnail.
+    defaults: >-
+      Gradient = soft fractal noise, Softness 20, Displacement 30.
+    automation: >-
+      Generates the gradient layer and wires Layer to Reveal to the incoming scene.
+    usability_check: >-
+      A first-time user applies it between two scenes in at most 3 actions with no gradient layer to create.
+  acceptance: >-
+    Mini scene "glass-melt": the result matches a reference within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-grid-wipe
+  name: CC Grid Wipe
+  sources:
+    - ref: S02
+      item: CC Grid Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Grid Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Uncover the next scene through a grid of tiles that each open in a door, radial or rectangular pattern.
+  projection_example: >-
+    A grid of small square "shutters" opens across a warehouse wall to reveal the projected interior.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Border", type: "float", animatable: true }
+    - { name: "Tiles", type: "float", animatable: true }
+    - { name: "Shape (Doors, Radial, Rectangular)", type: "enum", animatable: false }
+    - { name: "Reverse Transition", type: "bool", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.scene-transition-placement, fx.transition.region-sequenced-wipe]
+  implementation: >-
+    WGSL coverage pass. Each tile computes local coordinates relative to the rotated grid and evaluates its shape's signed distance against a completion offset by distance from Center. Anti-aliased with fwidth. Temporal: none. Bounds: unchanged. Precision: coverage in f32.
+  io: >-
+    none
+  limitations: >-
+    The grid is rectangular in layer space; for real window grids, use fx.transition.region-sequenced-wipe.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Grid reveal" transition thumbnail.
+    defaults: >-
+      Tiles 10, Rectangular, centred on the selected region.
+    automation: >-
+      Centres the wipe on the selected region.
+    usability_check: >-
+      A first-time user applies a grid reveal in at most 3 actions and under 20 s.
+  acceptance: >-
+    Mini scene "grid-reveal": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-image-wipe
+  name: CC Image Wipe
+  sources:
+    - ref: S02
+      item: CC Image Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Image Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Use any image or video's brightness (or another channel) as the pattern that wipes one scene away.
+  projection_example: >-
+    The facade disappears following the pattern of an ink-drop video, so the new scene blooms out of dark blotches.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Border Softness / Auto Softness", type: "float + bool", animatable: true }
+    - { name: "Gradient Layer", type: "layer-ref", animatable: false }
+    - { name: "Gradient Property (luminance, RGB channel, alpha, saturation, hue)", type: "enum", animatable: false }
+    - { name: "Gradient Blur", type: "float", animatable: true }
+    - { name: "Inverse Gradient", type: "bool", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.gradient-wipe, fx.blur-sharpen.gaussian-blur, fx.transition.scene-transition-placement]
+  implementation: >-
+    Shares the Gradient Wipe pass with extra options: channel selection, gradient pre-blur (Gaussian pass) and auto-softness that widens the band with completion speed. Temporal: reads the gradient layer at t. Bounds: unchanged. Precision: gradient read in f32 to avoid banded wipe fronts.
+  io: >-
+    none
+  limitations: >-
+    Functionally a superset of Gradient Wipe; kept as its own entry because of its extra controls.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Reveal with a pattern" recipe → choose an image or video as the pattern.
+    defaults: >-
+      Luminance property, light pre-blur, Auto Softness on.
+    automation: >-
+      Offers a library of pattern videos and fits them to the layer.
+    usability_check: >-
+      A first-time user wipes a scene using a chosen pattern clip in at most 3 actions.
+  acceptance: >-
+    Mini scene "ink-wipe": no banding on the 16-bit gradient in 10-bit export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-jaws
+  name: CC Jaws
+  sources:
+    - ref: S02
+      item: CC Jaws
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Jaws
+      category: Transition
+      checked: true
+  artist_can: >-
+    Split the layer along a toothed seam (spikes, robot jaw, blocks or waves) that opens like a mouth to reveal what is behind.
+  projection_example: >-
+    A doorway's projected surface "bites" open with jagged teeth to reveal a monster scene inside.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Height", type: "float", animatable: true }
+    - { name: "Width", type: "float", animatable: true }
+    - { name: "Shape (Spikes, RoboJaw, Block, Waves)", type: "enum", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.scene-transition-placement]
+  implementation: >-
+    WGSL pass. A periodic tooth profile along the seam axis defines two half-planes that translate apart with completion; coverage comes from the signed distance to each toothed edge, anti-aliased. Temporal: none. Bounds: unchanged. Precision: coverage in f32.
+  io: >-
+    none
+  limitations: >-
+    Stylised look only; for a physically opening wall use 3D extrusion and fracture tools.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Bite open" transition thumbnail.
+    defaults: >-
+      Spikes, horizontal seam through the region centre, teeth scaled to 10% of the region height.
+    automation: >-
+      Aligns the seam to the selected region's centre line.
+    usability_check: >-
+      A first-time user makes a door bite open in at most 3 actions.
+  acceptance: >-
+    Mini scene "door-jaws": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-light-wipe
+  name: CC Light Wipe
+  sources:
+    - ref: S02
+      item: CC Light Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Light Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Wipe away a scene with a bright, glowing edge shaped like opening doors, a circle or a square.
+  projection_example: >-
+    A burst of white light opens from the centre of the church rose window and wipes the facade into the next scene.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Intensity", type: "float", animatable: true }
+    - { name: "Shape (Doors, Round, Square)", type: "enum", animatable: false }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Color from Source / Color", type: "bool + color", animatable: true }
+    - { name: "Reverse Transition", type: "bool", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.iris-wipe, fx.stylize.glow, fx.transition.scene-transition-placement]
+  implementation: >-
+    Shape coverage (SDF for doors, circle or square) with an emissive band. Band brightness = Intensity, coloured by the chosen colour or by the source sampled at the edge, then blurred with the pyramid blur and added in linear light. Temporal: none. Bounds: expands by the glow radius. Precision: rgba16float, so values above 1.0 keep their energy.
+  io: >-
+    none
+  limitations: >-
+    Very bright edges clip on SDR projectors; the output transform's soft clip applies.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Reveal with light" transition thumbnail.
+    defaults: >-
+      Round, centred on the selected region, warm white edge.
+    automation: >-
+      Centres on the selected region and picks the edge colour from the show palette.
+    usability_check: >-
+      A first-time user applies a light reveal centred on a chosen window in at most 3 actions.
+  acceptance: >-
+    Mini scene "rose-burst": no clipped banding in 10-bit export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-line-sweep
+  name: CC Line Sweep
+  sources:
+    - ref: S02
+      item: CC Line Sweep
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Line Sweep
+      category: Transition
+      checked: true
+  artist_can: >-
+    Reveal the next scene through a sweep of slanted stripes moving across the layer.
+  projection_example: >-
+    Diagonal stripes sweep across a stage backdrop, aligned to the slope of the roof, to switch scenes.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Thickness", type: "float", animatable: true }
+    - { name: "Slant", type: "float", animatable: true }
+    - { name: "Flip Direction", type: "bool", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.venetian-blinds, fx.transition.scene-transition-placement]
+  implementation: >-
+    Stripe coverage along a rotated axis. Each stripe's local threshold is offset by its position along the sweep, giving a staggered, slanted reveal. Anti-aliased. Temporal: none. Bounds: unchanged. Precision: coverage in f32.
+  io: >-
+    none
+  limitations: >-
+    Close to Venetian Blinds with a stagger; shares its pass.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Blinds" transition → style "Sweeping stripes".
+    defaults: >-
+      Direction aligned to the dominant edge of the selected region, thickness 40 px.
+    automation: >-
+      Aligns the stripe angle to a selected roofline or edge.
+    usability_check: >-
+      A first-time user picks the sweeping-stripes style from the Blinds thumbnail in at most 3 actions.
+  acceptance: >-
+    Mini scene "stripe-sweep": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-radial-scalewipe
+  name: CC Radial ScaleWipe
+  sources:
+    - ref: S02
+      item: CC Radial ScaleWipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Radial ScaleWipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Punch an expanding hole in the layer whose edge pixels are stretched outward radially, giving a zooming "warp hole" reveal.
+  projection_example: >-
+    A hole tears open from the clock face and the facade image streaks outward around it to reveal a starfield.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Reverse Transition", type: "bool", animatable: false }
+  animation: >-
+    Completion and Center keyframable and expression-linkable.
+  dependencies: [fx.transition.iris-wipe, fx.transition.scene-transition-placement]
+  implementation: >-
+    Polar remap pass. Pixels at radius r outside the hole sample the source at a compressed radius, so the hole edge streaks outward; inside the hole, coverage is zero. Bicubic sampling with radial anti-aliasing. Temporal: none. Bounds: unchanged. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Circular in layer space; elliptical regions need the region-aligned option (local UV from fx.transition.region-sequenced-wipe).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Warp hole" transition thumbnail.
+    defaults: >-
+      Centred on the selected region.
+    automation: >-
+      Centres on the selected region.
+    usability_check: >-
+      A first-time user opens a warp hole on a chosen feature in at most 3 actions.
+  acceptance: >-
+    Mini scene "clock-hole": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-scale-wipe
+  name: CC Scale Wipe
+  sources:
+    - ref: S02
+      item: CC Scale Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Scale Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Stretch the layer's pixels from a dividing line out in one direction, so the image smears away like taffy.
+  projection_example: >-
+    The facade image stretches upward off the top of the building as if pulled into the sky.
+  controls:
+    - { name: "Stretch", type: "float", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Direction", type: "angle", animatable: true }
+  animation: >-
+    All controls keyframable and expression-linkable; Stretch is the animated "completion".
+  dependencies: [fx.transition.scene-transition-placement, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    1D remap pass along Direction. Beyond the dividing line, samples come from a compressed coordinate (pixels at the line are stretched out by Stretch). Bicubic filtering; edge pixels are repeated. Temporal: none. Bounds: expands along Direction to the composition frame. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    No Completion property; the scene-transition helper maps completion to Stretch.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Stretch away" transition thumbnail.
+    defaults: >-
+      Upward from the region's top edge.
+    automation: >-
+      Maps the scene-transition progress to Stretch.
+    usability_check: >-
+      A first-time user applies "Stretch away" in at most 3 actions without touching Stretch values.
+  acceptance: >-
+    Mini scene "pull-up": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-twister
+  name: CC Twister
+  sources:
+    - ref: S02
+      item: CC Twister
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC Twister
+      category: Transition
+      checked: true
+  artist_can: >-
+    Twist the layer like a ribbon around an axis so its back side, another layer, swings into view.
+  projection_example: >-
+    A column's projected surface twists like a ribbon to reveal a new texture.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Backside", type: "layer-ref", animatable: false }
+    - { name: "Shading", type: "bool", animatable: false }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Axis", type: "angle", animatable: true }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.scene-transition-placement, map.region]
+  implementation: >-
+    Per-scanline ribbon model. Along the axis, each slice rotates by an angle that ramps with completion and distance from Center; projection is computed analytically per row, and front or back is chosen by the sign of the normal. Shading uses a Lambert term. Temporal: none. Bounds: unchanged (the ribbon stays within its width). Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Stylised 2.5D only.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Twist" transition thumbnail.
+    defaults: >-
+      Axis along the selected region's long side, Shading on.
+    automation: >-
+      Aligns the axis to columns and other tall regions.
+    usability_check: >-
+      A first-time user twists a column into a new texture in at most 3 actions.
+  acceptance: >-
+    Mini scene "column-twist": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.cc-warpomatic
+  name: CC WarpoMatic
+  sources:
+    - ref: S02
+      item: CC WarpoMatic
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: CC WarpoMatic
+      category: Transition
+      checked: true
+  artist_can: >-
+    Warp and melt one image into another, driven by brightness or contrast differences between them, like a liquid morph.
+  projection_example: >-
+    A stone facade melts and flows into a portrait of the building's architect.
+  controls:
+    - { name: "Completion", type: "percent", animatable: true }
+    - { name: "Layer to Reveal", type: "layer-ref", animatable: false }
+    - { name: "Reactor (Brightness, Contrast Differences, Brightness Differences, Local Differences)", type: "enum", animatable: false }
+    - { name: "Smoothness", type: "float", animatable: true }
+    - { name: "Warp Amount", type: "float", animatable: true }
+    - { name: "Warp Direction (Joint, Opposing, Twisting)", type: "enum", animatable: false }
+    - { name: "Blend Span", type: "float", animatable: true }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.distort.displacement-map, fx.blur-sharpen.gaussian-blur, fx.transition.scene-transition-placement]
+  implementation: >-
+    Builds a reactor map from both layers (luma, contrast or local difference), smooths it with the Gaussian pass, and derives a displacement field from its gradient. Both layers are warped (jointly, opposing or twisting) and cross-blended over Blend Span as completion advances. Temporal: reads both layers at t. Bounds: union of both layers. Precision: rgba16float; gradients in f32.
+  io: >-
+    none
+  limitations: >-
+    Not a true feature-matched morph; landmark morphing needs track or puppet tools.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects or CC transition clone not needed between scenes now. Linear, radial, iris, gradient, block dissolve, venetian blinds and all region, venue and path transitions stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Melt into" transition thumbnail.
+    defaults: >-
+      Reactor = Local Differences, Smoothness 20, Joint direction.
+    automation: >-
+      Wires Layer to Reveal to the incoming scene.
+    usability_check: >-
+      A first-time user melts one scene into the next in at most 3 actions.
+  acceptance: >-
+    Mini scene "facade-melt": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.gradient-wipe
+  name: Gradient Wipe
+  sources:
+    - ref: S02
+      item: Gradient Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S18
+      item: Gradient Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Make the layer vanish in the order set by another layer's brightness (dark first, light last), so any gradient, texture or video becomes the shape of the wipe.
+  projection_example: >-
+    The old scene burns away following a cloudy noise gradient, with soft smoky edges.
+  controls:
+    - { name: "Transition Completion", type: "percent", animatable: true }
+    - { name: "Transition Softness", type: "percent", animatable: true }
+    - { name: "Gradient Layer", type: "layer-ref", animatable: false }
+    - { name: "Gradient Placement (Tile, Center, Stretch To Fit)", type: "enum", animatable: false }
+    - { name: "Invert Gradient", type: "bool", animatable: false }
+  animation: >-
+    Completion and Softness keyframable and expression-linkable; the gradient layer may itself animate.
+  dependencies: [proj.layer, fx.generate.gradient-ramp, fx.noise-grain.fractal-noise, fx.transition.scene-transition-placement, map.region]
+  implementation: >-
+    WGSL pass: coverage = 1 - smoothstep(g - s, g + s, completion·(1 + 2s) - s), where g is the gradient luminance read in f32 with the chosen placement. Temporal: reads the gradient layer at t. Bounds: unchanged. Precision: f32 gradient sampling avoids 8-bit stepping in slow wipes.
+  io: >-
+    none
+  limitations: >-
+    The gradient layer must be in the same composition (S18). Before Effects also accepts generated gradients and region distance fields without adding a layer.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Reveal with a pattern" recipe (pattern = clouds, ripples, distance from a region, or your own image).
+    defaults: >-
+      Fractal-noise gradient, Softness 15%.
+    automation: >-
+      Generates the gradient source, including "distance from selected region" fields, without a manual layer.
+    usability_check: >-
+      A first-time user wipes a scene away in a cloudy pattern in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "smoke-wipe": no visible banding over an 8-second wipe in 10-bit export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.iris-wipe
+  name: Iris Wipe
+  sources:
+    - ref: S02
+      item: Iris Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: Iris Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Open or close a star or polygon-shaped iris (6 to 32 points) to reveal the layer underneath.
+  projection_example: >-
+    A round window opens like a camera iris to reveal the scene inside the tower.
+  controls:
+    - { name: "Iris Center", type: "point2d", animatable: true }
+    - { name: "Iris Points", type: "int (6-32)", animatable: true }
+    - { name: "Outer Radius", type: "float", animatable: true }
+    - { name: "Use Inner Radius / Inner Radius", type: "bool + float", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Feather", type: "float", animatable: true }
+  animation: >-
+    Animated through the radii, since Iris Wipe has no Transition Completion (S18). The scene-transition helper maps progress onto the radii.
+  dependencies: [fx.transition.scene-transition-placement, map.region]
+  implementation: >-
+    Analytic star or polygon SDF (points, inner and outer radius, rotation) with feather and fwidth anti-aliasing. Coverage multiplies the input. Temporal: none. Bounds: unchanged. Precision: f32.
+  io: >-
+    none
+  limitations: >-
+    Circular and star shapes only; arbitrary iris shapes come from masks or the region-sequenced wipe.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Iris open" transition thumbnail, or "Open this window" on a selected region.
+    defaults: >-
+      Centred on the selected region, radius animated from 0 to the region's circumradius, 32 points (round).
+    automation: >-
+      Computes the radius needed to fully cover the region or layer.
+    usability_check: >-
+      A first-time user opens a scene from a chosen window in at most 3 actions and under 20 s.
+  acceptance: >-
+    Mini scene "tower-iris": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.linear-wipe
+  name: Linear Wipe
+  sources:
+    - ref: S02
+      item: Linear Wipe
+      category: Transition
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: Linear Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Wipe a layer away along a straight edge in any direction, hard or feathered.
+  projection_example: >-
+    A soft-edged horizontal wipe rises from the ground floor to the roof to switch the facade to night.
+  controls:
+    - { name: "Transition Completion", type: "percent", animatable: true }
+    - { name: "Wipe Angle", type: "angle", animatable: true }
+    - { name: "Feather", type: "float", animatable: true }
+  animation: >-
+    All controls keyframable, expression-linkable and audio-drivable.
+  dependencies: [fx.transition.scene-transition-placement, anim.keyframe.core]
+  implementation: >-
+    WGSL pass: the signed distance to a line through the layer bounds at Wipe Angle, offset by completion × the projected extent. Feather via smoothstep; anti-aliasing via fwidth. Temporal: none. Bounds: unchanged. Precision: f32 coverage. Also the base coverage function reused by the region-sequenced and venue-space wipes.
+  io: >-
+    none
+  limitations: >-
+    Sweeps the layer frame by default; venue-wide sweeps use fx.transition.venue-space-wipe.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Wipe across" transition thumbnail; drag the arrow on the canvas to set the direction.
+    defaults: >-
+      Left to right, 10% feather.
+    automation: >-
+      Computes the travel so 0 to 100% exactly covers the layer at any angle.
+    usability_check: >-
+      A first-time user applies and re-aims a wipe in at most 3 actions and under 15 s.
+  acceptance: >-
+    Mini scene "night-rise": preview equals export at every frame.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.radial-wipe
+  name: Radial Wipe
+  sources:
+    - ref: S02
+      item: Radial Wipe
+      category: Transition
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: Radial Wipe
+      category: Transition
+      checked: true
+  artist_can: >-
+    Reveal the layer underneath with a sweep that circles around a point like a clock hand.
+  projection_example: >-
+    A clock-face sweep around the tower clock switches the scene at midnight.
+  controls:
+    - { name: "Transition Completion", type: "percent", animatable: true }
+    - { name: "Start Angle", type: "angle", animatable: true }
+    - { name: "Wipe Center", type: "point2d", animatable: true }
+    - { name: "Wipe (Clockwise, Counterclockwise, Both)", type: "enum", animatable: false }
+    - { name: "Feather", type: "float", animatable: true }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.transition.scene-transition-placement, map.region]
+  implementation: >-
+    WGSL pass comparing atan2 angle about the centre (relative to Start Angle and direction) with completion × 360°. Feather is measured in arc length at each radius; the singularity at the centre is handled analytically. Temporal: none. Bounds: unchanged. Precision: f32.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Clock wipe" transition thumbnail.
+    defaults: >-
+      Centred on the selected region, clockwise from 12 o'clock.
+    automation: >-
+      Centres on a selected round feature (clock, rose window).
+    usability_check: >-
+      A first-time user applies a clock wipe around a chosen feature in at most 3 actions.
+  acceptance: >-
+    Mini scene "clock-sweep": preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.transition.venetian-blinds
+  name: Venetian Blinds
+  sources:
+    - ref: S02
+      item: Venetian Blinds
+      category: Transition
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S18
+      item: Venetian Blinds
+      category: Transition
+      checked: true
+  artist_can: >-
+    Reveal the layer underneath through strips of a chosen direction and width, like blinds closing.
+  projection_example: >-
+    Horizontal blinds aligned to each storey's floor lines close over the facade.
+  controls:
+    - { name: "Transition Completion", type: "percent", animatable: true }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Width", type: "float", animatable: true }
+    - { name: "Feather", type: "float", animatable: true }
+  animation: >-
+    All controls keyframable and expression-linkable.
+  dependencies: [fx.transition.scene-transition-placement, map.region]
+  implementation: >-
+    WGSL pass: the fractional position across each strip (rotated by Direction) is compared with completion, with feather and fwidth anti-aliasing. Sub-pixel strip positioning always (After Effects only does this at Best quality). Temporal: none. Bounds: unchanged. Precision: f32.
+  io: >-
+    none
+  limitations: >-
+    Strips are uniform in layer space; strips that follow storeys use region-sequenced mode.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Blinds" transition thumbnail.
+    defaults: >-
+      Horizontal strips; width = storey height when floor lines are traced, otherwise 40 px.
+    automation: >-
+      Matches strip width to traced storey spacing.
+    usability_check: >-
+      A first-time user applies blinds that line up with the storeys in at most 3 actions.
+  acceptance: >-
+    Mini scene "storey-blinds": preview equals export.
+  status: not-started
+  evidence: []

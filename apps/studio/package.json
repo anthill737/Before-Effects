@@ -1,0 +1,34 @@
+{
+  "name": "@be/studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Before Effects desktop app (Electron)",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "spike": "electron-vite build && electron . --spike",
+    "uitest": "electron-vite build && electron . --ui-test",
+    "package": "electron-vite build && node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@be/aep": "workspace:*",
+    "@be/core": "workspace:*",
+    "@be/engine": "workspace:*",
+    "@be/media": "workspace:*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "~5.2.0",
+    "electron": "^44.5.1",
+    "electron-vite": "^5.0.0",
+    "vite": "^7.3.6"
+  }
+}

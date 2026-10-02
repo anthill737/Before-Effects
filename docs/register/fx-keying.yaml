@@ -1,0 +1,703 @@
+# Keying — Before Effects capability register
+# Sources: S02 effect list + support matrix (Keying table, checked live 2026-10-01); S37 Keying effects (checked live 2026-10-01); S21 Roto Brush and Refine Matte; brief §0, §6, §11J, §12, §22 (AS-4). Color Key, Luma Key and Spill Suppressor are listed under Obsolete in S02 and live in fx-obsolete.yaml.
+
+- id: fx.keying.advanced-spill-suppressor
+  name: Advanced Spill Suppressor
+  sources:
+    - ref: S02
+      item: Advanced Spill Suppressor
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Advanced Spill Suppressor effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Remove the green or blue colour cast that a screen reflects onto a keyed subject, either automatically or with fine control over which hues are treated as spill.
+  projection_example: >-
+    Remove green light bounced onto a performer's shoulders so they look natural against warm stonework.
+  controls:
+    - { name: Method (Standard / Ultra), type: enum, animatable: true }
+    - { name: Suppression, type: number, animatable: true }
+    - { name: Key Color, type: color, animatable: true }
+    - { name: Tolerance, type: number, animatable: true }
+    - { name: Desaturate, type: number, animatable: true }
+    - { name: Spill Range, type: number, animatable: true }
+    - { name: Spill Color Correction, type: number, animatable: true }
+    - { name: Luma Correction, type: number, animatable: true }
+  animation: >-
+    All values keyframable and expression-linkable; Key Color can be linked by expression to the upstream key's screen colour (the S37 preset does this).
+  dependencies: [proj.effect-stack, color.management, fx.keying.keylight-1-2]
+  implementation: >-
+    WGSL pass on straight colour in scene-linear. Standard mode detects the dominant screen hue from a GPU histogram of low-alpha pixels and clamps the key channel towards the mean of the other two channels. Ultra mode adds a hue-distance tolerance and range, partial desaturation, and luma restoration so suppressed areas keep their brightness.
+  io: >-
+    none
+  limitations: >-
+    Does not create transparency. Aggressive suppression can neutralise genuinely green costume elements, so it can be restricted with an effect mask.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Remove the green tint" switch inside the "Remove the green background" recipe; More controls exposes Method and Suppression.
+    defaults: >-
+      On after any screen key, Standard method, and Key Color linked to the key's screen colour.
+    automation: >-
+      Detects screen colour automatically and turns itself on only when residual spill is measured on edge pixels.
+    usability_check: >-
+      A first-time user who sees a green edge on a keyed performer removes it in two actions or fewer and under 20 s.
+  acceptance: >-
+    AS-4 and mini scene "spill-check": measured mean key-hue excess on edge pixels drops below threshold; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.cc-simple-wire-removal
+  name: CC Simple Wire Removal
+  sources:
+    - ref: S02
+      item: CC Simple Wire Removal
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: CC Simple Wire Removal (Cycore plugins page)
+      category: Keying
+      checked: false
+  artist_can: >-
+    Erase a thin straight wire, rod or rig by drawing a line over it; the app fills it from the pixels beside it or from another frame.
+  projection_example: >-
+    Erase the suspension wire of an aerial performer clip before compositing them flying across the facade.
+  controls:
+    - { name: Point A / Point B, type: point2d, animatable: true }
+    - { name: Removal Style (Fade / Frame Offset / Displace / Displace Horizontal), type: enum, animatable: true }
+    - { name: Thickness, type: number, animatable: true }
+    - { name: Slope, type: number, animatable: true }
+    - { name: Mirror Blend, type: number, animatable: true }
+    - { name: Frame Offset, type: integer, animatable: true }
+  animation: >-
+    Both endpoints keyframable and attachable to track.point data so the line follows a moving wire.
+  dependencies: [proj.effect-stack, anim.keyframe.core, track.point, track.content-aware-fill]
+  implementation: >-
+    WGSL pass over a capsule between A and B. Fade interpolates across the line from both sides; Displace samples perpendicular offsets with mirror blend; Frame Offset samples another frame of the same source. Frame Offset declares a temporal dependency so random-access render stays correct.
+  io: >-
+    none
+  limitations: >-
+    Only for straight, thin wires. Curved rigs or large objects go through track.content-aware-fill.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Erase a wire" tool: drag a line along the wire on the canvas.
+    defaults: >-
+      Fade style, thickness auto-estimated from the contrast profile across the line.
+    automation: >-
+      Offers to track both endpoints automatically across the clip.
+    usability_check: >-
+      A first-time user removes a visible wire from the supplied clip in under 60 s, with no wire visible at 100% zoom on playback.
+  acceptance: >-
+    Mini scene "wire-erase": supplied wire clip cleaned over its full length; scrubbing to random frames gives identical output.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.color-difference-key
+  name: Color Difference Key
+  sources:
+    - ref: S02
+      item: Color Difference Key
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Color Difference Key effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Key a blue or green screen by combining two partial mattes, which keeps smoke, shadows and glass semi-transparent.
+  projection_example: >-
+    Key a smoke plume shot on blue screen so it drifts across a window without losing its wispy transparency.
+  controls:
+    - { name: Key Color, type: color, animatable: true }
+    - { name: Color Matching Accuracy (Faster / More Accurate), type: enum, animatable: false }
+    - { name: Partial A levels (In Black / In White / Gamma / Out Black / Out White), type: group, animatable: true }
+    - { name: Partial B levels (In Black / In White / Gamma / Out Black / Out White), type: group, animatable: true }
+    - { name: Matte levels (In Black / In White / Gamma), type: group, animatable: true }
+    - { name: View (Final Output / partial mattes / A-B-Matte comparison), type: enum, animatable: false }
+  animation: >-
+    Levels and key colour keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, color.management, fx.matte.premultiply-fringe-diagnostics]
+  implementation: >-
+    WGSL pass that builds matte B from distance to the key colour and matte A from absence of the complementary colour. Each matte has a levels and gamma remap before they combine into alpha. The comparison view renders the source, both partial mattes and the final matte side by side.
+  io: >-
+    none
+  limitations: >-
+    Kept for its partial-matte workflow; the guided recipe uses the screen key (fx.keying.keylight-1-2) first.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Remove the green background" recipe → More controls → Key method "Smoke and glass".
+    defaults: >-
+      Key colour taken from the recipe's detected screen colour; Faster accuracy for primary-colour screens.
+    automation: >-
+      Recipe proposes this method when it detects large semi-transparent regions that the screen key leaves too opaque.
+    usability_check: >-
+      A first-time user switches the key method and keeps the smoke visibly soft in under 30 s, without touching level sliders.
+  acceptance: >-
+    Mini scene "key-smoke": blue-screen smoke keyed with preserved soft gradients; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.color-range
+  name: Color Range
+  sources:
+    - ref: S02
+      item: Color Range
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Color Range effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Key out a range of colours, picked with add and subtract eyedroppers, which handles unevenly lit or multi-coloured backdrops.
+  projection_example: >-
+    Remove a wrinkled, unevenly lit green cloth backdrop shot in a rehearsal hall.
+  controls:
+    - { name: Color Space (Lab / YUV / RGB), type: enum, animatable: false }
+    - { name: Key colour eyedroppers (pick / add / subtract), type: action, animatable: false }
+    - { name: Fuzziness, type: number, animatable: true }
+    - { name: Min / Max per component (L-Y-R / a-U-G / b-V-B), type: number, animatable: true }
+  animation: >-
+    Fuzziness and min/max bounds keyframable.
+  dependencies: [proj.effect-stack, color.management]
+  implementation: >-
+    WGSL pass that converts to the chosen space and tests each pixel against a per-component min/max box with smooth fuzziness falloff. Eyedropper samples update the box on the CPU through undoable ops. It runs in float, so unlike Adobe it is not limited to 8 bpc.
+  io: >-
+    none
+  limitations: >-
+    A box in colour space is coarse, so edges need Key Cleaner or the refine effects.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Remove the green background" → More controls → Key method "Uneven background"; click the background areas that remain.
+    defaults: >-
+      Lab space, moderate fuzziness.
+    automation: >-
+      Seeds the range from the frame border and grows it as the user clicks leftover patches.
+    usability_check: >-
+      A first-time user removes all visible backdrop patches from the supplied uneven clip with five clicks or fewer in under 60 s.
+  acceptance: >-
+    Mini scene "key-uneven": uneven backdrop keyed with no remaining patches above 5% opacity.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.difference-matte
+  name: Difference Matte
+  sources:
+    - ref: S02
+      item: Difference Matte
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Difference Matte effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Cut out whatever moves by comparing each frame with a clean background frame, so no coloured screen is needed.
+  projection_example: >-
+    Film a performer in front of the real facade with a locked-off camera and cut them out using a clean plate taken before they enter.
+  controls:
+    - { name: Difference Layer, type: layer-ref, animatable: false }
+    - { name: If Layer Sizes Differ (Center / Stretch To Fit), type: enum, animatable: false }
+    - { name: Matching Tolerance, type: number, animatable: true }
+    - { name: Matching Softness, type: number, animatable: true }
+    - { name: Blur Before Difference, type: number, animatable: true }
+    - { name: View (Final Output / Matte Only), type: enum, animatable: false }
+  animation: >-
+    Tolerance, softness and pre-blur keyframable.
+  dependencies: [proj.effect-stack, proj.layer, preview.cache]
+  implementation: >-
+    WGSL pass that computes the colour distance between source and difference layer after an optional separable pre-blur of both. The blur applies only to the comparison. A smoothstep from tolerance and softness gives alpha.
+  io: >-
+    none
+  limitations: >-
+    Needs a static camera and background, and fails where the subject matches the background colour. The ML fallback (fx.keying.ml-matte-fallback) handles moving cameras.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Cut out what moves" recipe: pick a frame where the stage is empty, then preview the cutout.
+    defaults: >-
+      The clean plate is the first frame unless the user picks another; low pre-blur.
+    automation: >-
+      Suggests the frame with the least motion energy as the clean plate and can build one by median-stacking frames.
+    usability_check: >-
+      A first-time user cuts a performer out of the supplied locked-off clip in three actions or fewer and under 60 s.
+  acceptance: >-
+    Mini scene "clean-plate-cutout": performer isolated; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.extract
+  name: Extract
+  sources:
+    - ref: S02
+      item: Extract
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Extract effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Make the dark or bright parts of an image transparent by choosing a brightness range on a histogram, with soft falloff at each end.
+  projection_example: >-
+    Turn a scanned ink drawing on white paper into a transparent layer that reveals light across the wall.
+  controls:
+    - { name: Channel (Luminance / Red / Green / Blue / Alpha), type: enum, animatable: true }
+    - { name: Black Point / White Point, type: number, animatable: true }
+    - { name: Black Softness / White Softness, type: number, animatable: true }
+    - { name: Invert, type: bool, animatable: true }
+    - { name: Histogram with transparency control bar, type: widget, animatable: false }
+  animation: >-
+    Points and softness keyframable, for example to "burn away" a drawing over time.
+  dependencies: [proj.effect-stack, color.management]
+  implementation: >-
+    WGSL compute pass builds a 256-bin histogram with atomics for the UI. The render pass applies a trapezoid alpha function on the selected channel. It operates in float and documents whether the channel is read display-referred or scene-linear.
+  io: >-
+    none
+  limitations: >-
+    Luminance-only keying cannot separate subjects that share the background's brightness.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Keep only the dark lines" / "Keep only the bright parts" in the effect library, reached by searching "remove white background".
+    defaults: >-
+      Luminance channel, with points auto-set from the histogram valleys.
+    automation: >-
+      Auto-detects whether the background is the dark or the bright mode of the histogram.
+    usability_check: >-
+      A first-time user makes the white paper of the supplied scan transparent in two actions or fewer and under 20 s.
+  acceptance: >-
+    Mini scene "ink-on-paper": drawing extracted cleanly over the facade; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.inner-outer-key
+  name: Inner/Outer Key
+  sources:
+    - ref: S02
+      item: Inner/Outer Key
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Inner/Outer Key effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Isolate a soft-edged subject from any background by drawing a rough inside outline and a rough outside outline. The key decontaminates the colours of the edge pixels between them.
+  projection_example: >-
+    Isolate a performer's wind-blown hair from a cluttered rehearsal background using two rough outlines.
+  controls:
+    - { name: Foreground (Inside) / Additional Foreground, type: mask-ref, animatable: false }
+    - { name: Background (Outside) / Additional Background, type: mask-ref, animatable: false }
+    - { name: Single Mask Highlight Radius, type: number, animatable: true }
+    - { name: Cleanup Foreground / Cleanup Background (path / Brush Radius / Brush Pressure), type: group, animatable: true }
+    - { name: Edge Thin, type: number, animatable: true }
+    - { name: Edge Feather, type: number, animatable: true }
+    - { name: Edge Threshold, type: number, animatable: true }
+    - { name: Invert Extraction, type: bool, animatable: true }
+    - { name: Blend With Original, type: number, animatable: true }
+  animation: >-
+    Referenced masks animate through mask keyframes or mask tracking. Edge values are keyframable.
+  dependencies: [proj.effect-stack, mask.bezier, track.roto, fx.matte.refine-soft-matte]
+  implementation: >-
+    Inner and outer masks are rasterised into a trimap. Foreground and background colours are estimated in the unknown band by push-pull diffusion from each side. Alpha is the projection of each pixel onto the F–B colour line, and the colour is replaced by the estimated F (decontamination). The pass runs in WGSL, and cleanup strokes add or subtract alpha along their paths.
+  io: >-
+    none
+  limitations: >-
+    Quality depends on the band width. For complex hair the ML fallback can take the same trimap.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Cut out the performer" → Outline mode: draw one loose outline around the subject; the app derives the inner and outer bands.
+    defaults: >-
+      Single-mask mode with an automatic highlight radius from subject size.
+    automation: >-
+      Generates the inner and outer masks from one stroke or from a SAM 2 selection, and tracks them over time.
+    usability_check: >-
+      A first-time user isolates the subject of the supplied still in under 60 s by drawing one outline.
+  acceptance: >-
+    AS-4 and mini scene "two-outline-cutout": hair edge free of background colour; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.key-cleaner
+  name: Key Cleaner
+  sources:
+    - ref: S02
+      item: Key Cleaner
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Key Cleaner effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Recover fine edge detail and reduce edge flicker in a matte produced by any key, including detail damaged by video compression.
+  projection_example: >-
+    Recover hair detail lost to H.264 compression in a phone-shot green-screen clip of a dancer.
+  controls:
+    - { name: Additional Edge Radius, type: number, animatable: true }
+    - { name: Reduce Chatter, type: bool, animatable: true }
+    - { name: Alpha Contrast, type: number, animatable: true }
+    - { name: Strength, type: number, animatable: true }
+  animation: >-
+    All values keyframable.
+  dependencies: [proj.effect-stack, preview.cache, fx.keying.keylight-1-2]
+  implementation: >-
+    The edge band is detected from the alpha gradient and widened by the radius. A WGSL guided filter (source luminance as guide) restores alpha detail inside the band. Reduce Chatter is a temporal median across ±1 frame, declared as a temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Can add unwanted softness to edges that should be hard; it can be limited with an effect mask (S37 note).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      Step "Clean up the edges" inside "Remove the green background", on by default with one Strength slider.
+    defaults: >-
+      Radius scaled to the clip resolution; Reduce Chatter on.
+    automation: >-
+      Enabled automatically when the source is detected as chroma-subsampled or highly compressed.
+    usability_check: >-
+      A first-time user reduces visible edge flicker on the supplied compressed clip with a single slider in under 20 s.
+  acceptance: >-
+    AS-4: measured frame-to-frame alpha variance on the edge band decreases versus the uncleaned key.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.keylight-1-2
+  name: Keylight (screen key)
+  sources:
+    - ref: S02
+      item: Keylight (1.2)
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Keylight effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Remove an evenly or unevenly lit green or blue screen in one pick. Hair, smoke, motion blur and glass stay semi-transparent, and the screen's colour cast is removed from the subject.
+  projection_example: >-
+    Cut a dancer filmed on green screen out of her background so she appears to stand inside a lit window of the facade.
+  controls:
+    - { name: Screen Colour, type: color, animatable: true }
+    - { name: Screen Gain, type: number, animatable: true }
+    - { name: Screen Balance, type: number, animatable: true }
+    - { name: Despill Bias / Alpha Bias (lockable), type: color, animatable: true }
+    - { name: Screen Pre-blur, type: number, animatable: true }
+    - { name: Clip Black / Clip White / Clip Rollback, type: number, animatable: true }
+    - { name: Screen Shrink/Grow, type: number, animatable: true }
+    - { name: Screen Softness, type: number, animatable: true }
+    - { name: Screen Despot Black / Screen Despot White, type: number, animatable: true }
+    - { name: Replace Method / Replace Colour, type: group, animatable: true }
+    - { name: Inside Mask / Outside Mask (garbage mattes), type: mask-ref, animatable: false }
+    - { name: Foreground and Edge Colour Correction, type: group, animatable: true }
+    - { name: Source Crops, type: group, animatable: true }
+    - { name: Unpremultiply Result, type: bool, animatable: false }
+    - { name: View (Final Result / Screen Matte / Status / Intermediate Result), type: enum, animatable: false }
+  animation: >-
+    Every numeric and colour control is keyframable and expression-linkable. Screen Colour can be re-sampled per keyframe for drifting light, and garbage masks can follow tracker data.
+  dependencies: [proj.effect-stack, mask.bezier, color.management, preview.cache, fx.keying.key-cleaner, fx.keying.advanced-spill-suppressor, fx.matte.premultiply-fringe-diagnostics]
+  implementation: >-
+    A functional equivalent, not Adobe's code. A WGSL pass on straight scene-linear colour computes the screen-colour difference (key channel minus the Screen Balance-weighted mix of the other two), normalises it by the screen colour's own difference, and scales it by Screen Gain to give alpha. Clip remap, Shrink/Grow (min/max morphology), Softness (separable blur) and Despot (open/close) are extra passes in the same graph. Despill clamps the key channel to the biased mix and Replace Method restores luminance; output is premultiplied rgba16float, and a Status view flags semi-transparent pixels.
+  io: >-
+    Keyed results export with straight or premultiplied alpha according to the render preset (ProRes 4444, PNG or EXR sequences). Keylight presets and .aep settings are not imported.
+  limitations: >-
+    Will not match Keylight bit-for-bit. Badly lit or 4:2:0 compressed sources still need Key Cleaner or the ML fallback.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Remove the green background" recipe (fx.keying.remove-background-recipe); More controls exposes the full key, and the effect library lists it as "Screen key".
+    defaults: >-
+      Screen colour auto-sampled; gain and balance preset for green or blue screens; the result is shown over a contrasting background.
+    automation: >-
+      Detects green or blue, samples the screen from the frame border, adds Key Cleaner and spill removal, and warns about fringes.
+    usability_check: >-
+      A first-time user keys the supplied green-screen performer clip with no visible green fringe in three actions or fewer and under 60 s, without opening More controls.
+  acceptance: >-
+    AS-4 and mini scene "key-performer": green-screen clip keyed over the facade with hair detail retained and edge spill below threshold; export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.linear-color-key
+  name: Linear Color Key
+  sources:
+    - ref: S02
+      item: Linear Color Key
+      category: Keying
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S37
+      item: Linear Color Key effect
+      category: Keying
+      checked: true
+  artist_can: >-
+    Make one colour, and colours near it, transparent with a linear falloff. A second instance can bring a colour back (Keep Colors).
+  projection_example: >-
+    Remove a clear blue sky from a photo of the building so animated clouds can move behind the roofline.
+  controls:
+    - { name: Key Color, type: color, animatable: true }
+    - { name: Match Colors (Using RGB / Using Hue / Using Chroma), type: enum, animatable: true }
+    - { name: Matching Tolerance, type: number, animatable: true }
+    - { name: Matching Softness, type: number, animatable: true }
+    - { name: Key Operation (Key Colors / Keep Colors), type: enum, animatable: false }
+    - { name: Add / subtract eyedroppers, type: action, animatable: false }
+    - { name: View (Final Output / Source Only / Matte Only), type: enum, animatable: false }
+  animation: >-
+    Key colour, tolerance and softness keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, color.management]
+  implementation: >-
+    WGSL pass that measures RGB, hue or chroma distance to the key colour and maps it linearly to alpha between tolerance and tolerance + softness. A Keep Colors instance computes a restore mask and combines it with the upstream alpha by max(). Instance order follows the effect stack.
+  io: >-
+    none
+  limitations: >-
+    A single-colour key is weak on hair and motion blur; the screen key is preferred for screens.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Make a colour transparent": click the colour on the canvas; drag one Softness slider.
+    defaults: >-
+      RGB matching, tolerance from the clicked region's variance, softness 10%.
+    automation: >-
+      Hold-to-preview transparency while hovering colours, like the S37 Alt-hover behaviour.
+    usability_check: >-
+      A first-time user removes the sky from the supplied building photo in two actions or fewer and under 30 s.
+  acceptance: >-
+    Mini scene "sky-swap": sky removed and clouds composited behind the roofline; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.unmult
+  name: Unmult (remove black or white background)
+  sources:
+    - ref: S37
+      item: Unmult effect
+      category: Keying
+      adobe_support:
+        gpu: null
+        bpc: [8, 16, 32]
+        mfr: null
+      checked: true
+    - ref: S02
+      item: Unmult
+      category: Keying
+      checked: false
+  artist_can: >-
+    Remove a solid black or white background from elements such as fire, sparks, smoke, paint splashes and light leaks. Their colours stay at full strength instead of being darkened.
+  projection_example: >-
+    Drop stock fire, sparks or light-leak clips shot on black onto the facade without black boxes or dimmed edges.
+  controls:
+    - { name: Background Color (Black / White), type: enum, animatable: false }
+    - { name: Black Level, type: number, animatable: true }
+    - { name: White Level, type: number, animatable: true }
+    - { name: Softness, type: number, animatable: true }
+    - { name: Remove Color Matting, type: bool, animatable: false }
+    - { name: Clip HDR Results, type: bool, animatable: false }
+  animation: >-
+    Levels and softness keyframable, for example to fade an element in by raising its black level.
+  dependencies: [proj.effect-stack, color.management, fx.channel.remove-color-matting]
+  implementation: >-
+    WGSL pass. On black, alpha comes from max(r,g,b) after the black-level and softness remap; on white, from 1 - min(r,g,b). Colour is divided by alpha so that re-premultiplying reproduces the source (Remove Color Matting), with an optional clamp for HDR values.
+  io: >-
+    none
+  limitations: >-
+    Absent from the S02 matrix as of 2026-10-01, so Adobe's GPU and MFR status is unknown. Unmult is not a screen key; a dark subject on black loses opacity by design.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Remove the black background" (or "white background") applied automatically when a clip is dragged in, and offered as a one-click chip on the layer.
+    defaults: >-
+      Black background, levels at 0, Remove Color Matting on.
+    automation: >-
+      On import, detects stock elements on a near-uniform black or white background and offers the fix; it can also switch the layer to Add or Screen blending instead.
+    usability_check: >-
+      A first-time user puts the supplied fire-on-black clip onto the facade with no visible black box in one action and under 10 s.
+  acceptance: >-
+    Mini scene "fire-on-black": element composited over the facade with no luminance loss versus Add-mode reference within tolerance; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.remove-background-recipe
+  name: Remove the green background (key recipe)
+  sources:
+    - ref: S37
+      item: Keylight + Key Cleaner + Advanced Spill Suppressor animation preset
+      category: Keying
+      checked: true
+    - ref: brief
+      item: §0.1, §0.4, §11J, §22 show 4
+      category: product requirement
+      checked: true
+  artist_can: >-
+    Remove a green or blue screen with one action and get a complete, editable chain (screen key, edge cleanup, spill removal, choke and edge refinement). A few plain controls adjust the whole chain.
+  projection_example: >-
+    Put a performer filmed on green screen into a window of the building for a show's opening scene.
+  controls:
+    - { name: Background colour (auto / pick), type: color, animatable: true }
+    - { name: Edge softness, type: number, animatable: true }
+    - { name: Edge shrink, type: number, animatable: true }
+    - { name: Remove green tint, type: bool, animatable: true }
+    - { name: Quality (Fast / Best / AI-assisted), type: enum, animatable: false }
+  animation: >-
+    Simple controls map to underlying effect properties via recipe overrides; any underlying property remains keyframable.
+  dependencies: [ux.recipe-engine, ux.effect-library, ux.operation-system, fx.keying.keylight-1-2, fx.keying.key-cleaner, fx.keying.advanced-spill-suppressor, fx.matte.simple-choker, fx.matte.refine-soft-matte, fx.keying.ml-matte-fallback, fx.matte.premultiply-fringe-diagnostics]
+  implementation: >-
+    A recipe-engine template that emits real effect-stack ops in the S37 order: screen key, Key Cleaner, Advanced Spill Suppressor, then Simple Choker and Refine Soft Matte. An expression links the spill key colour to the screen colour. Manual edits are tracked as recipe overrides, and the AI-assisted quality level swaps in the sidecar matte.
+  io: >-
+    none
+  limitations: >-
+    Automatic screen detection assumes a dominant screen hue at the frame borders. Unusual screens fall back to clicking the background.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      Select a clip → "Remove the green background" (search also matches "remove blue screen", "cut out person").
+    defaults: >-
+      Auto screen colour, Fast quality during preview, Best for export, spill removal on, edge shrink 0.5 px.
+    automation: >-
+      Samples the screen, orders the chain, sets the choke from measured fringe width, and shows the result over the venue preview with a fringe overlay.
+    usability_check: >-
+      A first-time user completes the AS-4 key on the supplied clip in three actions or fewer, under 90 s, with no external instructions, and can undo it in one action.
+  acceptance: >-
+    AS-4: supplied clip keyed, reopened and re-exported identically; the generated chain is inspectable and editable without breaking the recipe.
+  status: not-started
+  evidence: []
+
+- id: fx.keying.ml-matte-fallback
+  name: AI-assisted cutout (ML matting fallback)
+  sources:
+    - ref: S21
+      item: AI-powered Object Matte
+      category: Roto Brush and Refine Matte
+      checked: true
+    - ref: brief
+      item: §11J, §12 (separate engines/models with fallbacks)
+      category: product requirement
+      checked: true
+  artist_can: >-
+    Get a clean, soft-edged cutout when a colour key fails: bad lighting, compressed footage, a moving camera or no screen at all. The result stays editable and cacheable.
+  projection_example: >-
+    Cut out a performer filmed against the real building at dusk, where no colour or difference key can separate them.
+  controls:
+    - { name: Subject selection (click / box / existing key or roto as hint), type: action, animatable: false }
+    - { name: Model (Video matting / Single-frame high detail), type: enum, animatable: false }
+    - { name: Edge detail, type: number, animatable: false }
+    - { name: Temporal stability, type: number, animatable: false }
+    - { name: Correction strokes (keep / remove), type: stroke-set, animatable: true }
+  animation: >-
+    The output is a cached matte sequence. Correction strokes can be keyframed per frame span and trigger re-propagation of only the affected range.
+  dependencies: [track.roto, preview.cache, proj.effect-stack, fx.matte.refine-soft-matte, fx.keying.inner-outer-key]
+  implementation: >-
+    Vision sidecar (uv venv, CUDA). SAM 2 produces the subject mask, which is eroded and dilated into a trimap (or a user key supplies it). A matting model then outputs alpha and foreground colour: a video model with temporal memory (MatAnyone or RobustVideoMatting candidates) or a per-frame model (ViTMatte or BiRefNet candidates). Results are written as 16-bit or EXR frames into preview.cache, keyed by source hash, model version and params, so preview and export read identical pixels.
+  io: >-
+    The model weights are an installable component. Exports read the cached frames, and the cache is collected with the project when the model is unavailable on another machine.
+  limitations: >-
+    Model licences must be verified per model (some are non-commercial, which is acceptable for personal use). Results are not bit-reproducible across model versions, so the version is pinned in the cache key. Inference cost is significant at 4K.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Keying and spill removal serve live-action compositing, not projection (projected black is already no light). Unmult stays required for stock elements on black."
+  milestone: D
+  beginner:
+    action: >-
+      "Cut out the performer" → click the person; or the "Remove the green background" recipe → Quality "AI-assisted".
+    defaults: >-
+      Video model, medium edge detail, processing in the background with progress shown on the layer.
+    automation: >-
+      Builds the trimap, runs the job in the background, caches the result, and invalidates only frames affected by a correction stroke.
+    usability_check: >-
+      A first-time user produces a usable cutout of the supplied no-screen clip in two clicks, and fixes one bad frame with one correction stroke, without help.
+  acceptance: >-
+    AS-4 (no-screen variant): cutout cached, project reopened, export identical to preview; reports which model and version produced it.
+  status: not-started
+  evidence: []

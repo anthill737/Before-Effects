@@ -1,0 +1,1285 @@
+# Projection-specific creative tools — Before Effects capability register
+# Sources: brief §0.1, §0.5, §1, §4, §5, §6, §7, §8, §11, §13, §15, §19, §22. Product-only requirements (no vendor source); checked against the brief 2026-10-01.
+
+- id: tool.edge-trace
+  name: Trace edges with light
+  sources:
+    - ref: brief §19
+      item: "Select a building edge and create an editable tracing animation"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §0.1
+      item: "Click a roofline, choose 'Trace with light,' select color and speed, and preview it"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §22
+      item: "AS-1 Architectural trace"
+      category: "Acceptance shows"
+      checked: true
+  artist_can: >-
+    Click edges (roofline, window frames, columns) and get light travelling along them. Choose colour, speed, length
+    and glow; everything underneath stays editable paths, trim animation and effects.
+  projection_example: >-
+    A white comet of light runs around every window frame in turn, then along the roofline, timed to the music.
+  controls:
+    - { name: "Colour", type: "color", animatable: true }
+    - { name: "Speed (m/s) or duration", type: "float", animatable: true }
+    - { name: "Trail length", type: "percent", animatable: true }
+    - { name: "Glow", type: "float", animatable: true }
+    - { name: "Direction / start point", type: "enum + point", animatable: false }
+    - { name: "Order and delay across edges", type: "enum + time", animatable: true }
+  animation: >-
+    Generates trim-path keyframes with constant-speed (arc-length) motion by default. Speed graph editable in
+    anim.graph-editor; delays driven by group index (expression); optional beat snapping.
+  dependencies: [ux.recipe-engine, tool.region-link, map.region, map.region-group, shape.path, shape.layer, fx.generate.stroke, fx.stylize.glow, anim.graph-editor, expr.rigs, tool.beat-sync]
+  implementation: >-
+    Recipe: for each target edge/region, a shape layer with a stroke whose path is live-linked to the region outline
+    (tool.region-link), a trim-paths animator (start/end offsets from arc length so speed is constant in metres), and
+    a glow (mask.layer-styles / fx.stylize.glow). Per-member delay comes from a rig expression on the group index.
+    Rendering uses Skia CanvasKit path ops and GPU stroke rasterization.
+  io: >-
+    Saved as an ordinary recipe instance with overrides. Rebinding regenerates paths for new edges.
+  limitations: >-
+    Light follows the traced or modelled edge. If the outline is off, the trace is off — fix the region, not the
+    animation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select edges or regions → "Trace with light" → colour, speed, glow.
+    defaults: >-
+      Warm white, 3 m/s, 25% trail, medium glow, clockwise from top-left. Groups run left to right with 0.2 s delay.
+    automation: >-
+      Creates paths, trim animation, glow and timing. Speed and glow size scale to the region size.
+    usability_check: >-
+      §0.10: from a selection, a first-time user creates and previews a roofline trace in ≤3 deliberate actions and
+      under 1 minute, without opening the timeline.
+  acceptance: >-
+    AS-1 (paths around windows and rooflines, timed to audio, with repeaters, glow, masks and an editable speed
+    graph).
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: tool.sequence-light-up
+  name: Light up one after another
+  sources:
+    - ref: brief §0.1
+      item: "Select windows, choose 'Light up one after another,' and adjust order and delay"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §19
+      item: "Assign a reusable animation to all windows with adjustable order and delays"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §5
+      item: "Animate 100 windows using one rig, with each window's index determining its delay and color"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Select windows (or any regions) and make them light up one after another. Choose the order, the delay, how each
+    lights (fade, flash, colour, any look), and whether they stay lit.
+  projection_example: >-
+    24 windows light up warm yellow from bottom-left to top-right, 0.15 s apart, then switch off in reverse.
+  controls:
+    - { name: "Order (left→right, top→bottom, centre-out, random, along a path, custom)", type: "enum", animatable: false }
+    - { name: "Delay between windows", type: "time", animatable: true }
+    - { name: "Look (fill colour, any library look)", type: "recipe-ref", animatable: false }
+    - { name: "Fade in / hold / fade out", type: "time[3]", animatable: true }
+    - { name: "Then (stay on, switch off, reverse)", type: "enum", animatable: false }
+  animation: >-
+    One rig drives all members: delay = index × spacing (or beat-snapped), with seeded random order stable between
+    preview and export.
+  dependencies: [ux.recipe-engine, tool.apply-across-regions, tool.region-link, map.region-group, expr.rigs, anim.keyframe.core, tool.beat-sync]
+  implementation: >-
+    A recipe over tool.apply-across-regions: one source animation, instanced per member with an index-based time
+    offset read from the region group's order. Region mattes come from tool.region-link. The seeded order uses the
+    stateless core RNG.
+  io: >-
+    Recipe instance; rebinding to a venue with a different window count respaces per the map.rebind policy.
+  limitations: >-
+    None specific; very large member counts (thousands) rely on instanced rendering.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select windows → "Light up one after another" → drag the order arrow, set the delay.
+    defaults: >-
+      Left to right, 0.2 s delay, warm white fill with 0.3 s fades, stay on.
+    automation: >-
+      Order from geometry, delay fitted to the music beat when music exists, and total duration fitted to the scene.
+    usability_check: >-
+      §0.10: users apply the sequence to an existing selection of 24 windows in ≤3 deliberate actions, then reverse
+      the order in 1 more.
+  acceptance: >-
+    AS-1. Mini scene "100-windows": 100 instances, seeded order identical across preview, export and reopen.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: tool.fill-region
+  name: Put content on a region
+  sources:
+    - ref: brief §0.2
+      item: "Set up the space → Add content"
+      category: "Clear, flexible route through a show"
+      checked: true
+    - ref: brief §6
+      item: "A texture appears only inside selected windows"
+      category: "Masks, mattes, compositing"
+      checked: true
+  artist_can: >-
+    Drop a video, image, colour or generator onto a region or group and have it fit automatically — per window,
+    spanning the whole group, or as one picture across the wall.
+  projection_example: >-
+    A fish-tank video fills each window separately; a cloud video spans the whole facade, showing only inside the
+    windows.
+  controls:
+    - { name: "Fit (fill, fit, stretch, tile)", type: "enum", animatable: false }
+    - { name: "Spread (each region, across the group)", type: "enum", animatable: false }
+    - { name: "Position / scale / rotation inside region", type: "transform", animatable: true }
+    - { name: "Edge softness", type: "float", animatable: true }
+  animation: >-
+    Transforms and softness are keyframable. Video time can be offset per region.
+  dependencies: [tool.region-link, map.uv-content-space, proj.layer, mask.track-matte]
+  implementation: >-
+    An op creates a layer (footage/solid/generator) in the region's content space with a fit transform, plus a
+    region matte from tool.region-link. "Across the group" uses one layer in the shared surface space with the union
+    matte. Media import uses the standard pipeline (ux.auto-media-prep).
+  io: >-
+    Ordinary layers and mattes.
+  limitations: >-
+    None specific.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag a file or library item onto a region on the canvas.
+    defaults: >-
+      Fill each region; video starts at the scene start.
+    automation: >-
+      Fit, matte creation and media conversion.
+    usability_check: >-
+      Users put a video into 6 selected windows in ≤2 actions (drag + drop).
+  acceptance: >-
+    §6 acceptance example (texture only inside selected windows, soft reveals). AS-1.
+  status: not-started
+  evidence: []
+
+- id: tool.region-link
+  name: Region-linked masks, mattes and paths
+  sources:
+    - ref: brief §0.1
+      item: "The app creates the necessary masks, paths, layers... underneath these actions"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §6
+      item: "Reusable matte sources; traveling reveals"
+      category: "Masks, mattes, compositing"
+      checked: true
+  artist_can: >-
+    Use any region or group as a mask, matte or path for creative work. It stays linked, so editing the region
+    updates every effect that uses it.
+  projection_example: >-
+    A glow path linked to the roofline region updates itself after the roofline is corrected.
+  controls:
+    - { name: "Source region/group", type: "region-ref", animatable: false }
+    - { name: "Use as (matte, mask, path)", type: "enum", animatable: false }
+    - { name: "Expand / feather", type: "float[2]", animatable: true }
+    - { name: "Link (live, frozen copy)", type: "enum", animatable: false }
+  animation: >-
+    Expansion and feather are animatable. The linked shape itself follows the region (static), and a frozen copy can
+    be keyframed.
+  dependencies: [map.region, map.binding, mask.bezier, mask.track-matte, shape.path]
+  implementation: >-
+    A reference node that resolves a role (through the binding) to region geometry in content space at evaluation
+    time, producing a Skia path (for masks and shape paths) or a coverage texture (for mattes). It is cached by
+    region hash. "Frozen copy" converts to an ordinary mask.bezier or shape.path.
+  io: >-
+    Saved as role references, so it survives rebinding.
+  limitations: >-
+    These are creative mattes, not installation output masks (out.output-mask).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Usually invisible (recipes create links). In More controls: "Only show inside: Windows".
+    defaults: >-
+      Live link, no feather.
+    automation: >-
+      Created by recipes and fill-region.
+    usability_check: >-
+      After correcting a region outline, users confirm all dependent effects updated without any further action.
+  acceptance: >-
+    AS-1. Mini scene "region-edit-propagates".
+  status: not-started
+  evidence: []
+
+- id: tool.show-logic
+  name: Venue-independent show logic
+  sources:
+    - ref: brief §19
+      item: "Store venue-independent show logic separately from installation bindings"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §1
+      item: "A design can be reused on another installation without rebuilding its animation from scratch"
+      category: "What the product must enable"
+      checked: true
+  artist_can: >-
+    Build the show in terms of meanings ("the windows in order", "the hero wall", "the roofline") instead of
+    particular pixels, so it can be moved to another building.
+  projection_example: >-
+    A Christmas show written for "Windows, Roofline, Door, Wall" runs on three different buildings.
+  controls:
+    - { name: "Roles used by the show (name, type, ordered?)", type: "list", animatable: false }
+    - { name: "Relative units (region size, show length, beats)", type: "enum", animatable: false }
+  animation: >-
+    Animation parameters are expressed relative to roles (fraction of edge length, metres scaled by region size,
+    beats), so they adapt on rebinding.
+  dependencies: [map.binding, ux.recipe-engine, proj.project-model]
+  implementation: >-
+    The project model stores the show as compositions and recipe instances that reference roles, never venue region
+    IDs. Each role declares type, cardinality and ordering expectations. Units are stored relative where recipes
+    declare it. A lint flags absolute venue-specific values (e.g. hand-placed pixel positions) that will not adapt.
+  io: >-
+    The show exports without the venue. Binding and venue are separate files.
+  limitations: >-
+    Hand-placed absolute animation and viewpoint-specific illusions are venue-specific by nature; they are flagged,
+    not hidden.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Invisible: working through regions and recipes creates roles automatically. "Use on another space" exposes the
+      result.
+    defaults: >-
+      Relative units for every recipe parameter.
+    automation: >-
+      Role creation, relative units and portability lint.
+    usability_check: >-
+      Automated: the sample show rebinds to a second venue with zero manual fixes for recipe-only content.
+  acceptance: >-
+    AS-7 (bind the same show to another venue).
+  status: not-started
+  evidence: []
+
+- id: tool.apply-across-regions
+  name: One animation across many surfaces
+  sources:
+    - ref: brief §0.5
+      item: "Applying one animation across many surfaces in a single action"
+      category: "Visual library of editable outcomes"
+      checked: true
+    - ref: brief §19
+      item: "Assign a reusable animation to all windows"
+      category: "Projection-specific creative tools"
+      checked: true
+  artist_can: >-
+    Make one animation and apply it to many regions at once, with automatic offsets and variation. Edit the original
+    and every copy updates; change one copy only when you want an exception.
+  projection_example: >-
+    One "breathing glow" animation drives 40 windows with per-window delay by distance from the door; window 12 gets
+    a red exception.
+  controls:
+    - { name: "Targets", type: "role-ref", animatable: false }
+    - { name: "Offset by (index, position, distance from point, random)", type: "enum", animatable: false }
+    - { name: "Offset amount", type: "time", animatable: true }
+    - { name: "Variation (colour, intensity, seed)", type: "float[]", animatable: true }
+    - { name: "Exceptions (per instance)", type: "list", animatable: false }
+  animation: >-
+    Instances share the source keyframes; each instance's time offset and variation come from rig expressions
+    (expr.rigs) using index/position.
+  dependencies: [expr.rigs, map.region-group, ux.recipe-engine, proj.precompose]
+  implementation: >-
+    Instancing: a source composition or recipe with instance parameters (index, count, normalized position, seed).
+    Instances are evaluated with per-instance time offsets; GPU instancing is used where layers are identical except
+    for parameters. Exceptions are per-instance override records (ux.override-indicator).
+  io: >-
+    Saved as a source plus an instance table.
+  limitations: >-
+    Effects that read neighbouring instances (e.g. one window's light spilling into the next) need a group-level
+    effect instead.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Through ux.apply-to-many: select many regions, apply any look; an "Offset" control appears automatically.
+    defaults: >-
+      Offset by order, 0.1 s.
+    automation: >-
+      Instancing, offsets and seeds.
+    usability_check: >-
+      Users give one window an exception colour without breaking the others, in under 1 minute.
+  acceptance: >-
+    AS-1. Mini scene "100-windows".
+  status: not-started
+  evidence: []
+
+- id: tool.light-sweep
+  name: Light sweeps across the architecture
+  sources:
+    - ref: brief §19
+      item: "Generate light sweeps"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §11B
+      item: "Light rays/sweeps/bursts"
+      category: "Generators and light effects"
+      checked: true
+  artist_can: >-
+    Send bands of light across the building in any direction — following the facade's real geometry, catching edges,
+    and staying aligned across walls.
+  projection_example: >-
+    A diagonal golden sweep passes over the facade from left to right, brightening the window frames as it passes.
+  controls:
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Width / softness", type: "float[2]", animatable: true }
+    - { name: "Colour / intensity", type: "color + float", animatable: true }
+    - { name: "Speed or duration", type: "float", animatable: true }
+    - { name: "Highlight edges", type: "float", animatable: true }
+  animation: >-
+    The sweep position is keyframed by default with ease; optionally beat-triggered repeats.
+  dependencies: [ux.recipe-engine, fx.generate.cc-light-sweep, fx.stylize.glow, map.uv-content-space, tool.region-link]
+  implementation: >-
+    A recipe built on a sweep generator evaluated in venue/world space (WGSL: band SDF along a direction in metres),
+    so it stays continuous across surfaces and projectors. The optional edge highlight uses region outlines or model
+    edges as an additive mask.
+  io: >-
+    None.
+  limitations: >-
+    None specific.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select a wall or the whole building → "Light sweep" → direction arrow, speed, colour.
+    defaults: >-
+      Left to right, 2 s, soft warm white.
+    automation: >-
+      Width scaled to the facade, duration to the music phrase.
+    usability_check: >-
+      Users create a diagonal sweep timed to a bar of music in ≤3 actions.
+  acceptance: >-
+    AS-5 (crosses the projector overlap). Mini scene "sweep-two-walls".
+  status: not-started
+  evidence: []
+
+- id: tool.beat-sync
+  name: Move with the beat
+  sources:
+    - ref: brief §0.1
+      item: "Add music, choose 'Move with the beat,' and control which elements respond and how strongly"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §13
+      item: "Beat markers, BPM grid, editable onset detection, frequency-band control signals, smoothing/attack/release"
+      category: "Sound and music-driven animation"
+      checked: true
+  artist_can: >-
+    Make selected elements react to the music — pulse, flash, scale, shift colour — choosing which part of the music
+    (beat, bass, highs) drives which elements, and how strongly.
+  projection_example: >-
+    Windows pulse blue on every kick drum; the roofline trace flashes on snares.
+  controls:
+    - { name: "Respond to (beat, bass, mids, highs, onsets, loudness)", type: "enum", animatable: false }
+    - { name: "What moves (brightness, size, colour, position, speed)", type: "enum", animatable: false }
+    - { name: "Strength", type: "percent", animatable: true }
+    - { name: "Smoothness (attack/release)", type: "float[2]", animatable: true }
+    - { name: "Which elements", type: "selection", animatable: false }
+  animation: >-
+    Driven from cached audio analysis (audio.analysis), so preview and export see identical data. Convertible to
+    keyframes (audio.to-keyframes).
+  dependencies: [audio.analysis, audio.to-keyframes, audio.track, expr.engine, ux.recipe-engine]
+  implementation: >-
+    A recipe adds an audio-reactive controller (expression control fed by the cached analysis track: beats, onsets,
+    band envelopes with attack/release) and links it to target properties with mapping curves. Beat markers are
+    editable on the timeline.
+  io: >-
+    The analysis cache is saved with the project. Optional bake to keyframes.
+  limitations: >-
+    Beat detection can be wrong on complex music. Markers are editable, and "tap tempo" is a manual alternative.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Add music → select elements → "Move with the beat" → choose what responds and how strongly.
+    defaults: >-
+      Beat drives brightness at 60% strength, with short attack and medium release.
+    automation: >-
+      Analysis, beat grid and mapping.
+    usability_check: >-
+      §0.10: users make windows pulse with the music in ≤3 actions; the pulses visibly land on beats (rated by 2
+      observers).
+  acceptance: >-
+    AS-1 (timed to audio). Mini scene "beat-export-match": the frames where pulses peak are identical in preview and
+    export.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: tool.text-columns
+  name: Words across columns
+  sources:
+    - ref: brief §8
+      item: "Words spread across architectural columns; letters rotate forward; timing editable from one text layer"
+      category: "Text and typography"
+      checked: true
+    - ref: brief §1
+      item: "Typography animates in coordination with music and the building's geometry"
+      category: "What the product must enable"
+      checked: true
+  artist_can: >-
+    Spread a phrase across columns, windows or panels (one word or letter per region) and animate it in with one
+    editable text layer.
+  projection_example: >-
+    "HAPPY NEW YEAR" — one word per column group — letters rotate forward one by one on the beat.
+  controls:
+    - { name: "Text", type: "string", animatable: true }
+    - { name: "Split by (letter, word, line)", type: "enum", animatable: false }
+    - { name: "Target regions (ordered)", type: "role-ref", animatable: false }
+    - { name: "Font, size fit, colour", type: "font + enum + color", animatable: true }
+    - { name: "Entrance style", type: "recipe-ref", animatable: false }
+  animation: >-
+    Uses text animators and selectors (per character/word) with per-unit offsets. Timing stays in one text layer.
+  dependencies: [text.layer, text.animator, map.region-group, ux.recipe-engine, tool.beat-sync]
+  implementation: >-
+    One text layer with HarfBuzz shaping. A layout mode places each text unit at the centroid/fit-box of its target
+    region (per-unit transforms from region data), and the entrance animation uses text.animator selectors
+    offset by unit index. Re-layout happens on rebinding.
+  io: >-
+    None.
+  limitations: >-
+    If the counts of units and regions differ, the app asks: wrap, shrink to fit, or skip.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select columns → "Words across these" → type the text.
+    defaults: >-
+      One word per region, fit to width, bold sans, fade-up entrance.
+    automation: >-
+      Splitting, fitting and ordering.
+    usability_check: >-
+      Users spread a 4-word phrase over 4 columns and change the font in under 2 minutes.
+  acceptance: >-
+    Mini scene "columns-text".
+  status: not-started
+  evidence: []
+
+- id: tool.region-transition
+  name: Region-following transitions
+  sources:
+    - ref: brief §11G
+      item: "Build transitions that can follow installation regions rather than always sweeping across a rectangular video frame"
+      category: "Transitions"
+      checked: true
+  artist_can: >-
+    Change from one scene to the next region by region — windows flipping one after another, walls wiping
+    separately, the roofline revealing last.
+  projection_example: >-
+    The winter scene replaces the autumn scene window by window from the centre out, then walls dissolve.
+  controls:
+    - { name: "Order (as group order, centre-out, random)", type: "enum", animatable: false }
+    - { name: "Per-region transition (wipe, dissolve, flip, any library transition)", type: "recipe-ref", animatable: false }
+    - { name: "Duration / overlap", type: "time[2]", animatable: true }
+  animation: >-
+    Progress keyframes per region, generated from one master progress curve and offsets.
+  dependencies: [tool.apply-across-regions, tool.region-link, fx.transition.linear-wipe, fx.transition.block-dissolve]
+  implementation: >-
+    A recipe instancing a transition effect per region matte, with a per-region progress offset from order. Usable
+    between timeline scenes and as show.transition between cues.
+  io: >-
+    None.
+  limitations: >-
+    None specific.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Between two scene blocks → transition chip → "Window by window".
+    defaults: >-
+      Centre-out dissolve, 2 s total.
+    automation: >-
+      Order and offsets.
+    usability_check: >-
+      Users replace a crossfade with a window-by-window transition in ≤3 actions.
+  acceptance: >-
+    Mini scene "region-transition-cue".
+  status: not-started
+  evidence: []
+
+- id: tool.surface-deform
+  name: Apparent surface deformation
+  sources:
+    - ref: brief §19
+      item: "Generate apparent surface deformation"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §11A
+      item: "Breathing walls, melting facades, liquid surfaces, rippling masonry"
+      category: "Distortion and deformation"
+      checked: true
+  artist_can: >-
+    Make a solid wall seem to breathe, bulge, ripple or melt. The app warps the wall's own photo texture and adds
+    matching fake shading, so the illusion reads from the street.
+  projection_example: >-
+    The brick wall inhales and exhales twice, then ripples outward from the door as if hit by a wave.
+  controls:
+    - { name: "Type (breathe, bulge, ripple, melt, push out)", type: "enum", animatable: false }
+    - { name: "Intensity", type: "float", animatable: true }
+    - { name: "Centre / direction", type: "point + angle", animatable: true }
+    - { name: "Speed", type: "float", animatable: true }
+    - { name: "Shading strength", type: "float", animatable: true }
+  animation: >-
+    Keyframed intensity envelope by default; expressions for loops; optional beat drive.
+  dependencies: [fx.distort.displacement-map, fx.distort.turbulent-displace, fx.distort.bulge, fx.distort.wave-warp, map.venue-preview, ux.recipe-engine]
+  implementation: >-
+    A recipe: the venue photo texture (or a generated brick texture) is displaced by an animated displacement field
+    in surface space, and a fake-lighting pass derives normals from the field's gradient. It adds highlight and
+    shadow consistent with a chosen virtual light, so the flat wall appears to move. Region outlines can stay pinned.
+  io: >-
+    None.
+  limitations: >-
+    Needs a reasonably lit, aligned texture of the real wall for a convincing illusion; works best from the audience
+    viewpoint.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select a wall → "Make it breathe" / "Ripple" / "Melt".
+    defaults: >-
+      Medium intensity; light from the top-left.
+    automation: >-
+      Texture source picked from the venue photo; scale from the wall size.
+    usability_check: >-
+      Users create a breathing-wall effect and adjust its intensity in ≤3 actions.
+  acceptance: >-
+    AS-3 (apparent wall deformation).
+  status: not-started
+  evidence: []
+
+- id: tool.material-change
+  name: Material changes
+  sources:
+    - ref: brief §1
+      item: "Brick changes into flowing water, metal, glass, organic growth, or glowing patterns"
+      category: "What the product must enable"
+      checked: true
+    - ref: brief §19
+      item: "Generate material changes"
+      category: "Projection-specific creative tools"
+      checked: true
+  artist_can: >-
+    Turn a wall's apparent material into water, metal, glass, organic growth, lava or glowing patterns, with a
+    controllable spreading transformation.
+  projection_example: >-
+    Brick turns to water starting from the door, ripples, then freezes into ice.
+  controls:
+    - { name: "Target material (water, metal, glass, growth, lava, glowing pattern, custom)", type: "enum", animatable: false }
+    - { name: "Spread from (point, edge, everywhere)", type: "enum + point", animatable: true }
+    - { name: "Progress", type: "percent", animatable: true }
+    - { name: "Keep mortar lines / edges", type: "float", animatable: true }
+    - { name: "Colour tint", type: "color", animatable: true }
+  animation: >-
+    The progress keyframe drives a reveal mask (noise-edged); material parameters animate independently.
+  dependencies: [ux.recipe-engine, fx.noise-grain.fractal-noise, fx.simulation.caustics, fx.distort.displacement-map, 3d.material-pbr, tool.region-link]
+  implementation: >-
+    Two routes: (a) 2.5D — procedural material looks from generators/noise (fx.noise-grain.fractal-noise,
+    fx.simulation.caustics) with fake normal shading, revealed by a growing noise mask; (b) 3D — a PBR material swap
+    on the venue-derived copy (map.derive-creative-geometry), lit by virtual lights. The recipe picks per target.
+  io: >-
+    None.
+  limitations: >-
+    Real surface colour still tints the result (red brick under "glass" still looks reddish); the preview shows this
+    honestly.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select a wall → "Turn into…" → pick a material thumbnail.
+    defaults: >-
+      Spread from the centre over 3 s, keep mortar lines 30%.
+    automation: >-
+      Scale and lighting adapted to the wall; texture tiling in metres.
+    usability_check: >-
+      §0.10: users find "make this look like water" by search and apply it to a selected wall in ≤3 actions.
+  acceptance: >-
+    Mini scene "brick-to-water".
+  status: not-started
+  evidence: []
+
+- id: tool.recess-tunnel
+  name: Recess and tunnel depth illusion
+  sources:
+    - ref: brief §19
+      item: "Construct a recess/tunnel illusion with controllable viewpoint and depth"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §22
+      item: "AS-2 Depth illusion"
+      category: "Acceptance shows"
+      checked: true
+  artist_can: >-
+    Make a wall or opening appear to go deep — a tunnel, a corridor, a room behind the door, cubes pushing in and
+    out — correct from the chosen audience position.
+  projection_example: >-
+    The main door appears to open onto a long brick tunnel with moving lights receding into the distance.
+  controls:
+    - { name: "Shape (tunnel, room, grid of cubes, custom 3D scene)", type: "enum", animatable: false }
+    - { name: "Depth", type: "float (m)", animatable: true }
+    - { name: "Wall look / material", type: "recipe-ref", animatable: false }
+    - { name: "Lights and shadows", type: "float", animatable: true }
+    - { name: "Audience viewpoint", type: "camera-ref", animatable: false }
+  animation: >-
+    Depth, lights and inner content animate. A content camera can move through the tunnel.
+  dependencies: [map.audience-viewpoint, map.model-3d, 3d.scene, 3d.light, 3d.material-pbr, ux.recipe-engine]
+  implementation: >-
+    A recipe that builds a three.js 3D scene behind the target region (extruded opening, tunnel walls with PBR
+    materials, lights and shadows). It is rendered from the audience viewpoint and projected onto the venue
+    (map.audience-viewpoint), with region outlines kept as a frame. Editable as an ordinary 3D scene.
+  io: >-
+    None.
+  limitations: >-
+    Correct only near the audience viewpoint; the preview shows how it skews from elsewhere. Depth is an illusion,
+    and bright surroundings weaken it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select an opening or a wall → "Open a tunnel" → depth, look, lights.
+    defaults: >-
+      8 m deep brick tunnel, warm lights, the viewpoint from map.audience-viewpoint.
+    automation: >-
+      Builds geometry, materials, lights and viewpoint projection.
+    usability_check: >-
+      Users create a tunnel in a selected door and change its depth in under 2 minutes, without opening the 3D
+      editor.
+  acceptance: >-
+    AS-2 (a wall opening onto a 3D tunnel, with lights/shadows, controlled audience viewpoint, and fixed projector
+    calibration).
+  status: not-started
+  evidence: []
+
+- id: tool.crack-rebuild
+  name: Crack, fragment, disassemble and rebuild
+  sources:
+    - ref: brief §19
+      item: "Build editable crack, fragment, disassembly, and rebuilding scenes"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §0.1
+      item: "Select a wall, choose 'Crack and rebuild,' and adjust intensity and duration"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §4
+      item: "A collapse reverses exactly to rebuild the facade"
+      category: "Animation engine"
+      checked: true
+  artist_can: >-
+    Make a wall crack, break into blocks, fall or fly apart, and rebuild itself, with intensity, duration and break
+    style under simple control.
+  projection_example: >-
+    Cracks race across the wall, bricks tumble out and fall, then fly back into place in exact reverse.
+  controls:
+    - { name: "Style (cracks only, blocks, bricks, shards)", type: "enum", animatable: false }
+    - { name: "Intensity", type: "float", animatable: true }
+    - { name: "Duration (break, hold, rebuild)", type: "time[3]", animatable: false }
+    - { name: "Origin", type: "point", animatable: false }
+    - { name: "Seed", type: "int", animatable: false }
+  animation: >-
+    The simulation is baked to a cache with checkpoints. The rebuild is the exact time-reverse of the cached
+    collapse (anim.time-remap), and crack growth is keyframable.
+  dependencies: [map.derive-creative-geometry, fx.simulation.shatter, 3d.scene, anim.time-remap, ux.recipe-engine]
+  implementation: >-
+    Venue-derived copy (map.derive-creative-geometry) fractured into bricks or Voronoi shards. Rapier (deterministic
+    WASM) rigid-body simulation is baked to a seekable cache with checkpoints. Crack lines are animated vector paths
+    (shape.path) and dark-gap shading. The background behind fragments is filled with a "void" or interior material.
+    The rebuild is a time-remap of the baked cache.
+  io: >-
+    The simulation cache is stored with dependency hashes.
+  limitations: >-
+    Gaps where bricks have left show whatever is behind (dark or designed). The wall itself is still lit by the
+    projector, so a true "hole" depends on contrast.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select a wall → "Crack and rebuild" → intensity, duration.
+    defaults: >-
+      Bricks style, medium intensity, 3 s break, 1 s hold, 3 s rebuild, origin at the wall centre.
+    automation: >-
+      Fracture geometry, simulation, cache and reverse.
+    usability_check: >-
+      Users create a crack-and-rebuild on a selected wall and adjust intensity in ≤3 actions.
+  acceptance: >-
+    AS-3 (fragmentation and reassembly; reproducible after reopening and seeking).
+  status: implemented
+  evidence:
+    - "Crack and rebuild effect (core/recipes-crack.ts): Voronoi pieces carrying the venue photo (or lit slabs), glowing cracks along piece edges, fall or burst, rebuild; journey step crack-rebuild (16 pieces fall ~600 px and return exactly), 2026-10-02"
+
+- id: tool.region-particles
+  name: Particles from regions and along contours
+  sources:
+    - ref: brief §19
+      item: "Let particles originate from selected physical regions or follow architectural contours"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §11D
+      item: "Architectural emission masks, deterministic seeds, surface-following options"
+      category: "Simulation and particles"
+      checked: true
+  artist_can: >-
+    Make particles (sparks, snow, petals, embers, smoke-like wisps) pour out of windows, rise from the roofline, or
+    run along edges, reproducibly.
+  projection_example: >-
+    Golden sparks stream from every window and drift up past the roofline; snow settles along the ledges.
+  controls:
+    - { name: "Emit from (region area, region edge, path)", type: "enum", animatable: false }
+    - { name: "Particle look (sparks, snow, petals, embers, smoke, custom sprite)", type: "enum", animatable: false }
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Direction / gravity / wind", type: "vec2 + float", animatable: true }
+    - { name: "Follow contour", type: "bool", animatable: false }
+    - { name: "Seed", type: "int", animatable: false }
+  animation: >-
+    Deterministic seeded simulation with checkpointed state for seek and replay. Emission rate is keyframable and
+    beat-drivable.
+  dependencies: [fx.simulation.particle-system, fx.simulation.particle-playground, tool.region-link, tool.beat-sync, ux.recipe-engine]
+  implementation: >-
+    GPU compute particles (WGSL) with emitters sampled from region coverage (area) or region outlines (edge,
+    arc-length sampling), and an optional contour-following force field (distance-field gradient from region
+    edges). Seeded deterministic integration, checkpointed every N frames for random-access seeking.
+  io: >-
+    Checkpoint cache stored with the project.
+  limitations: >-
+    Collisions with real architecture are approximated by region/model geometry only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select regions → "Particles from here" → look, amount, direction.
+    defaults: >-
+      Sparks, medium amount, upward drift, seed fixed.
+    automation: >-
+      Emitters, scale (particle size in cm from region size) and caching.
+    usability_check: >-
+      Users make sparks rise from selected windows in ≤3 actions; the result is identical after reopen and seek
+      (automated).
+  acceptance: >-
+    AS-3 (reproducible particles after reopening and seeking).
+  status: not-started
+  evidence: []
+
+- id: tool.relight
+  name: Virtual lighting and shadows on the building
+  sources:
+    - ref: brief §1
+      item: "Make buildings appear to change lighting and depth"
+      category: "What the product must enable"
+      checked: true
+    - ref: brief §0.6
+      item: "Automatically propose sensible scene lighting"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Light the building with virtual lights: a moving sun, a torch sweeping across, or a storm flash, with fake
+    shadows cast by the real geometry (recesses, ledges, columns).
+  projection_example: >-
+    A virtual sun rises from the right and the shadows of the window ledges grow and rotate across the facade.
+  controls:
+    - { name: "Light type (sun, spot, point)", type: "enum", animatable: false }
+    - { name: "Position / direction", type: "point3d + angle", animatable: true }
+    - { name: "Colour / intensity", type: "color + float", animatable: true }
+    - { name: "Shadow softness / darkness", type: "float[2]", animatable: true }
+  animation: >-
+    Light transforms and intensities keyframable; preset moves (sunrise, sweep, flicker).
+  dependencies: [map.model-3d, map.venue-preview, 3d.light, pass.depth, ux.recipe-engine]
+  implementation: >-
+    Renders the venue model (or the proxy with recesses) with three.js lights and shadow maps, outputting a
+    lighting-only pass (lit minus ambient). This is multiplied over the photo-texture or added as light in the
+    projection content. Recipes propose a key light matched to the show's mood.
+  io: >-
+    None.
+  limitations: >-
+    Shadows come only from modelled geometry; features not in the model cast nothing. Projected "shadow" is reduced
+    light, not true darkness.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select the building → "Light it" → choose a lighting move (sunrise, torch sweep, storm).
+    defaults: >-
+      Warm sun from top-right, soft shadows.
+    automation: >-
+      Light placement proposed from the model's bounds; automatic shadow camera fitting.
+    usability_check: >-
+      Users create a sunrise-shadow move and change its direction in under 2 minutes.
+  acceptance: >-
+    AS-2 (lights/shadows). Mini scene "sun-ledges".
+  status: not-started
+  evidence: []
+
+- id: tool.starter-content
+  name: Starter venues and sample shows
+  sources:
+    - ref: brief §0.2
+      item: "Provide useful starter scenes and an immediately editable sample"
+      category: "Clear, flexible route through a show"
+      checked: true
+    - ref: brief §0.10
+      item: "With supplied assets, create and preview an animated effect on a surface"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    Start from ready-made sample spaces (a facade photo, a modelled building, a room corner, an object) and an
+    editable sample show built from real recipes.
+  projection_example: >-
+    Open the "Town Hall at night" sample: the venue is calibrated to a virtual projector, and the 3-scene show uses
+    edge trace, sequence light-up and a beat pulse — all editable.
+  controls:
+    - { name: "Starter venue", type: "select", animatable: false }
+    - { name: "Sample show", type: "select", animatable: false }
+  animation: >-
+    The samples are normal projects: every animation is editable.
+  dependencies: [ux.recipe-engine, map.venue, tool.edge-trace, tool.sequence-light-up]
+  implementation: >-
+    Content pack shipped with the app: venue packages (photo + proxy + regions + virtual projector calibration),
+    sample shows built only from recipes and ordinary layers, and supplied music and media cleared for personal use.
+    Opened as copies so the originals stay pristine. The pack doubles as the usability-test asset set.
+  io: >-
+    Bundled read-only, copied on open.
+  limitations: >-
+    Sample calibration is virtual; it proves nothing about physical calibration (brief §0.10).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Start screen → "Try the sample" or "Start from a sample space".
+    defaults: >-
+      Town Hall sample selected.
+    automation: >-
+      Opens a copy and plays it.
+    usability_check: >-
+      Launch to the first visible change in the sample in under 60 seconds for at least 90% of users.
+  acceptance: >-
+    §0.10 five-minute journey uses these assets.
+  status: not-started
+  evidence: []
+
+- id: tool.fill-flowing-water
+  name: Fill with flowing water
+  sources:
+    - ref: brief
+      item: User example 2026-10-02
+      checked: true
+  artist_can: >-
+    Select a region and make it fill with flowing water in one action.
+  projection_example: >-
+    The door fills with water that ripples and spills.
+  controls:
+    - { name: "Amount, speed, color", type: float, animatable: true }
+  animation: >-
+    Generated simulation settings; editable.
+  dependencies: [fx.simulation.water-surface-2d, fx.simulation.liquid-2d, ux.recipe-engine]
+  implementation: >-
+    Recipe combining a masked water-surface simulation with tinted refraction and a fill level animation; upgrades to the particle liquid when available.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select a region, then "Fill with flowing water".
+    defaults: >-
+      Clear blue, medium flow.
+    automation: >-
+      Sizes everything to the region.
+    usability_check: >-
+      Three deliberate actions or fewer.
+  acceptance: >-
+    Reproducible across preview, seeking and export.
+  status: implemented
+  evidence:
+    - "docs/07-simulations.md; journey steps sim-* (smoke 210 frames in ~2 s, byte-identical second run, re-prepare on edit, water fills windows, background export), 2026-10-02"
+
+- id: tool.area-assign
+  name: Assign media, pictures, animations and effects to an area
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Easy assignment of videos, pictures, animations and effects to building areas"
+      category: "Content assignment"
+      checked: true
+  artist_can: >-
+    Drag a video, picture, animation or effect from the content browser onto an area (or a group), or select an area
+    and choose "Add content". What is assigned to an area is listed on it, and that assignment is the unit you move,
+    copy, replace and delete.
+  projection_example: >-
+    Drag Aquarium.mp4 onto the arched window, then drag Pulse onto the same window.
+  controls:
+    - { name: "Assignment list per area", type: "list", animatable: false }
+    - { name: "Target (area, group, selection)", type: "enum", animatable: false }
+    - { name: "Add as (content, effect)", type: "enum", animatable: false }
+    - { name: "Enabled", type: "bool", animatable: true }
+  animation: >-
+    Assignment properties (opacity, effect parameters) are animatable like any layer property.
+  dependencies: [tool.fill-region, proj.asset-browser, ux.effect-library, map.region, map.region-group, proj.layer, ux.apply-to-many, ux.operation-system]
+  implementation: >-
+    An assignment is a scene-owned project object {areaRef, contentRef, placement, clip, mode, blend, opacity, order}.
+    The operation creates the layers, the region matte link and the fit transform through tool.fill-region, and
+    records the assignment so the area card can list and edit it. Effects join the same stack. All edits are typed
+    operations, so they undo and are available to external agents.
+  io: >-
+    Saved in the scene. Content is referenced by asset id.
+  limitations: >-
+    A scene shows only its own assignments. Areas themselves are shared by all scenes.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag from the content browser onto an area on the canvas, or select an area and press "Add content".
+    defaults: >-
+      Content fills the area and plays from the start. Effects join the area's stack.
+    automation: >-
+      Creates the layer, matte, fit and timing so nothing else needs to be set up.
+    usability_check: >-
+      A first-time user puts a video in a window in 2 or fewer deliberate actions.
+  acceptance: >-
+    AS-1 and mini scene "fill-three-windows": media and an effect assigned by drag, preview and export match.
+  status: not-started
+  evidence: []
+
+- id: tool.assign-repeat-span
+  name: Repeat per area or span across areas
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Repeat per area versus span across areas"
+      category: "Content assignment"
+      checked: true
+  artist_can: >-
+    Choose whether one piece of content plays separately in every selected area (repeat) or is one picture laid across
+    all of them and revealed through each (span). Switch between the two at any time without losing settings.
+  projection_example: >-
+    A fish video repeats in each of 12 windows. One cloudscape spans the whole facade and shows only inside the
+    windows.
+  controls:
+    - { name: "Mode (repeat per area, span across areas)", type: "enum", animatable: false }
+    - { name: "Span bounds (selection, group, building, custom)", type: "enum", animatable: false }
+    - { name: "Per-area time offset", type: "time", animatable: true }
+    - { name: "Per-area flip or variation", type: "enum", animatable: false }
+  animation: >-
+    Per-area offsets can be keyframed or driven by the area order.
+  dependencies: [tool.area-assign, tool.apply-across-regions, map.uv-content-space, map.region-group, proj.nesting]
+  implementation: >-
+    Repeat instantiates the content in each area's own content space (shared source, per-instance offset and seed).
+    Span places one layer in the shared surface space over the chosen bounds, with the union matte of the areas.
+    Switching converts one to the other as a single undoable operation and keeps placement, trim, speed and effects.
+  io: >-
+    Saved in the scene.
+  limitations: >-
+    Span across areas on different planes uses venue UV space or the audience view, and the preview says which.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A two-way switch on the assignment: "Same in each" or "One picture across".
+    defaults: >-
+      Repeat when the content is assigned to several areas.
+    automation: >-
+      Re-fits placement and matte when you flip the switch.
+    usability_check: >-
+      A first-time user flips a video from repeat to span and back in under 20 s.
+  acceptance: >-
+    Mini scene "repeat-vs-span": same clip repeated, then spanned across 12 windows; undo restores exactly.
+  status: not-started
+  evidence: []
+
+- id: tool.content-placement
+  name: Fit, fill, stretch, crop and position content in an area
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Content placement: fit, fill, crop, position"
+      category: "Content assignment"
+      checked: true
+  artist_can: >-
+    Place content in an area: fit (whole picture inside), fill (cover, cropping the overflow), stretch, or original
+    size. Then nudge position, scale and rotation, mirror it, and set the crop, with handles on the canvas.
+  projection_example: >-
+    A 16:9 video fills a tall narrow window with its centre cropped. A logo fits a round window and is rotated 10
+    degrees.
+  controls:
+    - { name: "Fit mode (fit, fill, stretch, original size, tile)", type: "enum", animatable: false }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Scale (linked or separate)", type: "float[2]", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Crop (left, top, right, bottom)", type: "float[4]", animatable: true }
+    - { name: "Flip", type: "bool[2]", animatable: false }
+  animation: >-
+    All placement values are ordinary animatable properties.
+  dependencies: [tool.area-assign, map.uv-content-space, proj.layer, mask.from-region]
+  implementation: >-
+    Placement is a transform in area content space (the area's bounding box or UV rectangle) that produces the layer's
+    transform properties. Fit and fill are computed from source size and area aspect, and update when either changes
+    unless the user has overridden them. Crop is a rectangular mask in content space.
+  io: >-
+    Saved with the assignment.
+  limitations: >-
+    Fit and fill assume the area content space is undistorted; strong perspective areas use the audience view or UV
+    mapping (map.uv-content-space).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select the content in an area, then pick Fit, Fill or Stretch and drag the handles.
+    defaults: >-
+      Fill for video and pictures, Fit for logos and text.
+    automation: >-
+      Recomputes the fit when the source or the area changes.
+    usability_check: >-
+      A first-time user fits and re-crops a video in a window in under 30 s.
+  acceptance: >-
+    Mini scene "placement-modes": the same clip in a wide, tall and round area with each mode; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: tool.clip-controls
+  name: Trim, offset, speed, loop and audio level for content in an area
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Clip trim, loop, speed and audio level for content in an area"
+      category: "Content assignment"
+      checked: true
+  artist_can: >-
+    For any video or animation in an area, set where it starts and ends in the clip (trim), when it starts in the
+    scene (offset), how fast it plays, whether and how it loops, and its audio level, from the area's content list.
+  projection_example: >-
+    A 10 s ocean clip loops in three windows at 75% speed, starting 0.5 s apart, with its sound muted.
+  controls:
+    - { name: "Trim in and out", type: "time[2]", animatable: true }
+    - { name: "Offset in scene", type: "time", animatable: true }
+    - { name: "Speed", type: "percent", animatable: true }
+    - { name: "Reverse", type: "bool", animatable: false }
+    - { name: "Loop mode (once, loop, ping-pong, hold last frame)", type: "enum", animatable: false }
+    - { name: "Audio level and mute", type: "dB + bool", animatable: true }
+    - { name: "Fade in and out", type: "time[2]", animatable: false }
+  animation: >-
+    Speed and audio level are keyframable.
+  dependencies: [tool.area-assign, proj.layer-trim, proj.layer-slip, anim.time-stretch, anim.loop, anim.time-reverse-layer, anim.freeze-frame, audio.levels]
+  implementation: >-
+    Controls map to layer in and out points, source offset, time stretch and the loop setting (anim.loop), with audio
+    level on the layer's audio track (audio.levels). An edit that changes the clip duration shows its effect on the
+    scene length instead of silently extending the scene.
+  io: >-
+    Saved with the assignment.
+  limitations: >-
+    Slow speed on low-frame-rate sources can look steppy because frame blending is deferred.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select content in an area, then the clip bar: drag the ends to trim, pick Loop, drag the speed slider.
+    defaults: >-
+      Loop on, speed 100%, audio level 0 dB.
+    automation: >-
+      Snaps trims to beats and scene edges and reports the resulting length.
+    usability_check: >-
+      A first-time user loops a short clip across a 30 s scene in under 30 s.
+  acceptance: >-
+    Mini scene "clip-controls": trim, loop, speed and audio level on one clip; export audio and video match preview.
+  status: not-started
+  evidence: []
+
+- id: tool.area-layers
+  name: Several content layers in one area
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Multiple content layers per area with ordering, opacity and blend"
+      category: "Content assignment"
+      checked: true
+  artist_can: >-
+    Stack several media items and effects in one area, reorder them, set opacity and blend mode (normal, add,
+    multiply), and solo or mute each, so a background video, a smoke overlay and a glow combine.
+  projection_example: >-
+    One window shows a night-sky video, a bird animation added on top, and a pulsing glow at 60%.
+  controls:
+    - { name: "Layer order", type: "list", animatable: false }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blend mode (normal, add, multiply, screen)", type: "enum", animatable: false }
+    - { name: "Solo, mute", type: "bool", animatable: false }
+    - { name: "Group as one", type: "action", animatable: false }
+  animation: >-
+    Opacity and blend mix are animatable.
+  dependencies: [tool.area-assign, proj.layer-order, proj.layer-switches, mask.blend-modes, mask.blend.lighten, mask.blend.darken, proj.precompose]
+  implementation: >-
+    The area's assignment list is an ordered stack, rendered bottom to top inside the area matte in linear light.
+    Blending uses the shared compositor modes. A stack can be grouped into a reusable scene (proj.precompose) and used
+    as one item.
+  io: >-
+    Saved with the scene.
+  limitations: >-
+    Many layers of large video cost decode time; the performance advisor reports it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drop another item on the same area and drag it up or down in the area's content list.
+    defaults: >-
+      New items go on top, Normal blend, 100% opacity. Items on black default to Add.
+    automation: >-
+      Detects footage on black and proposes Add blending.
+    usability_check: >-
+      A first-time user layers a glow over a video in an area in under 45 s.
+  acceptance: >-
+    Mini scene "layer-stack-window": three layers with Add and Multiply; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: tool.copy-assignment
+  name: Copy content assignments to other areas
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Copy assignment to other areas"
+      category: "Content assignment"
+      checked: true
+  artist_can: >-
+    Copy what is on one area (content, placement, trim, speed, effects) to other areas or groups, either as linked
+    copies that follow the original or as independent copies, with an offset or mirroring per area.
+  projection_example: >-
+    Copy window 1's setup to the other 23 windows as linked copies 0.1 s apart, then make window 12 independent.
+  controls:
+    - { name: "Copy mode (linked, independent)", type: "enum", animatable: false }
+    - { name: "Targets (selection, group, similar areas)", type: "enum", animatable: false }
+    - { name: "Per-area time offset", type: "time", animatable: true }
+    - { name: "Mirror per area", type: "bool", animatable: false }
+  animation: >-
+    Offsets can follow area order or the music beat.
+  dependencies: [tool.area-assign, tool.apply-across-regions, tool.content-placement, ux.apply-to-many, map.region-auto-group, ux.override-indicator]
+  implementation: >-
+    Linked copies are instances of the source assignment (tool.apply-across-regions), and exceptions are tracked
+    overrides. "Make independent" detaches as one undoable operation. Placement is refitted to each target area's
+    shape through tool.content-placement.
+  io: >-
+    Saved in the scene.
+  limitations: >-
+    Areas of very different shape are refitted, so the crop can differ. The preview shows each result.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Right-click an area's content, choose "Copy to other areas", then pick the areas.
+    defaults: >-
+      Linked, offset 0, refitted per area.
+    automation: >-
+      Proposes similar areas (map.region-auto-group) as targets.
+    usability_check: >-
+      A first-time user copies one window's setup to all other windows in under 30 s.
+  acceptance: >-
+    Mini scene "copy-to-23": linked copy with one exception; editing the original updates the copies.
+  status: not-started
+  evidence: []
+
+- id: tool.collapse-rebuild-3d
+  name: 3D collapse and rebuild with thickness, ledges and light shadows
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "3D collapse and rebuild with thickness, fragments, ledge collisions and shadows from movable lights"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Make an area (a wall, a balcony) break into thick 3D pieces that fall, hit the real building's ledges and sills,
+    tumble, pile up and then rebuild. Move the light and the shadows of the fragments move with it.
+  projection_example: >-
+    The panel above the door cracks, fragments land on the first-floor ledge and bounce off, then fly back in while a
+    low sun sweeps shadows across the wall.
+  controls:
+    - { name: "Thickness", type: "length", animatable: false }
+    - { name: "Break style and piece count", type: "enum + int", animatable: false }
+    - { name: "Where it starts", type: "point2d", animatable: false }
+    - { name: "Collide with ledges and sills", type: "bool", animatable: false }
+    - { name: "Rebuild timing", type: "time", animatable: true }
+    - { name: "Light that casts the shadows", type: "layer-ref", animatable: false }
+  animation: >-
+    Impulses and the rebuild are keyframable. Pieces come from the baked physics cache.
+  dependencies: [fx.simulation.rigid-body-fracture, tool.crack-rebuild, 3d.physics-world, 3d.physics-colliders, 3d.physics-bake, 3d.shadows, 3d.light, map.derive-creative-geometry, 3d.creative-copy, 3d.extrude]
+  implementation: >-
+    Extends tool.crack-rebuild. The area outline is extruded to a thickness (3d.extrude). Fragments (Voronoi or brick)
+    are Rapier bodies. Ledges, sills and the floor are static colliders derived read-only from the venue geometry
+    (3d.physical-vs-creative). The light is an ordinary shadow-casting light, so moving it moves the shadows. Physics
+    is baked (3d.physics-bake) and the rebuild is a time remap of the cache.
+  io: >-
+    Baked cache in the project cache folder.
+  limitations: >-
+    Fragments are projected light, so the illusion holds from the audience viewpoint only. A true hole depends on
+    contrast with the physical wall.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select an area, then "Collapse and rebuild (3D)": adjust thickness, start point and light.
+    defaults: >-
+      Brick-style pieces, ledge collisions on, rebuild at the end of the scene.
+    automation: >-
+      Builds thick pieces, colliders and the bake in the background.
+    usability_check: >-
+      A first-time user makes a wall collapse onto a ledge and rebuild in under 3 minutes.
+  acceptance: >-
+    Mini scene "collapse-ledge": pieces land on a ledge, shadows follow a moving light, and seek, preview and export
+    agree.
+  status: not-started
+  evidence: []

@@ -1,0 +1,459 @@
+# Utility — Before Effects capability register
+# Sources: S02 effect list + support matrix (helpx, "last updated May 13, 2026", fetched 2026-10-01); S01 user guide: Utility effects page (…/list-of-effects/utility-effects.html, updated 26 Jun 2025, fetched 2026-10-01) and Cycore plugins page; brief §11J, §14, §17.
+#
+# Conventions used in `implementation` below:
+#   - Working buffers are rgba16float, scene-linear, premultiplied (f32 shader math). Half floats have a 10-bit mantissa: about 1/2048 relative step,
+#     enough for 10-bit output, but values must not be squeezed through 8-bit intermediates.
+#   - LUTs are uploaded as rgba16float textures: 1D up to 4096 entries, 3D up to 65³ with tetrahedral interpolation done in the shader.
+#   - The OCIO-dependent work runs in the PyOpenColorIO sidecar and is cached; the shader never calls OCIO directly.
+#   - Diagnostics and dithering are product additions required by brief §14 (clipping/gamut diagnostics; gradients without banding).
+
+- id: fx.utility.apply-color-lut
+  name: Apply Color LUT
+  sources:
+    - ref: S02
+      item: Apply Color LUT
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Apply Color LUT (Utility effects page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Transform the layer's colors through a 3D (or 1D) lookup table file, to apply a look or a technical conversion.
+  projection_example: >-
+    Apply the client's "brand night look" .cube to all video content before it hits the facade.
+  controls:
+    - { name: "Choose LUT (.cube, .3dl; .look and .csp via OCIO)", type: "file", animatable: false }
+    - { name: "LUT expects (color space)", type: "enum", animatable: false }
+    - { name: "Intensity", type: "percent", animatable: true }
+  animation: >-
+    Intensity (mix with input) keyframable, a product addition. The LUT file itself is not animatable; crossfade two instances instead.
+  dependencies: [color.lut, color.management, proj.effect-stack]
+  implementation: >-
+    A native TypeScript parser handles .cube (1D/3D, DOMAIN_MIN/MAX, sizes up to 65) and .3dl (integer, float, and 3DMESH/Mesh variants); IRIDAS .look and .csp go through PyOpenColorIO. The LUT uploads as an rgba16float 3D texture and is evaluated per pixel with tetrahedral interpolation on unpremultiplied values. Working values are converted to the LUT's expected space first (default Rec.709 display-referred; shaper for log LUTs) and converted back afterwards.
+  io: >-
+    The LUT file is referenced by the project and collected with it. A missing LUT is reported with a relink action.
+  limitations: >-
+    A LUT applied in the wrong space looks wrong, so the card shows the expected space prominently. Display-referred LUTs clip HDR values above their domain. AE's 64-point axis limit does not apply here.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Apply a look (LUT)" — drag a LUT file onto a layer or pick from the looks library with thumbnails rendered on the selected surface.
+    defaults: >-
+      Expects Rec.709 display unless the file says otherwise, Intensity 100 %.
+    automation: >-
+      Detects 1D vs. 3D and the domain, and routes OCIO-only formats to fx.color.ocio-file-transform transparently.
+    usability_check: >-
+      A first-time user applies a supplied .cube look and lowers its strength in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "lut-apply": a 33³ test LUT matches a CPU tetrahedral reference within 1/1023, and preview equals export.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.cc-overbrights
+  name: CC Overbrights
+  sources:
+    - ref: S02
+      item: CC Overbrights
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: CC Overbrights (Utility effects page; Cycore plugins page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Visualize which pixels of a float (32-bpc) image are over-bright (above 1.0) or clipped, per channel or by luminance, as an effect that can be rendered.
+  projection_example: >-
+    Burn an over-range indicator into a test render to check whether a 3D render's highlights will clip on the projector.
+  controls:
+    - { name: "Channel / display mode (over-range RGB, per channel, luminance, clipped)", type: "enum", animatable: false }
+    - { name: "Clip Color", type: "color", animatable: false }
+  animation: >-
+    Not animated.
+  dependencies: [proj.effect-stack, fx.utility.clipping-gamut-diagnostics]
+  implementation: >-
+    Uses the same WGSL kernel as fx.utility.clipping-gamut-diagnostics, applied as an ordinary stack effect so the indicator can be rendered (evaluated in working space at that point of the stack).
+  io: >-
+    none
+  limitations: >-
+    Adobe's Cycore page summarizes this effect as "boosts the brightness of highlight areas". That conflicts with Cycore's own documentation of a float over-range visualizer, which this entry follows. If the highlight-boost reading is correct, that outcome is covered by fx.color.exposure plus a glow. Controls are listed from general knowledge.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "HDR, broadcast or film-format utility with no projection workflow behind it. LUT application and anti-banding dither stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Show problem colors" → "Include in render" (burns the overlay into a test export).
+    defaults: >-
+      Over-range RGB, magenta clip color.
+    automation: >-
+      Only offered for test renders; export warns if the effect is left enabled on a final render.
+    usability_check: >-
+      A novice produces a test render showing clipped areas in at most 2 actions.
+  acceptance: >-
+    Mini scene "overrange": exactly the pixels above 1.0 (per mode) are flagged.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.cineon-converter
+  name: Cineon Converter
+  sources:
+    - ref: S02
+      item: Cineon Converter
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Cineon Converter (Utility effects page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Convert Cineon log film scans to linear (or back) with adjustable black and white points, gamma and highlight rolloff, keyframable to follow tone changes.
+  projection_example: >-
+    Use scanned 35 mm archive footage of the building, delivered as Cineon/DPX log, as projection content.
+  controls:
+    - { name: "Conversion Type (Log To Linear / Linear To Log / Log To Log)", type: "enum", animatable: false }
+    - { name: "10 Bit Black Point / Internal Black Point", type: "float[2]", animatable: true }
+    - { name: "10 Bit White Point / Internal White Point", type: "float[2]", animatable: true }
+    - { name: "Gamma", type: "float", animatable: true }
+    - { name: "Highlight Rolloff", type: "float", animatable: true }
+  animation: >-
+    All points keyframable, per Adobe, to track tone drift in scans.
+  dependencies: [color.management, proj.effect-stack, fx.color.ocio-color-space-transform]
+  implementation: >-
+    If retained, an analytic WGSL Cineon curve: printing density of 0.002 per code value, negative gamma 0.6, reference black 95 and white 685, configurable, with a soft highlight rolloff. It runs on the raw decoded 10-bit values before working-space conversion.
+  io: >-
+    Depends on DPX/Cineon decode through FFmpeg or OpenImageIO-equivalent readers, to be confirmed.
+  limitations: >-
+    Decision 2026-10-02: kept for After Effects import fidelity and DPX/Cineon footage; log-to-linear conversion in the colour pipeline.
+
+    OPEN QUESTION: will the user ingest Cineon/DPX log scans, or deliver Cineon sequences? If not, footage interpretation in color.management (OCIO Cineon/ADX transforms) and fx.color.ocio-color-space-transform cover log conversion, and this effect is unnecessary. If yes, keep it for per-shot keyframed density fixes. Adobe itself recommends color management for most cases.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "HDR, broadcast or film-format utility with no projection workflow behind it. LUT application and anti-banding dither stay required."
+  milestone: F
+  beginner:
+    action: >-
+      If retained: automatic. Cineon/DPX files are interpreted on import, and "This scan looks flat" opens the converter under More controls.
+    defaults: >-
+      Log To Linear, 95/685 points, gamma 1.7 (Adobe default), rolloff 20.
+    automation: >-
+      Reads the DPX header transfer characteristic to choose the conversion.
+    usability_check: >-
+      If retained: a novice imports a supplied DPX log scan and it previews with normal contrast with no manual step.
+  acceptance: >-
+    Pending resolution; if kept, mini scene "cineon": matches the Kodak reference curve within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.color-profile-converter
+  name: Color Profile Converter
+  sources:
+    - ref: S02
+      item: Color Profile Converter
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Color Profile Converter (Utility effects page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Convert a layer from one ICC color profile to another, with optional linearization, rendering intent, black point compensation and scene-referred compensation.
+  projection_example: >-
+    Convert a still that was mastered in Adobe RGB into the show's working space by hand.
+  controls:
+    - { name: "Input Profile / Linearize Input Profile", type: "group", animatable: false }
+    - { name: "Output Profile / Linearize Output Profile", type: "group", animatable: false }
+    - { name: "Intent (Perceptual / Saturation / Relative Colorimetric / Absolute Colorimetric) + Black Point Compensation", type: "enum", animatable: false }
+    - { name: "Scene-ref. Profile Compensation (On / Off / Use Project Setting)", type: "enum", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [fx.color.ocio-color-space-transform, color.management]
+  implementation: >-
+    No separate pass. Maps onto fx.color.ocio-color-space-transform. Named spaces replace profiles; "linearized" spaces are the same primaries with a linear transfer; matrix/TRC ICC profiles load through OCIO's ICC FileTransform reader; rendering intent maps to the CST gamut handling (Clip ≈ colorimetric, Compress ≈ perceptual).
+  io: >-
+    Embedded ICC profiles in imported stills are handled by color.management at footage interpretation.
+  limitations: >-
+    Superseded: Adobe recommends automatic color management over this effect, and the useful outcome (manually convert a layer between spaces) is covered by the CST. Not reproduced: LUT-based (non-matrix) ICC profiles, the Saturation intent, and AE's scene-referred compensation flag. These are noted as gaps if a real need appears.
+  disposition: superseded
+  superseded_by: fx.color.ocio-color-space-transform
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Not listed separately. The search name opens the color-space converter, and dropping a profiled image is handled automatically.
+    defaults: >-
+      n/a
+    automation: >-
+      Embedded profiles convert automatically on import.
+    usability_check: >-
+      A user importing an Adobe RGB still sees correct color with no action.
+  acceptance: >-
+    Unit test: an Adobe RGB (1998) matrix profile converted via OCIO matches the analytic conversion within 1/1023.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.grow-bounds
+  name: Grow Bounds
+  sources:
+    - ref: S02
+      item: Grow Bounds
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Grow Bounds (Utility effects page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Enlarge the layer's buffer so the next effect (shadow, warp, glow) is not clipped at the layer or composition edge.
+  projection_example: >-
+    Stop a wave-warped roofline outline from being cut off at the edge of its layer.
+  controls:
+    - { name: "Pixels", type: "int", animatable: true }
+  animation: >-
+    Not needed. Bounds are computed automatically per frame.
+  dependencies: [proj.effect-stack]
+  implementation: >-
+    No separate pass. Every effect pass declares its bounds expansion, and the effect stack propagates region-of-definition and region-of-interest automatically, including for continuously rasterized vector and text layers. An advanced "extra overscan" field remains on the stack for edge cases.
+  io: >-
+    none
+  limitations: >-
+    Superseded: Adobe notes it is unnecessary for 32-bpc effects, which compensate automatically. Our engine does this for every effect, so the outcome (no unexpected clipping; brief §11H, §11J bounds expansion) is covered. The risk moves to effect authors declaring correct bounds, which is a test requirement in proj.effect-stack.
+  disposition: superseded
+  superseded_by: proj.effect-stack
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Nothing to do. Search for "grow bounds" explains that bounds are automatic.
+    defaults: >-
+      n/a
+    automation: >-
+      Automatic bounds propagation.
+    usability_check: >-
+      A novice applies a large glow and warp to an outline near the frame edge and sees no clipped edge, without any extra step.
+  acceptance: >-
+    Mini scene "bounds": a drop shadow and warp on a partly off-frame text layer render unclipped in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.hdr-compander
+  name: HDR Compander
+  sources:
+    - ref: S02
+      item: HDR Compander
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: HDR Compander (Utility effects page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Compress HDR values into 0–1 before effects that only handle low dynamic range, then expand them back afterwards, keeping highlights intact.
+  projection_example: >-
+    Run an 8-bit-only stylize effect on a bright 3D render without flattening its hot highlights.
+  controls:
+    - { name: "Mode (Compress Range / Expand Range)", type: "enum", animatable: false }
+    - { name: "Gain", type: "float", animatable: true }
+    - { name: "Gamma", type: "float", animatable: true }
+  animation: >-
+    Gain and Gamma are keyframable. The Expand instance links to the Compress instance by expression, like Adobe's preset.
+  dependencies: [proj.effect-stack, expr.engine]
+  implementation: >-
+    Per-pixel: compress x' = (x/gain)^(1/gamma) and expand x = gain·x'^gamma, in scene-linear f32. The engine inserts the pair automatically around any effect whose color-space declaration is "clamped 0–1", and a manual pair stays available as an advanced tool.
+  io: >-
+    none
+  limitations: >-
+    In our float pipeline the pair is lossless apart from f16 rounding. The precision loss Adobe warns about only applies if an effect quantizes internally (e.g. 8-bit bitwise ops).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "HDR, broadcast or film-format utility with no projection workflow behind it. LUT application and anti-banding dither stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Hidden; the engine handles it. Advanced "Protect highlights through this effect" toggle under More controls.
+    defaults: >-
+      Gain = measured peak of the layer (rounded up), Gamma 1.
+    automation: >-
+      Auto-wraps clamped-range effects and sets Gain from frame statistics when the toggle is used.
+    usability_check: >-
+      A novice applying a clamped-range effect to an HDR render sees no highlight flattening and takes no extra action.
+  acceptance: >-
+    Mini scene "compander": compress→expand round-trip within f16 precision; highlights survive a clamped-range effect.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.hdr-highlight-compression
+  name: HDR Highlight Compression
+  sources:
+    - ref: S02
+      item: HDR Highlight Compression
+      category: Utility
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: HDR Highlight Compression (Utility effects page)
+      category: Utility
+      checked: true
+  artist_can: >-
+    Roll HDR highlights smoothly into the 0–1 range so bright areas keep detail instead of clipping, with an amount control.
+  projection_example: >-
+    Keep the detail in a 3D render's sun glint and emissive windows when the show is output to SDR projectors.
+  controls:
+    - { name: "Amount", type: "percent", animatable: true }
+  animation: >-
+    Amount keyframable.
+  dependencies: [proj.effect-stack, fx.utility.clipping-gamut-diagnostics, color.management]
+  implementation: >-
+    Per-pixel, hue-preserving soft-knee compression in scene-linear on max(R,G,B): identity below a knee, then a smooth rolloff reaching 1.0 asymptotically at Amount = 100 %. Scaling all channels by the same ratio avoids hue skew. f32 math.
+  io: >-
+    none
+  limitations: >-
+    HDR honesty: compressing HDR into SDR does not make an SDR projector HDR. It trades highlight contrast for detail. This is a creative per-layer choice, distinct from the export or display view transform in color.management.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "HDR, broadcast or film-format utility with no projection workflow behind it. LUT application and anti-banding dither stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Protect highlights" quick fix, offered automatically when the clipping check finds over-range areas on a layer.
+    defaults: >-
+      Amount 100 %.
+    automation: >-
+      The clipping diagnostics badge offers it in one click on the offending layer.
+    usability_check: >-
+      A novice recovers clipped highlight detail on a supplied HDR render in at most 2 actions after seeing the warning.
+  acceptance: >-
+    Mini scene "overrange": no output above 1.0 at 100 %, monotonic tone, and hue error under 1° on a saturated HDR ramp.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.clipping-gamut-diagnostics
+  name: Clipping & gamut check
+  sources:
+    - ref: brief §14
+      item: LUT preview and clipping/gamut diagnostics; HDR without claiming an SDR projector becomes HDR
+      category: Color precision
+      checked: true
+    - ref: brief §11J
+      item: Diagnostic patterns
+      category: Effect library
+      checked: true
+  artist_can: >-
+    Turn on an overlay that shows where the picture will clip (above white or below black), fall outside the output or projector gamut, or sink into the projector's black floor, with a percentage readout and a false-color exposure view.
+  projection_example: >-
+    Before exporting, see that the emissive windows of the 3D tunnel clip on Projector 2 and that the deep blues fall outside its gamut.
+  controls:
+    - { name: "Mode (Over-range / Under-range / Out-of-gamut / False color / Near-black)", type: "enum", animatable: false }
+    - { name: "Test against (Viewer display / Export preset / Projector N)", type: "enum", animatable: false }
+    - { name: "Threshold", type: "float", animatable: false }
+    - { name: "Overlay style (zebra / solid color / false color)", type: "enum", animatable: false }
+    - { name: "Include in render (burn-in for test exports)", type: "bool", animatable: false }
+  animation: >-
+    Not animated. It is a live viewer tool.
+  dependencies: [color.management, out.projector-output, map.projector, render.encode, preview.cache]
+  implementation: >-
+    A viewer overlay pass that is not part of the render graph unless burn-in is on. Values are transformed into the target output space using exactly the transforms export will use (pre-quantization). Channels above 1+ε or below −ε are flagged. Gamut excursions are found by converting to the target primaries and checking for negative components. False color is a 1D LUT on log2 luminance, and the near-black floor comes from the projector's declared black level. Pixel counts use an atomic GPU counter reduction. Output correction stays in out.projector-output; this pass only reads its declared gamut and black level.
+  io: >-
+    Export preflight reports the clipped and out-of-gamut percentage per output.
+  limitations: >-
+    Only as accurate as the declared projector gamut and black level. A monitor preview cannot predict appearance on a real, colored surface (brief §14).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "HDR, broadcast or film-format utility with no projection workflow behind it. LUT application and anti-banding dither stay required."
+  milestone: D
+  beginner:
+    action: >-
+      A "Show problem colors" toggle in the viewer toolbar, plus a warning badge in Export when anything clips.
+    defaults: >-
+      Over-range plus out-of-gamut against the current export or projector target, zebra overlay, 0.5 % warning threshold.
+    automation: >-
+      The badge names the layer most responsible (by contribution test) and offers "Protect highlights" or "Bring colors into range".
+    usability_check: >-
+      A first-time user finds which region clips in a supplied scene, and fixes it via the badge, in under 1 minute.
+  acceptance: >-
+    Mini scene "overrange": flags exactly the synthetic over-range and out-of-gamut patches, and the export preflight percentage matches the viewer count.
+  status: not-started
+  evidence: []
+
+- id: fx.utility.banding-safe-dither
+  name: Smooth gradients (anti-banding)
+  sources:
+    - ref: brief §14
+      item: Alpha, glow and gradients must survive the complete pipeline without fringes or banding
+      category: Color precision
+      checked: true
+    - ref: brief §17
+      item: Required output types and formats (8/10-bit delivery)
+      category: Rendering and export
+      checked: true
+  artist_can: >-
+    Keep gradients, glows, fog and slow dark fades smooth on 8-bit and 10-bit files and projector feeds, without having to know about bit depth.
+  projection_example: >-
+    A slow fade to black and a large blue sky gradient across the facade show no stair-step bands on the projector.
+  controls:
+    - { name: "Dither (Auto / Off / Strength)", type: "enum", animatable: false }
+    - { name: "Pattern (Blue noise / Triangular PDF)", type: "enum", animatable: false }
+    - { name: "Temporal (static / animated per frame, seeded)", type: "enum", animatable: false }
+    - { name: "Banding warning", type: "bool", animatable: false }
+  animation: >-
+    Not animated. Animated dither uses the frame index with a fixed seed, so it is deterministic.
+  dependencies: [render.encode, out.projector-output, color.management, preview.cache, fx.generate.gradient-ramp]
+  implementation: >-
+    A final quantization pass applied once per output, after the output transform and correction and immediately before conversion to 8 or 10 bit in render.encode and the projector windows: a 128×128 blue-noise or TPDF texture at ±0.5 LSB, offset per frame from a seeded hash, so preview and export match. Engine rules: generators and gradients compute in f32 and interpolate in linear light or OKLab, intermediates stay rgba16float, and any effect that quantizes internally is flagged. A banding detector (large flat runs of identical code values in smooth regions) drives the warning.
+  io: >-
+    Export settings and the bundle manifest record whether and where dither was applied, so playback software never adds it twice.
+  limitations: >-
+    Low-bitrate H.264 can smooth away dither, so banding returns. The warning recommends 10-bit HEVC/ProRes for gradient-heavy scenes. Dither cannot fix banding already baked into source media.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Nothing to do: on by default. Export → advanced shows a "Smooth gradients" toggle, and the export check warns "this file may show bands" with a one-click switch to a 10-bit preset.
+    defaults: >-
+      Auto (on for every 8 or 10-bit output), blue noise, static per frame for stills and animated for video.
+    automation: >-
+      Detects gradient-heavy scenes and recommends a 10-bit preset when the chosen codec is 8-bit at low bitrate.
+    usability_check: >-
+      A first-time user exports the supplied fog/fade scene with default settings, sees no visible banding on the projector or monitor, and never touches a dither setting.
+  acceptance: >-
+    AS-1 architectural trace (glow) and mini scene "dark-fade": no quantization step wider than the dither cell is visible in the 8-bit export, and preview and export frames are identical at the same frame index.
+  status: not-started
+  evidence: []

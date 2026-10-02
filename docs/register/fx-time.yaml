@@ -1,0 +1,595 @@
+# Time effects — Before Effects capability register
+# Sources: S02 effect list + support matrix (Time rows), S17 Time effects page, S01 Cycore plugins page (helpx .../list-of-effects/cycore-plugins.html), brief §4, §11F, §18, §20. Live pages read 2026-10-01 through a browser session (WebFetch was blocked with HTTP 403).
+
+- id: fx.time.temporal-sampling-contract
+  name: Neighbour-frame sampling contract
+  sources:
+    - ref: brief
+      item: "§11F — effects that read neighbouring frames behave correctly at clip boundaries and during random-access rendering"
+      category: Time effects (product requirement)
+      checked: true
+    - ref: brief
+      item: "§20 — effects document temporal dependencies; parallel workers must not skip necessary history"
+      category: Architecture and build rules
+      checked: true
+  artist_can: >-
+    Trust that trails, echoes, slow motion and other time effects look identical while scrubbing, playing, exporting in parallel or resuming an interrupted render. Choose what a time effect sees before the first and after the last frame of a clip.
+  projection_example: >-
+    A two-minute looping facade show uses light trails. The trail wraps seamlessly across the loop point instead of popping each time the media server restarts the file.
+  controls:
+    - { name: "Edge frames (before start / after end)", type: "enum (transparent, hold, mirror, loop)", animatable: false }
+    - { name: "Loop range", type: "enum (layer duration, work area, composition loop region)", animatable: false }
+  animation: >-
+    Not animatable. Each time effect has its own setting, and a project-wide default applies when none is set.
+  dependencies: [proj.effect-stack, preview.cache, render.queue, anim.time-remap]
+  implementation: >-
+    Every pass descriptor declares a temporal footprint as a pure function of its parameters. The footprint is one of: discrete offsets, a sampled range with a step, sub-frame samples, or "stateful". The evaluator resolves sample times in integer flicks and applies the edge policy in source time. Upstream frames are fetched through preview.cache keyed by (node hash, flicks), so preview, export and multi-frame workers see identical inputs. Stateful passes checkpoint their state every K frames, and render.queue only splits jobs at checkpoints. A harness renders shuffled and 8-worker parallel frame orders and requires bit-identical output against a sequential render.
+  io: >-
+    The edge policy is saved in the project. Exported media carries no extra metadata.
+  limitations: >-
+    The "loop" policy assumes the content itself loops; it cannot invent continuity the footage lacks. Large footprints (long Echo, Time Displacement) multiply upstream renders and memory. The UI reports that cost instead of hiding it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      No action is needed. Time effects show an "Edges" choice under More controls, preset to the best option for the content.
+    defaults: >-
+      "Loop" when the composition is marked as a loop. Otherwise transparent outside the clip, which matches After Effects.
+    automation: >-
+      Detects looping compositions and loop regions and sets the policy. Warns when a trail would be cut off at a clip edge.
+    usability_check: >-
+      A first-time user builds a looping trail scene and exports it without changing any setting. The render.verify loop check finds no seam discontinuity larger than one normal trail step.
+  acceptance: >-
+    AS-6 and mini scene "loop-trails". Shuffled-order and parallel renders are bit-identical to a sequential render, and an interrupted render resumes with no visible discontinuity.
+  status: not-started
+  evidence: []
+
+- id: fx.time.optical-flow-engine
+  name: Motion analysis (optical flow)
+  sources:
+    - ref: brief
+      item: "§4 — motion-estimated interpolation; §11F — synthesized motion blur and time-warp"
+      category: Animation engine / Time effects (product requirement)
+      checked: true
+    - ref: S17
+      item: Timewarp (Pixel Motion method) and Pixel Motion Blur (motion vectors)
+      category: Time
+      checked: true
+  artist_can: >-
+    Let the app work out how every pixel moves between frames, so footage can be slowed smoothly, given realistic motion blur, or deblurred.
+  projection_example: >-
+    Slow a 25 fps drone clip of the venue to 25% speed for a dreamy intro without stutter.
+  controls:
+    - { name: "Quality (fast preview / final)", type: "enum", animatable: false }
+    - { name: "Vector detail", type: "float (0-100)", animatable: false }
+    - { name: "Smoothness / error threshold", type: "float", animatable: false }
+    - { name: "Foreground matte (separate motion)", type: "layer-ref + channel", animatable: false }
+  animation: >-
+    Analysis settings are not animated. Downstream effects animate their own speed and shutter controls.
+  dependencies: [preview.cache, render.queue, fx.time.temporal-sampling-contract]
+  implementation: >-
+    Two backends share one cache format. The preview backend is a WGSL pyramidal dense-inverse-search (DIS) flow pass with variational refinement, run forward and backward. The final-quality backend runs in the vision sidecar: OpenCV CUDA NVIDIA Optical Flow on the RTX 5070 Ti, or RAFT through PyTorch. Flow is stored in rgba16float (forward + backward) per source-frame pair, with a forward-backward consistency occlusion mask, cached on disk by source hash, frame pair and settings. Temporal: reads source frames n-1, n and n+1. Export reuses cached final flow and flags any preview/export backend mismatch.
+  io: >-
+    Flow caches live in the project cache folder. Collect-project leaves them out unless asked.
+  limitations: >-
+    Flow fails on occlusion, transparency, repeated textures and flashing light, which is common in projection content. The fallbacks are Frame Mix and a foreground matte. The sidecar backend requires CUDA; without it, only the lower-quality WGSL backend runs.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      Never a separate step. Recipes such as "Slow motion" call it and show "Analysing motion…" progress.
+    defaults: >-
+      Fast preview while editing; Final quality for export.
+    automation: >-
+      Starts background analysis when footage is used in a slow-motion recipe. Reuses caches and invalidates them when the source changes.
+    usability_check: >-
+      Smooth slow motion requires no flow setting. Applying "Slow motion" to a 10 s 1080p clip produces a smooth first preview frame in under 10 s on the target PC.
+  acceptance: >-
+    Mini scene "drone-slowmo": 25% slow motion of a reference clip. Final-flow interpolated frames score at least 30 dB PSNR against held-out real frames.
+  status: not-started
+  evidence: []
+
+- id: fx.time.cc-force-motion-blur
+  name: CC Force Motion Blur
+  sources:
+    - ref: S02
+      item: CC Force Motion Blur
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S17
+      item: CC Force Motion Blur
+      category: Time
+      checked: true
+  artist_can: >-
+    Add real motion blur to anything that changes quickly, including effect animation, nested compositions and procedural textures, not just layers that move.
+  projection_example: >-
+    A fast-evolving fractal-noise "energy" texture on a wall strobes at 30 fps; forced motion blur makes it read as fluid motion.
+  controls:
+    - { name: "Motion Blur Samples", type: "int", animatable: true }
+    - { name: "Override Shutter Angle", type: "bool", animatable: false }
+    - { name: "Shutter Angle", type: "angle (0-360)", animatable: true }
+    - { name: "Native Motion Blur", type: "enum (on, off)", animatable: false }
+  animation: >-
+    Samples and shutter angle are keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, proj.precompose, fx.time.temporal-sampling-contract, preview.cache]
+  implementation: >-
+    Temporal supersampling pass. It re-evaluates the upstream input (layer source, nested composition and earlier effects) at S sub-frame times across the shutter interval, using integer flicks and the composition's shutter phase unless overridden, then averages in rgba32float. Temporal: S sub-frame evaluations inside [t + phase, t + phase + angle/360 × frame]. For footage with no sub-frame data, sub-samples fall back to blending neighbouring frames. Bounds: union of the upstream bounds over all sub-samples. Cost is S times the upstream render; every sample is a pure evaluation, so the result stays deterministic under multi-frame rendering.
+  io: >-
+    none
+  limitations: >-
+    Expensive for heavy upstream graphs. Preview automatically drops samples and labels the compromise. Cannot invent sub-frame motion inside plain footage; use Pixel Motion Blur for that.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Smooth fast motion" toggle on any selection; More controls exposes samples and shutter.
+    defaults: >-
+      8 samples, composition shutter angle (180°).
+    automation: >-
+      Suggests the toggle when the app measures large frame-to-frame change in procedural content. Reduces samples automatically during interactive preview.
+    usability_check: >-
+      A first-time user removes visible strobing from a fast noise texture with one toggle in under 15 s.
+  acceptance: >-
+    Mini scene "noise-strobe": blurred output matches a 64-sample reference within tolerance, and parallel export is bit-identical to sequential.
+  status: not-started
+  evidence: []
+
+- id: fx.time.cc-wide-time
+  name: CC Wide Time
+  sources:
+    - ref: S02
+      item: CC Wide Time
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S17
+      item: CC Wide Time
+      category: Time
+      checked: true
+  artist_can: >-
+    Blend several frames before and after the current one into a ghostly smear that trails behind, ahead of, or on both sides of the moving content.
+  projection_example: >-
+    A dancer's projected silhouette leaves a symmetrical ghost on both sides as she crosses the stage wall.
+  controls:
+    - { name: "Current Frame", type: "bool", animatable: false }
+    - { name: "Forward Steps", type: "int", animatable: true }
+    - { name: "Backward Steps", type: "int", animatable: true }
+    - { name: "Native Motion Blur", type: "enum (on, off)", animatable: false }
+  animation: >-
+    Step counts keyframable (hold interpolation) and expression-linkable, for example to audio level.
+  dependencies: [proj.effect-stack, fx.time.temporal-sampling-contract, preview.cache, fx.time.echo]
+  implementation: >-
+    Frame-average pass over [t - B·f, t + F·f] in whole-frame steps (f = frame duration), with the current frame optionally excluded. Each output is recomputed from cached inputs into an rgba32float accumulator, not from a running sliding sum, so random access stays bit-exact. Temporal: reads B + F (+1) frames. Bounds: unchanged. Precision: rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    Shares its core with Echo (Blend operator, both directions). Cost grows linearly with step count; above 64 steps, preview uses a strided subset and labels it.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Light trails" recipe → More controls → Trail direction: behind, ahead or both.
+    defaults: >-
+      Backward 4, Forward 4, Current Frame on.
+    automation: >-
+      Converts a trail length in seconds into step counts at the composition frame rate.
+    usability_check: >-
+      A first-time user switches an existing trail to "both directions" in under 20 s without help.
+  acceptance: >-
+    Mini scene "ghost-dancer": output matches the reference frame average, and the clip edges follow the edge policy.
+  status: not-started
+  evidence: []
+
+- id: fx.time.cc-time-blend
+  name: CC Time Blend
+  sources:
+    - ref: S17
+      item: CC Time Blend
+      category: Time
+      checked: true
+    - ref: S02
+      item: CC Time Blend
+      category: Time
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+  artist_can: >-
+    Accumulate frames over time so moving content paints persistent trails that slowly fade, like a long-exposure photograph building up.
+  projection_example: >-
+    A light bead travelling around every window frame gradually "paints" the facade outline, which then fades out on the next cue.
+  controls:
+    - { name: "Transfer (blend mode)", type: "enum", animatable: false }
+    - { name: "Accumulation", type: "percent", animatable: true }
+    - { name: "Clear To", type: "enum", animatable: false }
+    - { name: "Reset at markers (product addition)", type: "bool", animatable: false }
+  animation: >-
+    Accumulation keyframable and expression-linkable (for example, beat-driven decay). Resets can follow layer markers.
+  dependencies: [proj.effect-stack, mask.blend-modes, fx.time.temporal-sampling-contract, preview.cache, render.queue]
+  implementation: >-
+    Stateful recurrence: out(t) = transfer(out(t - f) × Accumulation, in(t)), reset at the layer in-point or a reset marker. State is stored in rgba16float (rgba32float for additive transfer) and checkpointed to the disk cache every K frames. Random access re-simulates from the nearest checkpoint, so cost is at most K frames, and render.queue gives workers contiguous chunks that start at checkpoints. Temporal: depends on every frame since the last reset. Bounds: unchanged.
+  io: >-
+    Checkpoint state lives in the project cache only.
+  limitations: >-
+    Not listed in the S02 support matrix as of 2026-10-01; it is named only in the S17 third-party note, so Adobe's support data is unknown. Seeking far from a checkpoint costs up to K frame renders. Changing any upstream parameter invalidates every later checkpoint.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      "Paint with movement" recipe: select a moving layer and choose how long the paint lasts.
+    defaults: >-
+      Accumulation 90%, Screen transfer, reset at the layer start.
+    automation: >-
+      Creates checkpoints in the background and warns when a cut would break the accumulation.
+    usability_check: >-
+      A first-time user makes a moving light leave a fading painted outline in at most 3 actions and under 45 s.
+  acceptance: >-
+    Mini scene "paint-outline": random seek to frame 900 matches a sequential render bit-exactly. AS-6 resume test passes.
+  status: not-started
+  evidence: []
+
+- id: fx.time.cc-time-blend-fx
+  name: CC Time Blend FX
+  sources:
+    - ref: S17
+      item: CC Time Blend FX
+      category: Time
+      checked: true
+    - ref: S02
+      item: CC Time Blend FX
+      category: Time
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+  artist_can: >-
+    Build video-feedback loops: last frame's result is fed back through other effects (zoom, rotate, blur, colour) before being blended with the new frame.
+  projection_example: >-
+    Each window becomes an infinite zooming feedback tunnel that spirals and shifts hue with the music.
+  controls:
+    - { name: "Instance (Paste / Blend)", type: "enum", animatable: false }
+    - { name: "Transfer (blend mode)", type: "enum", animatable: false }
+    - { name: "Accumulation", type: "percent", animatable: true }
+    - { name: "Clear To", type: "enum", animatable: false }
+  animation: >-
+    Accumulation and every effect inside the feedback loop are keyframable and expression-linkable.
+  dependencies: [fx.time.cc-time-blend, proj.effect-stack, fx.time.temporal-sampling-contract, preview.cache]
+  implementation: >-
+    The paired Paste and Blend instances become one explicit state node in the pass graph, not a graph cycle. State from frame t - f is injected at "Paste", processed by the intervening passes and captured at "Blend". The node uses the same checkpointing as CC Time Blend. Temporal: unbounded history since the last reset. Bounds: the intervening passes' bounds, clamped to the layer frame for state.
+  io: >-
+    none
+  limitations: >-
+    Absent from the S02 matrix (named only in the S17 note). Feedback amplifies tiny numeric differences, so determinism depends on bit-exact passes; non-deterministic GPU reductions are not allowed inside the loop.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      "Feedback tunnel" recipe. It shows one "Feedback" group wrapping the effects instead of two paired instances.
+    defaults: >-
+      Zoom 102%, rotate 1°/frame, Accumulation 85%, Add transfer with soft clamp.
+    automation: >-
+      Places the Paste and Blend instances in the correct stack order and keeps them paired when effects are reordered.
+    usability_check: >-
+      A first-time user creates a feedback tunnel inside a selected window in at most 3 actions, then changes its spin, without seeing two effect instances.
+  acceptance: >-
+    Mini scene "window-tunnel": output is stable after reopening the project and seeking; parallel export matches sequential.
+  status: not-started
+  evidence: []
+
+- id: fx.time.echo
+  name: Echo
+  sources:
+    - ref: S02
+      item: Echo
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S17
+      item: Echo
+      category: Time
+      checked: true
+  artist_can: >-
+    Combine copies of the layer from earlier or later moments to make visual echoes, motion trails, streaks and smears.
+  projection_example: >-
+    Light tracing the roofline leaves a glowing comet tail that fades behind it.
+  controls:
+    - { name: "Echo Time (seconds)", type: "float (negative = past)", animatable: true }
+    - { name: "Number of Echoes", type: "int", animatable: true }
+    - { name: "Starting Intensity", type: "float", animatable: true }
+    - { name: "Decay", type: "float", animatable: true }
+    - { name: "Echo Operator", type: "enum (Add, Maximum, Minimum, Screen, Composite In Back, Composite In Front, Blend)", animatable: false }
+    - { name: "Include layer motion (product addition)", type: "bool", animatable: false }
+  animation: >-
+    All numeric controls keyframable, expression-linkable and audio-drivable (for example, trail length pumps on the beat).
+  dependencies: [proj.effect-stack, anim.keyframe.core, mask.blend-modes, preview.cache, fx.time.temporal-sampling-contract, audio.to-keyframes]
+  implementation: >-
+    Echo pass. For k = 0..N it fetches the upstream input at t + k·Δ through the frame cache and accumulates with the chosen operator into an rgba32float ping-pong accumulator, weighting each echo by Starting Intensity × Decay^k. Memory stays at O(1) frames. Output is rgba16float, premultiplied. Temporal: reads N + 1 frames spanning N·|Δ| into the past or future. Bounds: unchanged; with "Include layer motion", the layer is evaluated in composition space and bounds are the union over the sample times. The Composite In Back/Front operators use premultiplied "over" in sequence order.
+  io: >-
+    none
+  limitations: >-
+    In After Effects, Echo ignores the layer's own transform motion unless the layer is precomposed (S17). Before Effects offers "Include layer motion" to remove that step, while the default keeps After Effects behaviour for parity. The Add operator can overload to white; the recipe uses Screen.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: C
+  beginner:
+    action: >-
+      "Light trails" recipe: select a moving layer → Light trails, with controls for Trail length, Fade and Brightness.
+    defaults: >-
+      Echo Time -1 frame, 8 echoes, Decay 0.75, Screen operator, "Include layer motion" on.
+    automation: >-
+      Converts trail length in seconds to echo count and echo time at the composition frame rate. Turns on layer motion so no precompose is needed. Warns before the Add operator would clip.
+    usability_check: >-
+      A first-time user adds visible light trails to an animated roofline trace in at most 3 actions and under 30 s.
+  acceptance: >-
+    AS-1 (trails on the roofline trace) and mini scene "echo-trails": shuffled-order render matches sequential, and the loop seam follows the edge policy.
+  status: not-started
+  evidence: []
+
+- id: fx.time.pixel-motion-blur
+  name: Pixel Motion Blur
+  sources:
+    - ref: S02
+      item: Pixel Motion Blur
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S17
+      item: Pixel Motion Blur
+      category: Time
+      checked: true
+  artist_can: >-
+    Add realistic camera-style motion blur to footage or rendered sequences that have none, using analysed motion.
+  projection_example: >-
+    Sped-up time-lapse clouds used as a sky backdrop on the upper facade lose their jittery look.
+  controls:
+    - { name: "Shutter Control (Automatic / Manual)", type: "enum", animatable: false }
+    - { name: "Shutter Angle", type: "angle (1-720)", animatable: true }
+    - { name: "Shutter Samples", type: "int", animatable: false }
+    - { name: "Vector Detail", type: "float (0-100)", animatable: false }
+  animation: >-
+    Shutter Angle keyframable and expression-linkable.
+  dependencies: [fx.time.optical-flow-engine, fx.time.temporal-sampling-contract, proj.effect-stack, preview.cache]
+  implementation: >-
+    Takes velocity at frame t from the optical-flow engine (source frames t-1, t, t+1). A reconstruction-filter blur follows: tile-max velocity with neighbour-max dilation, then a per-pixel gather of S samples along ±velocity × (angle/360)/2, with foreground/background weighting by velocity magnitude. Temporal: reads source frames t-1, t and t+1 plus cached flow. Bounds: expanded by the maximum velocity × shutter fraction, capped at 512 px. Precision: rgba16float with f32 accumulation.
+  io: >-
+    Uses flow caches (see fx.time.optical-flow-engine).
+  limitations: >-
+    Inherits optical-flow failure cases (flashing light, transparency). Does not separate overlapping motions inside one pixel; a matte layer improves the result.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      "Motion blur for video" toggle on a footage layer; More controls exposes the shutter angle.
+    defaults: >-
+      Automatic shutter (composition setting, 180°), 16 samples.
+    automation: >-
+      Runs motion analysis in the background and previews at reduced samples until analysis finishes.
+    usability_check: >-
+      A first-time user adds motion blur to a time-lapse clip with one action and sees the result within 15 s for a 10 s 1080p clip.
+  acceptance: >-
+    Mini scene "timelapse-blur": comparison with a reference long-exposure render; no blur leaks across a static foreground matte.
+  status: not-started
+  evidence: []
+
+- id: fx.time.posterize-time
+  name: Posterize Time
+  sources:
+    - ref: S02
+      item: Posterize Time
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S17
+      item: Posterize Time
+      category: Time
+      checked: true
+  artist_can: >-
+    Lock a layer to a lower frame rate for a stepped, stop-motion or strobe look while the rest of the show stays smooth.
+  projection_example: >-
+    Bricks rebuild the wall in a choppy 8 fps stop-motion style that steps exactly on the music's beats.
+  controls:
+    - { name: "Frame Rate", type: "float (hold interpolation only)", animatable: true }
+    - { name: "Step on beats (product addition)", type: "bool", animatable: false }
+    - { name: "Anchor (layer start / composition start)", type: "enum", animatable: false }
+  animation: >-
+    Frame Rate allows hold keyframes only (as in After Effects). Beat stepping reads markers from audio analysis.
+  dependencies: [anim.time-remap, proj.effect-stack, audio.analysis, fx.time.temporal-sampling-contract]
+  implementation: >-
+    Not a pixel pass. It rewrites the evaluation time of the upstream subtree to q(t) = floor((t - t0)·fps)/fps + t0 in integer flicks, or to the latest beat marker at or before t. The upstream therefore renders and caches once per held frame. Temporal: reads one frame at q(t). Bounds: unchanged. Precision: lossless pass-through.
+  io: >-
+    none
+  limitations: >-
+    S17 notes that animating the frame rate gives unpredictable results, so only hold keys are allowed. Beat stepping depends on the accuracy of beat detection.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: C
+  beginner:
+    action: >-
+      "Stop-motion look" recipe with a "Steps per second" slider and a "Step to the beat" switch.
+    defaults: >-
+      8 steps per second, anchored to the layer start.
+    automation: >-
+      Uses detected beat markers when the show has music. Snaps the step rate to divisors of the composition frame rate to avoid uneven cadence.
+    usability_check: >-
+      A first-time user makes an animation step on the beat in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "stopmotion-rebuild": held frames change exactly on beat markers in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.time.time-difference
+  name: Time Difference
+  sources:
+    - ref: S02
+      item: Time Difference
+      category: Time
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S17
+      item: Time Difference
+      category: Time
+      checked: true
+  artist_can: >-
+    Show only what differs between a layer and another layer, or the same layer at another moment, to find moving areas or compare against a clean plate.
+  projection_example: >-
+    Build a "what is moving" matte from a performer clip so particles are emitted only from the dancer's moving limbs.
+  controls:
+    - { name: "Target", type: "layer-ref", animatable: false }
+    - { name: "Time Offset (sec)", type: "float", animatable: true }
+    - { name: "Contrast", type: "float", animatable: true }
+    - { name: "Absolute Difference", type: "bool", animatable: false }
+    - { name: "Alpha Channel", type: "enum (Original, Target, Blend, Max, Full On, Lightness Of Result, Max Of Result, Alpha Difference, Alpha Difference Only)", animatable: false }
+  animation: >-
+    Time Offset and Contrast keyframable and expression-linkable.
+  dependencies: [proj.layer, proj.effect-stack, fx.time.temporal-sampling-contract, preview.cache, mask.track-matte]
+  implementation: >-
+    Single compute pass. Per pixel it takes |A - B| (or the signed difference biased to mid-grey) between the effect input at t and the target layer's pre-transform output at t + Time Offset. Contrast gain and the selected alpha mode follow. Temporal: reads the target at t + Time Offset, and when the target is the same layer this is a temporal difference. Bounds: effect layer bounds. Precision: rgba16float, where After Effects is limited to 8-bpc.
+  io: >-
+    none
+  limitations: >-
+    Noisy or compressed footage needs denoising or a contrast threshold first. Camera motion makes everything "different", so stabilise first.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Find what's moving" matte tool and the "Emit from movement" particle recipe.
+    defaults: >-
+      Same layer, Time Offset -1 frame, Absolute Difference on, alpha = Lightness Of Result.
+    automation: >-
+      Picks a contrast that maps the 99th-percentile difference to white. Offers to stabilise footage when global motion is detected.
+    usability_check: >-
+      A first-time user gets a usable moving-parts matte from a performer clip in at most 3 actions without opening the inspector.
+  acceptance: >-
+    AS-4 support scene: the moving-parts matte drives particle emission; preview and export match.
+  status: not-started
+  evidence: []
+
+- id: fx.time.time-displacement
+  name: Time Displacement
+  sources:
+    - ref: S02
+      item: Time Displacement
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S17
+      item: Time Displacement
+      category: Time
+      checked: true
+  artist_can: >-
+    Shift each pixel forward or back in time according to a brightness map, for slit-scan, time-ripple and smeared-time looks.
+  projection_example: >-
+    A "time ripple" spreads out from the front door: footage near the door is live, while footage further away lags up to 2 seconds behind.
+  controls:
+    - { name: "Time Displacement Layer", type: "layer-ref", animatable: false }
+    - { name: "Max Displacement Time (sec)", type: "float", animatable: true }
+    - { name: "Time Resolution (fps)", type: "float", animatable: false }
+    - { name: "Stretch Map To Fit", type: "bool", animatable: false }
+    - { name: "Map source (layer / gradient / distance from region)", type: "enum (product addition)", animatable: false }
+  animation: >-
+    Max Displacement keyframable and expression-linkable. The map layer can itself be animated.
+  dependencies: [proj.layer, map.region, fx.time.temporal-sampling-contract, preview.cache, fx.generate.gradient-ramp]
+  implementation: >-
+    Sliced gather. The per-pixel target time is computed from map luminance (read in f32, no 8-bit time quantisation) and quantised to Time Resolution. For each occupied slice, the upstream frame is fetched from cache and written to the pixels assigned to that slice, with optional blending of neighbouring slices for a smooth mode. Memory is O(1) frames plus the output; cost is O(slices). Temporal: reads up to 2 × Max × Resolution + 1 frames in [t - Max, t + Max]. Bounds: unchanged. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    S17 notes that masks on the same layer are ignored; Before Effects applies masks after the pass instead. Long max times are expensive; the UI shows the number of frames read per output frame.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      "Time ripple" recipe: pick a region or direction for the ripple to come from, then set Strength in seconds.
+    defaults: >-
+      Map = distance from the selected region, max 1 s, resolution = composition frame rate.
+    automation: >-
+      Generates the map from region geometry (no manual gradient layer). Uses the map layer with its effects applied, with no precompose step.
+    usability_check: >-
+      A first-time user creates a time ripple from a chosen door region in at most 3 actions and under 60 s.
+  acceptance: >-
+    Mini scene "door-ripple": per-pixel source times match the analytic map; random-access frames match sequential.
+  status: not-started
+  evidence: []
+
+- id: fx.time.timewarp
+  name: Timewarp
+  sources:
+    - ref: S02
+      item: Timewarp
+      category: Time
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S17
+      item: Timewarp
+      category: Time
+      checked: true
+  artist_can: >-
+    Change playback speed with smooth slow motion, fast motion or speed ramps, choosing how in-between frames are made: repeat, blend or motion-interpolate.
+  projection_example: >-
+    Footage of crashing waves ramps from real time to 20% slow motion as the "water" floods across the facade, then snaps back on the drop.
+  controls:
+    - { name: "Adjust Time By (Speed / Source Frame)", type: "enum", animatable: false }
+    - { name: "Speed", type: "percent", animatable: true }
+    - { name: "Source Frame", type: "float", animatable: true }
+    - { name: "Method (Whole Frames / Frame Mix / Pixel Motion)", type: "enum", animatable: false }
+    - { name: "Tuning (Vector Detail, Error Threshold, Block Size, RGB Weighting)", type: "group", animatable: false }
+    - { name: "Smoothing (Build From One Image, Correct Luminance Changes, Filtering)", type: "group", animatable: false }
+    - { name: "Motion Blur (Enable, Shutter Control, Shutter Angle, Shutter Samples)", type: "group", animatable: true }
+    - { name: "Matte Layer / Matte Channel", type: "layer-ref + enum", animatable: false }
+    - { name: "Warp Layer", type: "layer-ref", animatable: false }
+    - { name: "Show", type: "enum", animatable: false }
+    - { name: "Source Crops (left, right, top, bottom)", type: "float[4]", animatable: false }
+  animation: >-
+    Speed and Source Frame keyframable with the graph editor (speed ramps) and expression-linkable. Shutter angle keyframable.
+  dependencies: [anim.time-remap, anim.graph-editor, fx.time.optical-flow-engine, fx.time.temporal-sampling-contract, preview.cache]
+  implementation: >-
+    The core computes source time s(t) deterministically: either directly from Source Frame, or by integrating Speed from the layer in-point (exact per segment for linear and hold keys, fixed-step Simpson in flicks for Bezier). Pixel pass by method: Whole Frames takes the nearest frame; Frame Mix blends floor(s) and ceil(s); Pixel Motion warps floor(s) and ceil(s) bidirectionally with flow and occlusion-aware weights, with separate flow per matte region. Motion blur integrates S samples across the shutter in source time. Temporal: reads source frames floor(s)-1 to ceil(s)+1, plus every source frame spanned by the shutter. Bounds: unchanged; Source Crops repeat edge pixels inward. Precision: rgba16float, flow in f16.
+  io: >-
+    Uses flow caches.
+  limitations: >-
+    After Effects ignores masks on the same layer and does not handle interlaced fields (S17). Before Effects applies masks after the pass and expects progressive sources. Pixel Motion artefacts appear on occlusions and flashing content; Frame Mix is the fallback.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Temporal effect or plug-in clone with no projection workflow behind it. The temporal-sampling contract stays required for preview/export parity."
+  milestone: D
+  beginner:
+    action: >-
+      "Slow motion" and "Speed ramp" recipes: a Speed slider (or drawn ramp) plus a "Smooth (analyse motion)" switch.
+    defaults: >-
+      Pixel Motion for camera footage, Frame Mix for graphics and flashing content, motion blur off.
+    automation: >-
+      Classifies the clip (camera footage vs graphics) to pick the method. Starts flow analysis in the background. Extends the layer's out-point so slowed footage does not end early.
+    usability_check: >-
+      A first-time user makes a smooth 25% slow-motion clip in at most 3 actions and under 60 s, excluding analysis wait time, which is measured separately.
+  acceptance: >-
+    Mini scene "wave-ramp": speed ramp preview equals export frame-for-frame; interpolated frames meet the flow-engine PSNR target.
+  status: not-started
+  evidence: []

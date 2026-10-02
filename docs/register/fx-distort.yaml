@@ -1,0 +1,2355 @@
+# Distort — Before Effects capability register
+# Sources: S02 effect list + support matrix (Distort rows; page dated May 13, 2026), S12 Distort effects (page dated Jun 27, 2025),
+#   S20 Warp Stabilizer settings, S01 user-guide pages "The Rolling Shutter Repair effect" and "Cycore plugins"; brief §0, §1, §11A, §15, §19.
+#   All live pages retrieved 2026-10-01. Controls for CC effects and for native effects whose S12 section lists no controls
+#   (Bezier Warp, Corner Pin, Displacement Map, Spherize, Transform, Twirl, Warp) come from authoring knowledge, not the live page.
+# Shared warp passes named in `implementation`:
+#   warp.inverse = WGSL analytic inverse-mapping pass (output pixel -> source coordinate), premultiplied rgba16float source,
+#                  bicubic (Mitchell) sampling, EWA/supersampling where the Jacobian compresses (stands in for Adobe "Antialiasing").
+#   warp.mesh    = forward triangle-mesh raster pass (tessellated in the TS core, rasterized in WGSL with 4x MSAA).
+#   warp.field   = displacement-field pass reading an rg32float vector field texture.
+# Control types: float, int, bool, angle, percent, color, point2d, point3d, enum(...), layer, mask, region, region-set, seed, mesh, field, stroke-list, action.
+# Artistic distortion is always evaluated in show/content space, before out.projector-output; it never edits map.calibration.
+
+- id: fx.distort.bezier-warp
+  name: Bezier Warp
+  sources:
+    - ref: S02
+      item: Bezier Warp
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Bezier Warp
+      category: Distort
+      checked: true
+  artist_can: >-
+    Reshape a layer's outline with four curved edges (four corner points and eight tangent handles) so the image bends to follow them.
+  projection_example: >-
+    Curve the top of a rectangular video so it follows an arched doorway, or make a logo wobble like jelly on the beat.
+  controls:
+    - { name: "Vertices (4 corners)", type: "point2d[4]", animatable: true }
+    - { name: "Tangents (8 handles)", type: "point2d[8]", animatable: true }
+    - { name: "Quality", type: "int(1-10)", animatable: false }
+  animation: >-
+    Every vertex and tangent keyframable with spatial paths and expression-linkable; can be driven by region-outline or tracker data.
+  dependencies: [anim.keyframe.core, anim.motion-path, map.region, proj.effect-stack]
+  implementation: >-
+    Coons patch built from the four cubic boundary curves, tessellated in the TS core (density from Quality) and drawn with warp.mesh.
+    Bounds become the bbox of the curve hull. No temporal dependency; geometry is float32.
+  io: >-
+    none
+  limitations: >-
+    Interior interpolation is a bilinearly blended Coons patch, so it is not pixel-identical to Adobe. Artistic only; never a
+    substitute for the calibration mesh warp in map.calibration / out.projector-output.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Curve to fit" — drag curved edge handles on the canvas; also reached through the "Wobble like jelly" recipe.
+    defaults: >-
+      Handles start on the layer edges; with a region selected, the vertices snap to the region's corners.
+    automation: >-
+      "Fit to arch" places the top curve on the selected region's curved edge and sets tangents from the outline.
+    usability_check: >-
+      A first-time user fits a rectangular clip into an arched window region in under 45 s using only canvas handles.
+  acceptance: >-
+    Mini scene "arch-fit": a clip curved into an arched window. Preview and export match within tolerance and the handles survive save/reopen.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.bulge
+  name: Bulge
+  sources:
+    - ref: S02
+      item: Bulge
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Bulge
+      category: Distort
+      checked: true
+  artist_can: >-
+    Make an elliptical area swell toward or sink away from the viewer around a center point.
+  projection_example: >-
+    A section of brick wall swells outward as if something is pushing from inside the building.
+  controls:
+    - { name: "Horizontal Radius", type: float, animatable: true }
+    - { name: "Vertical Radius", type: float, animatable: true }
+    - { name: "Bulge Center", type: point2d, animatable: true }
+    - { name: "Bulge Height", type: float, animatable: true }
+    - { name: "Taper Radius", type: float, animatable: true }
+    - { name: "Antialiasing", type: "enum(low|medium|high)", animatable: false }
+    - { name: "Pin All Edges", type: bool, animatable: false }
+  animation: >-
+    All numeric and point controls keyframable and expression/audio-linkable; radius handles are editable on the canvas.
+  dependencies: [anim.keyframe.core, proj.effect-stack]
+  implementation: >-
+    warp.inverse with an elliptical dome height profile and a taper falloff. Antialiasing maps to the supersampling factor.
+    No bounds expansion and no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Adobe's exact dome profile is approximated. It is a 2D illusion, read correctly only from roughly the audience viewpoint.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make it bulge"; it is also the building block of the "Make the wall breathe" recipe (fx.distort.breathing-wall).
+    defaults: >-
+      Radii fit the selected region and edges are pinned. Height animates 0 → 30% → 0 over 2 s with ease.
+    automation: >-
+      Centers on the region centroid and sizes the radii from the region's bounding ellipse.
+    usability_check: >-
+      A first-time user makes a selected wall section swell out and settle back in 3 or fewer actions, without opening the inspector.
+  acceptance: >-
+    Mini scene "bulge-swell": an animated bulge on a wall region. The pinned edges show zero displacement and reopen/export match the preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-bend-it
+  name: CC Bend It
+  sources:
+    - ref: S02
+      item: CC Bend It
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Bend It
+      category: Distort
+      checked: true
+  artist_can: >-
+    Flex a layer like a rod between a start and end point, bending everything past the start into an arc.
+  projection_example: >-
+    A graphic laid over a pilaster bends and sways as though the column were made of rubber.
+  controls:
+    - { name: "Bend", type: float, animatable: true }
+    - { name: "Start", type: point2d, animatable: true }
+    - { name: "End", type: point2d, animatable: true }
+    - { name: "Render Prestart", type: "enum(none|static|bend)", animatable: false }
+    - { name: "Distort", type: "enum(legacy|extended)", animatable: false }
+  animation: >-
+    Bend, Start and End keyframable; Bend is the usual target for wiggle or audio expressions.
+  dependencies: [anim.keyframe.core, expr.engine]
+  implementation: >-
+    warp.inverse mapping coordinates along the Start→End axis onto a circular arc whose curvature follows Bend.
+    Bounds expand to the arc's bbox. No temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    "Legacy" versus "extended" edge behaviour is matched by observation, not from a specification.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Bend it" recipe (style: Flex between two points) → More controls.
+    defaults: >-
+      Start at the bottom and End at the top of the selected element. Bend oscillates ±20 with a 3 s period.
+    automation: >-
+      Places Start and End on the long axis of the selected region.
+    usability_check: >-
+      A first-time user makes a column graphic sway back and forth in under 60 s without placing points by hand.
+  acceptance: >-
+    Mini scene "rubber-column": swaying bend on a column region; seek to any frame gives identical output.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-bender
+  name: CC Bender
+  sources:
+    - ref: S02
+      item: CC Bender
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Bender
+      category: Distort
+      checked: true
+  artist_can: >-
+    Curve a layer along an axis from a fixed base to a moving top, with Bend, Marilyn (skirt flare), Sharp and Boxer styles.
+  projection_example: >-
+    A tall banner graphic on a tower bends at its base like a reed in the wind.
+  controls:
+    - { name: "Amount", type: float, animatable: true }
+    - { name: "Style", type: "enum(bend|marilyn|sharp|boxer)", animatable: false }
+    - { name: "Adjust To Distance", type: bool, animatable: false }
+    - { name: "Top", type: point2d, animatable: true }
+    - { name: "Base", type: point2d, animatable: true }
+  animation: >-
+    Amount, Top and Base keyframable and expression-linkable.
+  dependencies: [anim.keyframe.core, fx.distort.cc-bend-it]
+  implementation: >-
+    warp.inverse with a per-style axial bend profile, sharing the arc math with fx.distort.cc-bend-it.
+    Bounds expand to the bent bbox. No temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    The style curves are reproduced visually, not numerically.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Bend it" recipe, using the style picker (Bend / Flare / Sharp / Boxer) with animated thumbnails.
+    defaults: >-
+      Base at the bottom of the selection, Top at the top, Amount animates 0 → 40 → 0.
+    automation: >-
+      Aligns Base/Top with the selected region's vertical axis.
+    usability_check: >-
+      A first-time user picks a bend style from thumbnails and previews it on a tower region in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "reed-tower": each of the four styles renders in preview and export with matching frames.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-blobbylize
+  name: CC Blobbylize
+  sources:
+    - ref: S02
+      item: CC Blobbylize
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Blobbylize
+      category: Distort
+      checked: true
+  artist_can: >-
+    Turn a layer into soft, glossy, liquid-looking blobs shaped by another layer's alpha or brightness, with built-in lighting.
+  projection_example: >-
+    Window shapes soften into shiny jelly blobs before reforming as windows.
+  controls:
+    - { name: "Blob Layer", type: layer, animatable: false }
+    - { name: "Property", type: "enum(alpha|luminance|lightness|red|green|blue)", animatable: false }
+    - { name: "Softness", type: float, animatable: true }
+    - { name: "Cut Away", type: float, animatable: true }
+    - { name: "Light (Using, Type, Intensity, Color, Height, Position, Direction)", type: "group", animatable: true }
+    - { name: "Shading (Ambient, Diffuse, Specular, Roughness, Metal)", type: "group(float)", animatable: true }
+  animation: >-
+    Softness and Cut Away are the main animated controls; the light position can follow a 3D light or a null.
+  dependencies: [fx.blur-sharpen.gaussian-blur, 3d.light, anim.keyframe.core]
+  implementation: >-
+    Pass graph: Gaussian-blur the chosen property of the blob layer → float32 height field → Sobel normals → refraction-style
+    displacement (warp.field) plus Blinn-Phong shading; Cut Away thresholds alpha. Bounds expand by the blur radius; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Adobe's shading model is approximated. Using comp lights instead of the effect light needs a defined 2.5D light projection.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Turn it to goo" recipe → More controls.
+    defaults: >-
+      Blob layer is the target itself; softness scales with region size; top-left light, moderate specular.
+    automation: >-
+      Creates the blob source from the region matte when no other layer is chosen.
+    usability_check: >-
+      A first-time user turns a selected region into glossy goo and back in under 90 s without picking a control layer.
+  acceptance: >-
+    Mini scene "jelly-windows": windows melt to blobs and reform; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-flo-motion
+  name: CC Flo Motion
+  sources:
+    - ref: S02
+      item: CC Flo Motion
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Flo Motion
+      category: Distort
+      checked: true
+  artist_can: >-
+    Pinch or stretch the image around two knot points so it flows into or out of them like a vortex or taffy pull.
+  projection_example: >-
+    The facade texture gets sucked into the main doorway, then pushes back out.
+  controls:
+    - { name: "Knot 1", type: point2d, animatable: true }
+    - { name: "Amount 1", type: float, animatable: true }
+    - { name: "Knot 2", type: point2d, animatable: true }
+    - { name: "Amount 2", type: float, animatable: true }
+    - { name: "Tile Edges", type: bool, animatable: false }
+    - { name: "Antialiasing", type: "enum(low|medium|high)", animatable: false }
+    - { name: "Falloff", type: float, animatable: true }
+  animation: >-
+    Knots and amounts keyframable; knots can follow tracker or region-centroid data.
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    warp.inverse with two radial power-law attractors. Tile Edges switches the sampler to repeat addressing.
+    No bounds change, no temporal dependency, safe in float32.
+  io: >-
+    none
+  limitations: >-
+    Extreme amounts produce heavy minification, so EWA filtering is required to avoid shimmer.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Pull it into a point" recipe → More controls.
+    defaults: >-
+      Knot 1 sits on the clicked point and Knot 2 is disabled (Amount 0); the pull ramps over 2 s.
+    automation: >-
+      Click any region to place the knot at its centroid.
+    usability_check: >-
+      A first-time user sucks a wall texture into a clicked door in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "door-vortex": pull and release; 32-bit render without banding.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-griddler
+  name: CC Griddler
+  sources:
+    - ref: S02
+      item: CC Griddler
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Griddler
+      category: Distort
+      checked: true
+  artist_can: >-
+    Cut the image into a grid of tiles, each scaled and rotated in place, with optional gaps between them.
+  projection_example: >-
+    A brick-wall image breaks into tilting tiles that line up with the real brick courses.
+  controls:
+    - { name: "Horizontal Scale", type: float, animatable: true }
+    - { name: "Vertical Scale", type: float, animatable: true }
+    - { name: "Tile Size", type: float, animatable: true }
+    - { name: "Rotation", type: angle, animatable: true }
+    - { name: "Cut Tiles", type: bool, animatable: false }
+  animation: >-
+    All numeric controls keyframable; Rotation is a common audio-driven target.
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    WGSL per-cell inverse transform: the cell index comes from floor(p / tile), then a local scale and rotation. The grid can be aligned
+    to the region's axes. No bounds change; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    All tiles share one transform. Per-tile variation belongs to rigs or fx.simulation.card-dance.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Break into tiles" recipe → More controls.
+    defaults: >-
+      Tile size comes from the region's repeated-feature spacing when detected, otherwise 1/12 of the region width.
+    automation: >-
+      Aligns the grid with the region's dominant axis and repeated-feature spacing.
+    usability_check: >-
+      A first-time user makes a wall tile-out and back with tiles visibly aligned to the brick pattern in under 90 s.
+  acceptance: >-
+    Mini scene "tile-wall": grid aligned to a brick region; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-lens
+  name: CC Lens
+  sources:
+    - ref: S02
+      item: CC Lens
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Lens
+      category: Distort
+      checked: true
+  artist_can: >-
+    Apply a round fisheye lens at a point; the area outside the lens becomes transparent.
+  projection_example: >-
+    A "magic lens" drifts across the facade, showing a warped, magnified view of the scene inside a round window.
+  controls:
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Size", type: float, animatable: true }
+    - { name: "Convergence", type: float, animatable: true }
+  animation: >-
+    All controls keyframable; Center commonly follows a motion path.
+  dependencies: [anim.keyframe.core, anim.motion-path]
+  implementation: >-
+    warp.inverse with a spherical-lens mapping, a Convergence exponent and a transparent exterior.
+    No bounds change; float32-safe; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    The outside is transparent, as in Adobe. Compose the effect over a copy to keep the surroundings.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Fisheye lens" recipe → More controls.
+    defaults: >-
+      Lens fits the selected circular region; the recipe composites it over the original so nothing goes black.
+    automation: >-
+      Snaps Center and Size to a selected round window region.
+    usability_check: >-
+      A first-time user puts a fisheye view inside a round window in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "rose-lens": lens inside a circular region with the original visible outside.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-page-turn
+  name: CC Page Turn
+  sources:
+    - ref: S02
+      item: CC Page Turn
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Page Turn
+      category: Distort
+      checked: true
+  artist_can: >-
+    Curl a layer away like a turning page, showing a chosen back side and revealing what lies underneath.
+  projection_example: >-
+    The whole facade image peels away from the top-right corner to reveal the next scene.
+  controls:
+    - { name: "Controls", type: "enum(classic|top-left|top-right|bottom-left|bottom-right)", animatable: false }
+    - { name: "Fold Position", type: point2d, animatable: true }
+    - { name: "Fold Direction", type: angle, animatable: true }
+    - { name: "Fold Radius", type: float, animatable: true }
+    - { name: "Light Direction", type: angle, animatable: true }
+    - { name: "Render", type: "enum(front-and-back|back-page|front-page)", animatable: false }
+    - { name: "Back Page", type: layer, animatable: false }
+    - { name: "Back Opacity", type: percent, animatable: true }
+    - { name: "Paper Color", type: color, animatable: true }
+  animation: >-
+    Fold Position is keyframed (usually corner to opposite corner); the rest are optional keyframes.
+  dependencies: [anim.keyframe.core, map.region, proj.layer]
+  implementation: >-
+    Analytic cylinder-fold model. The flat part uses warp.inverse. The curled strip and back face are a tessellated cylinder segment drawn
+    with warp.mesh, using Lambert shading from Light Direction. Bounds expand to the fold's bbox. No temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    The page is a 2D illusion, not a cloth simulation; for physically bending sheets use the 3D path.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Peel it away" — select a region or scene layer and click the corner to peel from.
+    defaults: >-
+      Peel lasts 2 s with ease-in-out; the back is paper-colored; the next scene shows underneath.
+    automation: >-
+      Sets Controls/Fold Position from the clicked corner and the fold path to the opposite corner of the region.
+    usability_check: >-
+      A first-time user builds a corner-peel reveal between two scenes on a selected region in 3 or fewer actions and under 60 s.
+  acceptance: >-
+    Mini scene "peel-reveal": peel from a chosen corner reveals scene 2; export matches preview; reopen keeps the fold path.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-power-pin
+  name: CC Power Pin
+  sources:
+    - ref: S02
+      item: CC Power Pin
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Power Pin
+      category: Distort
+      checked: true
+  artist_can: >-
+    Pin a layer's four corners with extra edge-expansion margins, a perspective/bilinear blend and an "unstretch" option.
+  projection_example: >-
+    Pin a video into a skewed window, extending it a few percent past the frame so no gap shows at the edges.
+  controls:
+    - { name: "Top Left, Top Right, Bottom Left, Bottom Right", type: "point2d[4]", animatable: true }
+    - { name: "Perspective", type: percent, animatable: true }
+    - { name: "Unstretch", type: bool, animatable: false }
+    - { name: "Expansion (%) Top, Left, Right, Bottom", type: "float[4]", animatable: true }
+  animation: >-
+    Corners and expansion keyframable; accepts planar-tracker data.
+  dependencies: [fx.distort.corner-pin]
+  implementation: >-
+    Served by the fx.distort.corner-pin pass, which carries the Expansion, Perspective blend and Unstretch controls.
+  io: >-
+    Imported projects or presets that name CC Power Pin map onto Corner Pin with these controls filled in.
+  limitations: >-
+    Superseded: fx.distort.corner-pin includes every CC Power Pin control. "CC Power Pin" stays as a search alias.
+    The perspective blend is reproduced visually; it is not proven bit-identical.
+  disposition: superseded
+  superseded_by: fx.distort.corner-pin
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Same "Pin to corners" action as Corner Pin; searching "power pin" finds it.
+    defaults: >-
+      Expansion 0; Perspective 100%.
+    automation: >-
+      Same as Corner Pin (region-corner snapping, tracker import).
+    usability_check: >-
+      Searching "power pin" in the effect library returns Pin to corners as the first result.
+  acceptance: >-
+    Mini scene "pin-window" re-run with expansion margins set; a reference render matches the expected expanded quad.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-ripple-pulse
+  name: CC Ripple Pulse
+  sources:
+    - ref: S02
+      item: CC Ripple Pulse
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Ripple Pulse
+      category: Distort
+      checked: true
+  artist_can: >-
+    Send out ripple rings whose strength follows a keyframed (or audio-driven) Pulse Level, like drops hitting water on every beat.
+  projection_example: >-
+    Each kick drum sends a ripple ring out from the main door across the wall.
+  controls:
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Pulse Level", type: float, animatable: true }
+    - { name: "Time Span (sec)", type: float, animatable: true }
+    - { name: "Amplitude", type: float, animatable: true }
+    - { name: "Render Bump Map", type: bool, animatable: false }
+  animation: >-
+    Pulse Level must be animated, by keyframes, by an expression or by audio.to-keyframes; nothing ripples while it is static.
+  dependencies: [anim.keyframe.core, audio.analysis, audio.to-keyframes, expr.engine]
+  implementation: >-
+    The ripple at time t sums Pulse Level history over Time Span. Rather than reading frame history, the property curve is sampled at fixed
+    sub-steps into a uniform buffer, and warp.inverse applies the sum. Random access stays exact.
+    No bounds change.
+  io: >-
+    none
+  limitations: >-
+    The history-sample count is capped (e.g. 256 per Time Span), so very fast pulse edits are band-limited.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Ripple on the beat" recipe — click a point, choose which sound drives it.
+    defaults: >-
+      Pulse Level comes from the kick/onset band of the show music; 1.5 s time span; amplitude scaled to region size.
+    automation: >-
+      Links Pulse Level to the cached beat/onset signal without the user editing expressions.
+    usability_check: >-
+      A first-time user makes ripples fire from a door on every kick drum in under 2 min without editing an expression.
+  acceptance: >-
+    AS-1 audio timing check reused: ripple onsets land within 1 frame of detected beats in export.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-slant
+  name: CC Slant
+  sources:
+    - ref: S02
+      item: CC Slant
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Slant
+      category: Distort
+      checked: true
+  artist_can: >-
+    Shear a layer sideways like italic lean, anchored at a floor line, with optional vertical stretch and solid-color fill.
+  projection_example: >-
+    Window panels lean over as if pushed by a gust of wind.
+  controls:
+    - { name: "Slant", type: float, animatable: true }
+    - { name: "Stretching", type: bool, animatable: false }
+    - { name: "Height", type: float, animatable: true }
+    - { name: "Floor", type: float, animatable: true }
+    - { name: "Set Color", type: bool, animatable: false }
+    - { name: "Color", type: color, animatable: true }
+  animation: >-
+    Slant, Height, Floor and Color keyframable.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    WGSL affine shear about the Floor line (warp.inverse with a linear map), with an optional flat color replace.
+    Bounds expand by the shear offset.
+  io: >-
+    none
+  limitations: >-
+    Equivalent to a skew transform; it is kept as its own entry for its floor anchoring and color fill.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Lean it" recipe → More controls.
+    defaults: >-
+      Floor on the region's bottom edge; Slant animates 0 → 15 → 0.
+    automation: >-
+      Places Floor on the selected region's base.
+    usability_check: >-
+      A first-time user makes a set of window panels lean and spring back in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "lean-panels": lean anchored to region bases; no gap at the floor line.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-smear
+  name: CC Smear
+  sources:
+    - ref: S02
+      item: CC Smear
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Smear
+      category: Distort
+      checked: true
+  artist_can: >-
+    Drag a soft blob of the image from one point to another, smearing what lies between.
+  projection_example: >-
+    A streak pulls down from a window sill like paint dripping.
+  controls:
+    - { name: "From", type: point2d, animatable: true }
+    - { name: "To", type: point2d, animatable: true }
+    - { name: "Reach", type: float, animatable: true }
+    - { name: "Radius", type: float, animatable: true }
+  animation: >-
+    All controls keyframable; used many times by the melt recipe with seeded offsets.
+  dependencies: [anim.keyframe.core]
+  implementation: >-
+    warp.inverse with a capsule-shaped falloff along From→To; float32-safe; no bounds change; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    A single smear per instance; multi-drip looks come from the melt recipe stacking instances or a field.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Smudge it" — drag on the canvas from where to where; also used inside "Melt it" (fx.distort.melting-facade).
+    defaults: >-
+      Radius 5% of region; reach 100%.
+    automation: >-
+      The drag gesture sets From/To directly; holding Shift keeps it vertical.
+    usability_check: >-
+      A first-time user creates a downward drip from a ledge with one drag on the canvas.
+  acceptance: >-
+    Mini scene "drip-sill": smear keyframed down a sill; preview/export match.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-split
+  name: CC Split
+  sources:
+    - ref: S02
+      item: CC Split
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Split
+      category: Distort
+      checked: true
+  artist_can: >-
+    Split a layer open symmetrically along the line between two points.
+  projection_example: >-
+    A wall image tears open down the middle of the facade.
+  controls:
+    - { name: "Point A", type: point2d, animatable: true }
+    - { name: "Point B", type: point2d, animatable: true }
+    - { name: "Split", type: float, animatable: true }
+  animation: >-
+    Split keyframable (0 closed → open).
+  dependencies: [fx.distort.cc-split-2]
+  implementation: >-
+    Served by the fx.distort.cc-split-2 pass with Split 1 = Split 2.
+  io: >-
+    Imported CC Split settings map to CC Split 2 with both splits linked.
+  limitations: >-
+    Superseded: CC Split 2 with Split 1 and Split 2 linked reproduces CC Split's symmetric opening. The name stays as a search alias.
+  disposition: superseded
+  superseded_by: fx.distort.cc-split-2
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Same "Split it open" action as CC Split 2.
+    defaults: >-
+      Symmetric (linked) opening.
+    automation: >-
+      Same as CC Split 2.
+    usability_check: >-
+      Searching "split" returns Split it open as the first result.
+  acceptance: >-
+    Reference render: CC Split 2 with linked splits matches an expected symmetric split of the test card.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-split-2
+  name: CC Split 2
+  sources:
+    - ref: S02
+      item: CC Split 2
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Split 2
+      category: Distort
+      checked: true
+  artist_can: >-
+    Tear a layer open along a line into a lens-shaped gap, with each side opening independently, revealing what is underneath.
+  projection_example: >-
+    The wall splits open top to bottom along the central doorway to reveal a glowing interior scene.
+  controls:
+    - { name: "Point A", type: point2d, animatable: true }
+    - { name: "Point B", type: point2d, animatable: true }
+    - { name: "Split 1", type: float, animatable: true }
+    - { name: "Split 2", type: float, animatable: true }
+  animation: >-
+    Splits keyframable; points follow region seams or tracker data.
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    warp.inverse that pushes pixels away from line AB with a lens-shaped opening profile, with separate amplitudes per side.
+    The gap is transparent. No bounds change; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    The tear is smooth-edged. Jagged crack edges come from stylize/simulation effects such as fx.simulation.shatter.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Split it open" — click two points along a seam (or pick a door region), then drag "How far".
+    defaults: >-
+      Opens 0 → 60% over 1.5 s with ease; the next scene shows in the gap.
+    automation: >-
+      Puts A/B on the selected region's vertical center line; sets the reveal layer.
+    usability_check: >-
+      A first-time user splits a wall open to reveal a second scene in 3 or fewer actions and under 60 s.
+  acceptance: >-
+    AS-3 transformation (opening phase) and mini scene "split-reveal"; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.cc-tiler
+  name: CC Tiler
+  sources:
+    - ref: S02
+      item: CC Tiler
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: CC Tiler
+      category: Distort
+      checked: true
+  artist_can: >-
+    Shrink the image and repeat it as a tiled grid, optionally blended with the original.
+  projection_example: >-
+    One looping pattern is repeated across a wall, with tiles sized to the window bays.
+  controls:
+    - { name: "Scale", type: percent, animatable: true }
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Blend w. Original", type: percent, animatable: true }
+  animation: >-
+    All controls keyframable (zooming tiles, drifting grid).
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    WGSL repeat-addressed sampling with scale and center; mip-mapped source for small tiles; float32-safe; no bounds change.
+  io: >-
+    none
+  limitations: >-
+    No per-tile mirroring; use fx.stylize.motion-tile for mirrored edges.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Repeat as tiles" recipe → More controls.
+    defaults: >-
+      Scale set so a whole number of tiles fits the region width.
+    automation: >-
+      Computes tile count from region size or detected repeated features.
+    usability_check: >-
+      A first-time user repeats a clip as tiles matching a facade's window bays in under 60 s.
+  acceptance: >-
+    Mini scene "bay-tiles": tile seams align to bay outlines within 1 px at export resolution.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.corner-pin
+  name: Corner Pin
+  sources:
+    - ref: S02
+      item: Corner Pin
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Corner Pin
+      category: Distort
+      checked: true
+  artist_can: >-
+    Pin the four corners of any layer to four points so it looks painted onto a skewed surface, or swing it like a door.
+  projection_example: >-
+    A looping video fits into a window that the photo shows at an angle.
+  controls:
+    - { name: "Upper Left, Upper Right, Lower Left, Lower Right", type: "point2d[4]", animatable: true }
+    - { name: "Expansion margins (top, left, right, bottom)", type: "float[4]", animatable: true }
+    - { name: "Perspective blend (projective ↔ bilinear)", type: percent, animatable: true }
+    - { name: "Unstretch", type: bool, animatable: false }
+    - { name: "Expand output", type: bool, animatable: false }
+  animation: >-
+    Every corner keyframable and expression-linkable; accepts planar-tracker and region-corner data.
+  dependencies: [anim.keyframe.core, map.region, proj.effect-stack]
+  implementation: >-
+    WGSL projective warp: the homography from the four points is solved in the TS core in double precision and inverse-mapped with
+    bicubic sampling plus EWA for minification. Below 100% perspective it blends with a bilinear quad map. Bounds are the pinned quad's bbox
+    plus expansion. No temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Not a substitute for projector calibration (map.calibration, out.projector-output); artistic only. Concave or self-intersecting
+    quads are clamped with a warning.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Pin to corners" — drag four handles on the canvas; or "Fit to this region".
+    defaults: >-
+      Corners start at the layer bounds; they snap to region corners when a region is selected.
+    automation: >-
+      Detects the four corners of a selected region and pins to them; one click applies planar-track data.
+    usability_check: >-
+      A first-time user fits a video into a skewed window in under 30 s without opening the inspector.
+  acceptance: >-
+    AS-1 and mini scene "pin-window": video pinned to a window region; export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.detail-preserving-upscale
+  name: Detail-preserving Upscale
+  sources:
+    - ref: S02
+      item: Detail-preserving Upscale
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Detail-preserving Upscale
+      category: Distort
+      checked: true
+  artist_can: >-
+    Enlarge low-resolution footage or images while keeping edges and texture crisp, with optional noise reduction first.
+  projection_example: >-
+    Scale a 1080p clip up to fill a 4K facade output without mushy edges.
+  controls:
+    - { name: "Scale", type: percent, animatable: true }
+    - { name: "Fit to Comp Width / Fit to Comp Height", type: action, animatable: false }
+    - { name: "Reduce Noise", type: float, animatable: false }
+    - { name: "Detail", type: float, animatable: false }
+    - { name: "Alpha", type: "enum(bilinear|bicubic)", animatable: false }
+  animation: >-
+    Scale keyframable. Changing Reduce Noise or Detail invalidates the cache.
+  dependencies: [preview.cache, preview.proxy, proj.layer]
+  implementation: >-
+    Default WGSL path: optional bilateral pre-denoise, Lanczos-3 upscale and a gradient-guided detail restore, with alpha scaled separately.
+    An optional "Enhance (AI)" mode runs Real-ESRGAN in the vision sidecar (CUDA) and bakes each frame once to an EXR cache keyed by source
+    hash and settings, so preview and export read identical pixels. Bounds equal the scaled layer. No temporal dependency.
+  io: >-
+    AI mode adds a model-weights download (Real-ESRGAN, BSD-3) and cache files. Original media is never modified.
+  limitations: >-
+    It cannot invent real detail. AI output is not bit-identical across GPUs or drivers, so it is always baked and reused, and it may
+    flicker on video. Adobe's algorithm is proprietary.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Offered automatically: "This clip is smaller than the wall — sharpen it up?" (one click); also listed in the effect library as "Upscale sharply".
+    defaults: >-
+      Scale fits the comp/region; mild noise reduction; bicubic alpha.
+    automation: >-
+      Detects when a source is upscaled more than 150% at export resolution and suggests the effect with a before/after split view.
+    usability_check: >-
+      A user accepts the upscale suggestion for a low-res clip and sees a before/after split in under 20 s.
+  acceptance: >-
+    Mini scene "upscale-1080-to-4k": edge-sharpness metric beats plain bicubic; AI-mode export re-render is hash-identical (from cache).
+  status: not-started
+  evidence: []
+
+- id: fx.distort.displacement-map
+  name: Displacement Map
+  sources:
+    - ref: S02
+      item: Displacement Map
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Displacement Map
+      category: Distort
+      checked: true
+  artist_can: >-
+    Push pixels horizontally and vertically by the brightness or channels of another layer: heat haze, glass, water, or "pushed through a pattern".
+  projection_example: >-
+    Show the facade as if seen through rippling glass, with a moving noise layer as the map.
+  controls:
+    - { name: "Displacement Map Layer", type: layer, animatable: false }
+    - { name: "Use For Horizontal Displacement", type: "enum(red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off)", animatable: false }
+    - { name: "Max Horizontal Displacement", type: float, animatable: true }
+    - { name: "Use For Vertical Displacement", type: "enum(red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off)", animatable: false }
+    - { name: "Max Vertical Displacement", type: float, animatable: true }
+    - { name: "Displacement Map Behavior", type: "enum(center|stretch-to-fit|tile)", animatable: false }
+    - { name: "Edge Behavior (Wrap Pixels Around)", type: bool, animatable: false }
+    - { name: "Expand Output", type: bool, animatable: false }
+  animation: >-
+    Max displacements keyframable; the map layer animates on its own timeline (time-remappable).
+  dependencies: [proj.layer, proj.precompose, proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    warp.field: the map layer is rendered to a texture and its channel read as non-color data, (v - 0.5) * 2 * max, to match Adobe's
+    0–255 semantics. Bounds expand by the max displacement when Expand Output is on. The only temporal dependency is the map layer's own time.
+    An option uses the map layer with its effects, removing the need for Adobe's precompose workaround.
+  io: >-
+    none
+  limitations: >-
+    In a linear-light pipeline, maps are read as raw encoded values, not linearized colour. Otherwise neutral grey would not be zero displacement.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Heat haze", "Look through glass" and "Turn it into water" recipes → More controls; direct entry "Push pixels with another layer".
+    defaults: >-
+      Recipes supply a generated noise map; max displacement is 2% of region size.
+    automation: >-
+      Recipes create and link the map layer and hide it from output.
+    usability_check: >-
+      A first-time user applies "Look through glass" to a window and sees a moving distortion in 3 or fewer actions, never choosing a map layer.
+  acceptance: >-
+    Mini scene "glass-window": a 50% grey map yields zero displacement (pixel-exact) and preview matches export.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.liquify
+  name: Liquify
+  sources:
+    - ref: S02
+      item: Liquify
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Liquify
+      category: Distort
+      checked: true
+  artist_can: >-
+    Push, pull, twirl, pinch, bloat, shift, reflect and clone areas of a layer with brushes, freeze areas with a mask, and reconstruct.
+  projection_example: >-
+    Hand-sculpt a facade so one window bloats outward and the cornice twists.
+  controls:
+    - { name: "Tool", type: "enum(warp|turbulence|twirl-cw|twirl-ccw|pucker|bloat|shift-pixels|reflection|clone|reconstruction)", animatable: false }
+    - { name: "Brush Size, Brush Pressure", type: "float[2]", animatable: false }
+    - { name: "Freeze Area Mask (with Mask Opacity/Feather)", type: mask, animatable: false }
+    - { name: "Turbulent Jitter", type: float, animatable: false }
+    - { name: "Clone Offset", type: point2d, animatable: false }
+    - { name: "Reconstruction Mode", type: "enum(revert|displace|amplitwist|affine)", animatable: false }
+    - { name: "View Options (View Mesh, Mesh Size, Mesh Color)", type: group, animatable: false }
+    - { name: "Distortion Mesh", type: field, animatable: true }
+    - { name: "Distortion Mesh Offset", type: point2d, animatable: true }
+    - { name: "Distortion Percentage", type: percent, animatable: true }
+  animation: >-
+    The distortion mesh is keyframed as whole snapshots; Distortion Percentage and Offset keyframable.
+  dependencies: [mask.bezier, ux.operation-system, anim.keyframe.core, preview.cache]
+  implementation: >-
+    Brush strokes are recorded as serializable operations that write an rg32float field on a fixed grid. One TS reference and one WGSL
+    compute kernel give identical results, and the Turbulence tool uses seeded noise. Snapshots interpolate linearly and render with
+    warp.field. Bounds may reach comp size.
+  io: >-
+    Distortion-mesh snapshots are stored as compressed float32 sidecar files in the project package.
+  limitations: >-
+    Adobe's per-tool falloff curves are approximated. Snapshot keyframes only interpolate linearly; fx.distort.animated-liquify adds per-stroke timing.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached as the "Push and smudge" brush under More controls; most users get the animated version (fx.distort.animated-liquify).
+    defaults: >-
+      Warp tool; brush 5% of region; frozen outside the selected region.
+    automation: >-
+      Freezes everything outside the selected region automatically; Undo works per stroke.
+    usability_check: >-
+      A first-time user pushes part of a wall outward and then undoes it with Reconstruct in under 60 s.
+  acceptance: >-
+    Mini scene "liquify-sculpt": stroke replay after reopen reproduces a hash-identical field.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.magnify
+  name: Magnify
+  sources:
+    - ref: S02
+      item: Magnify
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S12
+      item: Magnify
+      category: Distort
+      checked: true
+  artist_can: >-
+    Place a magnifying glass (circle or square) over part of the image, with feathered edges, blend modes and resolution-preserving scaling.
+  projection_example: >-
+    A magnifying glass travels along the cornice, enlarging the carved detail.
+  controls:
+    - { name: "Shape", type: "enum(circle|square)", animatable: false }
+    - { name: "Center", type: point2d, animatable: true }
+    - { name: "Magnification", type: percent, animatable: true }
+    - { name: "Link", type: "enum(none|size-to-magnification|size-and-feather-to-magnification)", animatable: false }
+    - { name: "Size", type: float, animatable: true }
+    - { name: "Feather", type: float, animatable: true }
+    - { name: "Opacity", type: percent, animatable: true }
+    - { name: "Scaling", type: "enum(standard|soft|scatter)", animatable: false }
+    - { name: "Blending Mode", type: enum, animatable: false }
+    - { name: "Resize Layer", type: bool, animatable: false }
+  animation: >-
+    Center follows motion paths; Magnification and Size keyframable.
+  dependencies: [mask.blend-modes, anim.motion-path, anim.keyframe.core]
+  implementation: >-
+    WGSL scaled sampling inside a circle or square SDF with a feathered edge. Standard is bicubic, Soft is a B-spline, and Scatter adds
+    seeded jitter. Results go through the shared blend-mode compositor. Resize Layer grows the bounds by the magnified radius.
+  io: >-
+    none
+  limitations: >-
+    Adobe runs Magnify only at 8 bpc. We run in rgba16float, so results are cleaner but not identical.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Magnifying glass" recipe → More controls.
+    defaults: >-
+      Circle, 200%, soft scaling, feather 10% of size.
+    automation: >-
+      Draws a motion path along a selected region edge for the glass to follow.
+    usability_check: >-
+      A first-time user sends a magnifying glass along a roofline in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "magnify-cornice": a glass on a path, rendered at 16-bit with no fringe at the feather.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.mesh-warp
+  name: Mesh Warp
+  sources:
+    - ref: S02
+      item: Mesh Warp
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Mesh Warp
+      category: Distort
+      checked: true
+  artist_can: >-
+    Lay a grid of Bezier patches over a layer and drag vertices and tangents to bend areas freely; animate the grid over time.
+  projection_example: >-
+    A panel bulges and sags in specific places, or one window shape morphs into another during a transition.
+  controls:
+    - { name: "Rows, Columns (up to 31)", type: "int[2]", animatable: false }
+    - { name: "Quality", type: "int(1-10)", animatable: false }
+    - { name: "Distortion Mesh (vertices + tangents)", type: mesh, animatable: true }
+  animation: >-
+    The Distortion Mesh is keyframed per vertex and tangent with interpolation, and recipes can drive it by expression.
+  dependencies: [anim.keyframe.core, anim.graph-editor, map.region, proj.effect-stack]
+  implementation: >-
+    A Bezier-patch grid is tessellated in the TS core and drawn with warp.mesh. Patch boundaries clamp vertices to prevent fold-over,
+    matching Adobe's rule that an image can't be pushed out of its patch. Bounds are the mesh bbox; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Artistic only. The projector residual mesh warp (out.projector-output) and map.calibration are separate object types and look different
+    in the UI, so they can't be confused.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Reshape with a grid" under More controls; the "Make the wall breathe" and "Melt it" recipes generate mesh animation for you.
+    defaults: >-
+      A 4×4 grid fitted to the region's bounding box, colored distinctly from calibration grids.
+    automation: >-
+      Aligns the grid to the region's axes and sets rows and columns from repeated features.
+    usability_check: >-
+      Five of five test users correctly identify the creative grid versus the calibration grid without help, and keyframe a 3-point bend in under 2 min.
+  acceptance: >-
+    Mini scene "grid-bend": a keyframed mesh bend; preview/export match; the calibration file is untouched (hash unchanged).
+  status: not-started
+  evidence: []
+
+- id: fx.distort.mirror
+  name: Mirror
+  sources:
+    - ref: S02
+      item: Mirror
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Mirror
+      category: Distort
+      checked: true
+  artist_can: >-
+    Split the image along a line at any angle and reflect one side onto the other.
+  projection_example: >-
+    Make content perfectly symmetrical about the center axis of a symmetric facade.
+  controls:
+    - { name: "Reflection Center", type: point2d, animatable: true }
+    - { name: "Reflection Angle", type: angle, animatable: true }
+  animation: >-
+    Both controls keyframable (a rotating mirror line gives kaleidoscope-like motion).
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    warp.inverse reflecting across a line. Axis-aligned lines on pixel or half-pixel positions use exact copies with no resampling.
+    No bounds change.
+  io: >-
+    none
+  limitations: >-
+    A single mirror line; multi-segment kaleidoscopes are fx.stylize.cc-kaleida.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Mirror it" — the mirror line snaps to the facade's symmetry axis.
+    defaults: >-
+      Vertical axis through the venue's detected symmetry line; left side reflected to the right.
+    automation: >-
+      Proposes the symmetry axis from the region layout (centroids of mirrored region pairs).
+    usability_check: >-
+      A first-time user makes content symmetric about the building's center line in 2 or fewer actions.
+  acceptance: >-
+    Mini scene "symmetric-facade": left and right halves are pixel-identical mirrors at an axis-aligned line.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.offset
+  name: Offset
+  sources:
+    - ref: S02
+      item: Offset
+      category: Distort
+      adobe_support: { gpu: true, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Offset
+      category: Distort
+      checked: true
+  artist_can: >-
+    Scroll the image inside its frame so whatever leaves one side reappears on the other — endless scrolling textures and seam checks.
+  projection_example: >-
+    A brick texture scrolls endlessly upward along a tower.
+  controls:
+    - { name: "Shift Center To", type: point2d, animatable: true }
+    - { name: "Blend With Original", type: percent, animatable: true }
+  animation: >-
+    Shift Center To keyframed or expression-driven by time (constant speed).
+  dependencies: [anim.keyframe.core, expr.engine]
+  implementation: >-
+    WGSL wrap-addressed sampling with a subpixel bicubic shift; integer shifts are exact copies. Identity bounds; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Wrapping is seamless only if the source tiles seamlessly; the recipe flags visible seams.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Scroll forever" recipe; also used by "Make a seamless loop".
+    defaults: >-
+      Speed in pixels per second (shown as "slow / medium / fast"), upward direction, generated as an expression.
+    automation: >-
+      Picks a speed so the loop completes a whole number of tiles within the scene length.
+    usability_check: >-
+      A first-time user makes a texture scroll and loop seamlessly in 3 or fewer actions, with no visible jump at the loop point.
+  acceptance: >-
+    Mini scene "scroll-tower": first and last+1 frames are identical (seamless loop).
+  status: not-started
+  evidence: []
+
+- id: fx.distort.optics-compensation
+  name: Optics Compensation
+  sources:
+    - ref: S02
+      item: Optics Compensation
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Optics Compensation
+      category: Distort
+      checked: true
+  artist_can: >-
+    Add or remove camera lens (barrel or fisheye) distortion so composited elements match filmed footage.
+  projection_example: >-
+    Straighten a drone shot of the venue before tracing it, or add matching lens bend to CG placed into filmed footage.
+  controls:
+    - { name: "Field Of View (FOV)", type: float, animatable: true }
+    - { name: "Reverse Lens Distortion", type: bool, animatable: false }
+    - { name: "FOV Orientation", type: "enum(horizontal|vertical|diagonal)", animatable: false }
+    - { name: "View Center", type: point2d, animatable: true }
+    - { name: "Optimal Pixels", type: bool, animatable: false }
+    - { name: "Resize", type: "enum(off|max-2x|max-4x|unlimited)", animatable: false }
+  animation: >-
+    FOV keyframable for zooming shots.
+  dependencies: [track.camera-solve, 3d.camera, anim.keyframe.core]
+  implementation: >-
+    warp.inverse with an FOV-based tangent/arctangent radial model and an analytic reverse. Brown–Conrady coefficients from a camera solve
+    are an alternative model. Resize expands bounds 2×, 4× or unlimited, with a memory estimate shown. Float32 throughout.
+  io: >-
+    Can import lens coefficients from camera-solve output (pycolmap/Blender).
+  limitations: >-
+    For filmed footage only. Projector lens distortion belongs to map.calibration (intrinsics) and must never be corrected here.
+    Adobe's FOV-to-distortion constant is matched empirically.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Straighten bent lines" (one slider) for footage; after a camera solve, "Match lens" is offered for CG layers.
+    defaults: >-
+      FOV from camera-solve data when available; otherwise 0 with a live straight-line guide.
+    automation: >-
+      Uses solved lens data to apply matching distortion to CG automatically.
+    usability_check: >-
+      A first-time user straightens a visibly curved roofline in drone footage in under 60 s using the line guide.
+  acceptance: >-
+    Mini scene "lens-match": distort then reverse with the same FOV round-trips within 0.5 px RMS.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.polar-coordinates
+  name: Polar Coordinates
+  sources:
+    - ref: S02
+      item: Polar Coordinates
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Polar Coordinates
+      category: Distort
+      checked: true
+  artist_can: >-
+    Convert between rectangular and polar coordinates, so stripes become rings and rays, or circles unroll into strips.
+  projection_example: >-
+    A scrolling striped pattern becomes rings radiating from a rose window.
+  controls:
+    - { name: "Interpolation", type: percent, animatable: true }
+    - { name: "Type of Conversion", type: "enum(rect-to-polar|polar-to-rect)", animatable: false }
+  animation: >-
+    Interpolation keyframable to morph between flat and polar.
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    warp.inverse between cartesian and polar coordinates, lerped by Interpolation, in float32. The polar seam wraps exactly.
+    No bounds change.
+  io: >-
+    none
+  limitations: >-
+    The polar center is the layer center, as in Adobe; the recipe precomposes to re-center on a region.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Wrap into a circle" recipe → More controls.
+    defaults: >-
+      Rect→polar at 100%, centered on the selected round region.
+    automation: >-
+      Precomposes and centers the content on the selected circular region.
+    usability_check: >-
+      A first-time user turns a stripe pattern into rings around a rose window in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "rose-rings": seam-free polar wrap at export resolution.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.reshape
+  name: Reshape
+  sources:
+    - ref: S02
+      item: Reshape
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Reshape
+      category: Distort
+      checked: true
+  artist_can: >-
+    Morph the image inside one mask shape into another mask shape, dragging the picture along, inside an optional boundary.
+  projection_example: >-
+    Content in a rectangular window morphs to fill a round porthole shape.
+  controls:
+    - { name: "Source Mask", type: mask, animatable: false }
+    - { name: "Destination Mask", type: mask, animatable: false }
+    - { name: "Boundary Mask", type: mask, animatable: false }
+    - { name: "Percent", type: percent, animatable: true }
+    - { name: "Elasticity", type: "enum(stiff|less-stiff|below-normal|normal|absolutely-normal|above-average|loose|liquid|super-fluid)", animatable: false }
+    - { name: "Correspondence Points", type: "point-pairs", animatable: true }
+    - { name: "Interpolation Method", type: "enum(discrete|linear|smooth)", animatable: false }
+  animation: >-
+    Percent and the masks are keyframable. Discrete re-solves every frame, while Linear and Smooth interpolate keyframed solutions.
+  dependencies: [mask.bezier, shape.path, preview.cache, anim.keyframe.core]
+  implementation: >-
+    TS core solver: constrained-Delaunay triangulation inside the boundary, arc-length correspondence between masks, and a harmonic/ARAP
+    solve weighted by Elasticity. It runs in float64 with a fixed iteration count for determinism, is cached per keyframe or frame in
+    preview.cache, and renders with warp.mesh.
+  io: >-
+    none
+  limitations: >-
+    Elasticity names are kept but mapped to our own regularization values, so the result is not identical to Adobe. Solves are CPU-heavy.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Morph shape to shape" recipe: pick a start outline and an end outline (e.g., two regions).
+    defaults: >-
+      Normal elasticity; Smooth interpolation; boundary auto-generated with a margin.
+    automation: >-
+      Builds source, destination and boundary masks from region outlines and places correspondence points at matching corners.
+    usability_check: >-
+      A first-time user morphs content from a rectangular window into a circle in under 90 s without placing correspondence points.
+  acceptance: >-
+    Mini scene "rect-to-round": a solve repeated after reopening produces identical vertex positions.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.ripple
+  name: Ripple
+  sources:
+    - ref: S02
+      item: Ripple
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Ripple
+      category: Distort
+      checked: true
+  artist_can: >-
+    Make concentric ripples travel out from (or into) a point, like a stone dropped in a pond.
+  projection_example: >-
+    A stone "drops" onto the facade and ripples spread across the masonry.
+  controls:
+    - { name: "Radius", type: percent, animatable: true }
+    - { name: "Center Of Ripple", type: point2d, animatable: true }
+    - { name: "Type Of Conversion", type: "enum(asymmetric|symmetric)", animatable: false }
+    - { name: "Wave Speed", type: float, animatable: true }
+    - { name: "Wave Width", type: float, animatable: true }
+    - { name: "Wave Height", type: float, animatable: true }
+    - { name: "Ripple Phase", type: angle, animatable: true }
+  animation: >-
+    Animates by itself through Wave Speed; for variable speed set the speed to 0 and keyframe Ripple Phase.
+  dependencies: [anim.keyframe.core, fx.distort.region-displace]
+  implementation: >-
+    warp.inverse with a radial sine wave decaying with distance. Phase = Ripple Phase + Wave Speed × t, a pure function of time with no
+    history. Asymmetric adds a lateral component. No bounds change.
+  io: >-
+    none
+  limitations: >-
+    A single center; multiple impacts come from stacking or from the "Turn it into water" recipe.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Ripple like water" — click a point on the wall.
+    defaults: >-
+      Radius covers the selected region; asymmetric; speed set from the music tempo if present; edges pinned via region-aware displacement.
+    automation: >-
+      Scales wave width and height to region size.
+    usability_check: >-
+      A first-time user makes rings ripple from a clicked point on the facade in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "stone-drop": a seek to random frames reproduces the exact same image as sequential playback.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.rolling-shutter-repair
+  name: Rolling Shutter Repair
+  sources:
+    - ref: S02
+      item: Rolling Shutter Repair
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Rolling Shutter Repair
+      category: Distort
+      checked: false
+    - ref: S01
+      item: The Rolling Shutter Repair effect
+      category: Distort
+      checked: true
+  artist_can: >-
+    Remove the wobble and skew that phone or DSLR rolling shutters cause in moving shots.
+  projection_example: >-
+    Clean up a phone pan across the venue before using it as reference or show footage.
+  controls:
+    - { name: "Rolling Shutter Rate", type: percent, animatable: false }
+    - { name: "Scan Direction", type: "enum(top-to-bottom|bottom-to-top|left-to-right|right-to-left)", animatable: false }
+    - { name: "Method", type: "enum(warp|pixel-motion)", animatable: false }
+    - { name: "Detailed Analysis", type: bool, animatable: false }
+    - { name: "Pixel Motion Detail", type: float, animatable: false }
+  animation: >-
+    None; it is an analysis-based correction.
+  dependencies: [track.point, preview.cache, render.queue]
+  implementation: >-
+    Vision sidecar (OpenCV). Warp uses sparse KLT tracks with a per-scanline motion model; Pixel Motion uses dense DIS optical flow with
+    per-row time correction. Correction fields are baked per frame, cached by source hash, and rendered with warp.field. Each frame depends
+    on its neighbours (t-1, t+1), so analysis runs as a background job.
+  io: >-
+    The analysis cache is stored beside the project and invalidated when the source changes.
+  limitations: >-
+    Fast subject motion or strobing can defeat the analysis. Not live-capable. S12 mentions rolling-shutter correction without
+    an item section; the controls come from the dedicated S01 page.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Fix wobbly phone footage" (one click on a selected clip).
+    defaults: >-
+      Rate 100% for phones and 60% for DSLR (from metadata when available); top-to-bottom; Warp method.
+    automation: >-
+      Reads camera make/model metadata to choose the rate; runs analysis in the background with progress shown.
+    usability_check: >-
+      A first-time user removes visible jello from a pan shot in 1 click and confirms it with a before/after toggle.
+  acceptance: >-
+    Mini scene "phone-pan": vertical edges straighten (measured skew under 0.5°); re-render is hash-identical from cache.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.smear
+  name: Smear
+  sources:
+    - ref: S02
+      item: Smear
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Smear
+      category: Distort
+      checked: true
+  artist_can: >-
+    Move, rotate or scale an area defined by a mask, smoothly stretching the surrounding image inside a boundary mask.
+  projection_example: >-
+    A window's contents slide down the wall, dragging the masonry around them like taffy.
+  controls:
+    - { name: "Source Mask", type: mask, animatable: false }
+    - { name: "Boundary Mask", type: mask, animatable: false }
+    - { name: "Mask Offset", type: point2d, animatable: true }
+    - { name: "Mask Rotation", type: angle, animatable: true }
+    - { name: "Mask Scale", type: float, animatable: true }
+    - { name: "Percent", type: percent, animatable: true }
+    - { name: "Elasticity", type: "enum(stiff … super-fluid)", animatable: false }
+    - { name: "Interpolation Method", type: "enum(discrete|linear|smooth)", animatable: false }
+  animation: >-
+    Offset, rotation, scale and percent keyframable; the source mask's original position is animatable too.
+  dependencies: [fx.distort.reshape, mask.bezier, preview.cache]
+  implementation: >-
+    Shares Reshape's TS-core solver (float64, fixed iterations), with the source mask transformed by offset, rotation and scale. Renders with
+    warp.mesh and caches solves in preview.cache.
+  io: >-
+    none
+  limitations: >-
+    Solves slow down as the source approaches the boundary (as in Adobe). Elasticity is not numerically identical to Adobe.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Melt it" and "Drag a part and stretch the rest" → More controls.
+    defaults: >-
+      Boundary = selected region plus a margin; source = the clicked feature region.
+    automation: >-
+      Builds both masks from region outlines.
+    usability_check: >-
+      A first-time user drags a window region downward and sees the wall stretch with it in under 60 s.
+  acceptance: >-
+    Mini scene "taffy-window": deterministic re-solve after reopening; preview/export match.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.spherize
+  name: Spherize
+  sources:
+    - ref: S02
+      item: Spherize
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Spherize
+      category: Distort
+      checked: true
+  artist_can: >-
+    Wrap a circular area of the image onto a sphere, like viewing it through a glass ball.
+  projection_example: >-
+    A round window looks like a glass globe with the scene bending around it.
+  controls:
+    - { name: "Radius", type: float, animatable: true }
+    - { name: "Center of Sphere", type: point2d, animatable: true }
+  animation: >-
+    Both controls keyframable.
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    warp.inverse with a spherical refraction mapping inside the radius and subpixel bicubic sampling. No bounds change.
+  io: >-
+    none
+  limitations: >-
+    Adobe ties sampling to layer Quality (Draft = nearest pixel). Our preview-quality setting plays that role, and export always uses full quality.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Make it bulge" with the style "Glass ball".
+    defaults: >-
+      Fits the selected round region.
+    automation: >-
+      Snaps center and radius to a circular region.
+    usability_check: >-
+      A first-time user turns a round window into a glass-ball look in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "glass-globe": export at full quality matches the best-quality preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.transform
+  name: Transform
+  sources:
+    - ref: S02
+      item: Transform
+      category: Distort
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Transform
+      category: Distort
+      checked: true
+  artist_can: >-
+    Move, scale, skew, rotate and fade a layer from inside the effect stack, with its own motion-blur shutter, so the order relative to other effects is controllable.
+  projection_example: >-
+    Rotate a graphic before a drop shadow is added, so the shadow stays cast in one direction.
+  controls:
+    - { name: "Anchor Point", type: point2d, animatable: true }
+    - { name: "Position", type: point2d, animatable: true }
+    - { name: "Uniform Scale", type: bool, animatable: false }
+    - { name: "Scale Height, Scale Width", type: "float[2]", animatable: true }
+    - { name: "Skew", type: float, animatable: true }
+    - { name: "Skew Axis", type: angle, animatable: true }
+    - { name: "Rotation", type: angle, animatable: true }
+    - { name: "Opacity", type: percent, animatable: true }
+    - { name: "Use Composition's Shutter Angle", type: bool, animatable: false }
+    - { name: "Shutter Angle", type: angle, animatable: true }
+    - { name: "Sampling", type: "enum(bilinear|bicubic)", animatable: false }
+  animation: >-
+    All transform values keyframable with spatial paths; motion blur samples the property curves at sub-frame times.
+  dependencies: [anim.keyframe.core, anim.motion-path, proj.effect-stack]
+  implementation: >-
+    WGSL affine pass via warp.inverse with bicubic sampling. Motion blur takes N sub-frame evaluations of the property curves and needs
+    no frame history. Bounds are the transformed bbox.
+  io: >-
+    none
+  limitations: >-
+    S12 says 8/16 bpc while S02 lists 32 bpc and GPU. We run in rgba16float in every case.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Mostly used inside recipes (shake, slide, pop). Directly: "Move it inside the effects" under More controls.
+    defaults: >-
+      Identity transform; comp shutter angle.
+    automation: >-
+      Recipes insert it at the right stack position automatically.
+    usability_check: >-
+      A user changes a recipe's shake strength without ever seeing the Transform effect, in 1 action.
+  acceptance: >-
+    Mini scene "rotate-before-shadow": the shadow direction stays fixed while the layer rotates; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.turbulent-displace
+  name: Turbulent Displace
+  sources:
+    - ref: S02
+      item: Turbulent Displace
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Turbulent Displace
+      category: Distort
+      checked: true
+  artist_can: >-
+    Distort with animated fractal noise for flowing water, heat haze, funhouse mirrors and waving surfaces, with seamless loops.
+  projection_example: >-
+    The whole facade wobbles as if seen through water, looping seamlessly for an idle loop.
+  controls:
+    - { name: "Displacement", type: "enum(turbulent|bulge|twist|turbulent-smoother|bulge-smoother|twist-smoother|vertical|horizontal|cross)", animatable: false }
+    - { name: "Amount", type: float, animatable: true }
+    - { name: "Size", type: float, animatable: true }
+    - { name: "Offset (Turbulence)", type: point2d, animatable: true }
+    - { name: "Complexity", type: float, animatable: true }
+    - { name: "Evolution", type: angle, animatable: true }
+    - { name: "Cycle Evolution, Cycle (in Revolutions)", type: "bool+int", animatable: false }
+    - { name: "Random Seed", type: seed, animatable: false }
+    - { name: "Pinning", type: "enum(none|all|horizontal|vertical|left|right|top|bottom|…)", animatable: false }
+    - { name: "Resize Layer", type: bool, animatable: false }
+    - { name: "Antialiasing for Best Quality", type: "enum(low|high)", animatable: false }
+  animation: >-
+    Evolution, Amount, Size and Offset keyframable or expression-driven. Cycle gives exact loops; an audio band can drive Amount.
+  dependencies: [fx.noise-grain.fractal-noise, anim.keyframe.core, expr.engine, audio.to-keyframes]
+  implementation: >-
+    A stateless seeded gradient/simplex fBm is evaluated in WGSL. Evolution is a rotation in a 4D noise slice, so Cycle loops exactly.
+    The noise produces displacement vectors for warp.inverse. Smoother variants use quintic interpolation plus supersampling, and Pinning
+    fades displacement near the chosen edges. Resize Layer expands bounds by Amount; no temporal history.
+  io: >-
+    none
+  limitations: >-
+    Adobe's noise basis is proprietary, so patterns won't match AE pixel for pixel. Our seed semantics are stable across preview, export and machines.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make it wobble"; it is also the engine of "Heat haze", "Make the wall breathe" and "Turn it into water".
+    defaults: >-
+      Seamless loop that matches the scene length; all edges pinned when applied to a region; amount 1.5% of region size.
+    automation: >-
+      Sets Cycle and Evolution keyframes so the loop closes exactly at the scene length.
+    usability_check: >-
+      A first-time user creates a wobble that loops seamlessly (last-to-first frame difference below threshold) in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "water-wobble-loop": loop closure verified numerically; identical frames across two render workers.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.twirl
+  name: Twirl
+  sources:
+    - ref: S02
+      item: Twirl
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Twirl
+      category: Distort
+      checked: true
+  artist_can: >-
+    Rotate the image around a center, more strongly at the middle, producing a whirlpool at extreme angles.
+  projection_example: >-
+    The facade swirls into a vortex centered on the clock face, then unswirls into the next scene.
+  controls:
+    - { name: "Angle", type: angle, animatable: true }
+    - { name: "Twirl Radius", type: percent, animatable: true }
+    - { name: "Twirl Center", type: point2d, animatable: true }
+  animation: >-
+    Angle is usually keyframed; center can follow a region.
+  dependencies: [anim.keyframe.core, map.region]
+  implementation: >-
+    warp.inverse whose rotation angle is weighted by a smooth radial falloff, with adaptive 4× supersampling or EWA in the high-gradient core.
+    Float32; no bounds change; no temporal dependency.
+  io: >-
+    none
+  limitations: >-
+    Extreme angles alias without supersampling, so the adaptive path is mandatory at export quality.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Swirl it" / "Swirl away" (as a transition).
+    defaults: >-
+      Center on the selected region; angle 0 → 720° over 2 s with ease-in.
+    automation: >-
+      For "Swirl away", the recipe crossfades to the next scene at peak angle.
+    usability_check: >-
+      A first-time user creates a swirl transition between two scenes in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "clock-vortex": no visible aliasing at 720° in a 4K export (edge-flicker metric under threshold).
+  status: not-started
+  evidence: []
+
+- id: fx.distort.warp
+  name: Warp
+  sources:
+    - ref: S02
+      item: Warp
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Warp
+      category: Distort
+      checked: true
+  artist_can: >-
+    Bend a layer into a preset envelope: arc, arch, bulge, shell, flag, wave, fish, rise, fisheye, inflate, squeeze or twist.
+  projection_example: >-
+    A title arcs over the main entrance and then waves like a flag.
+  controls:
+    - { name: "Warp Style", type: "enum(arc|arc-lower|arc-upper|arch|bulge|shell-lower|shell-upper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist)", animatable: false }
+    - { name: "Warp Axis", type: "enum(horizontal|vertical)", animatable: false }
+    - { name: "Bend", type: float, animatable: true }
+    - { name: "Horizontal Distortion", type: float, animatable: true }
+    - { name: "Vertical Distortion", type: float, animatable: true }
+  animation: >-
+    Bend and both distortions keyframable.
+  dependencies: [anim.keyframe.core, text.layer]
+  implementation: >-
+    Each style is an analytic envelope built as a Bezier-patch grid in the TS core, approximating Illustrator/Photoshop warp styles, and
+    drawn with warp.mesh. Bounds are the envelope bbox.
+  io: >-
+    none
+  limitations: >-
+    Envelopes are approximations of Adobe's styles, not exact copies.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Bend into a shape" — a thumbnail picker (Arc, Flag, Wave, Fisheye, Inflate …).
+    defaults: >-
+      Bend 50%; horizontal axis; Flag and Wave animate the Bend automatically.
+    automation: >-
+      Arc styles fit the arc to a selected roofline or arch region.
+    usability_check: >-
+      A first-time user picks "Flag" and gets waving text in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "arched-title": each style previews as a thumbnail and exports matching the preview.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.warp-stabilizer
+  name: Warp Stabilizer
+  sources:
+    - ref: S02
+      item: Warp Stabilizer
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S12
+      item: Warp Stabilizer
+      category: Distort
+      checked: true
+    - ref: S20
+      item: Warp Stabilizer VFX
+      category: Tracking and stabilizing motion
+      checked: true
+  artist_can: >-
+    Turn shaky handheld footage into smooth or locked-off shots, with cropping, auto-scale or edge synthesis, and reuse the motion on other layers.
+  projection_example: >-
+    Steady a handheld clip of a performer before keying it into the show, or reverse-stabilize to add effects to a shaky reference shot.
+  controls:
+    - { name: "Analyze / Cancel", type: action, animatable: false }
+    - { name: "Result", type: "enum(smooth-motion|no-motion)", animatable: false }
+    - { name: "Smoothness", type: percent, animatable: false }
+    - { name: "Method", type: "enum(position|position-scale-rotation|perspective|subspace-warp)", animatable: false }
+    - { name: "Preserve Scale", type: bool, animatable: false }
+    - { name: "Framing", type: "enum(stabilize-only|stabilize-crop|stabilize-crop-auto-scale|stabilize-synthesize-edges)", animatable: false }
+    - { name: "Auto-scale (Maximum Scale, Action-Safe Margin)", type: "percent[2]", animatable: false }
+    - { name: "Additional Scale", type: percent, animatable: false }
+    - { name: "Detailed Analysis", type: bool, animatable: false }
+    - { name: "Rolling Shutter Ripple", type: "enum(automatic|enhanced)", animatable: false }
+    - { name: "Crop Less <-> Smooth More", type: percent, animatable: false }
+    - { name: "Synthesis Input Range, Edge Feather, Edge Cropping", type: group, animatable: false }
+    - { name: "Objective", type: "enum(stabilize|reversible|reverse|apply-motion-to-target|apply-motion-to-target-over-original)", animatable: false }
+    - { name: "Target Layer", type: layer, animatable: false }
+    - { name: "Track Point Size, Auto-delete Points Across Time, Hide Warning Banner", type: group, animatable: false }
+  animation: >-
+    No keyframes. The analysis is a property of the clip, and Apply Motion to Target transfers motion to other layers.
+  dependencies: [track.point, track.planar, preview.cache, render.queue, proj.layer]
+  implementation: >-
+    Vision sidecar (OpenCV): Shi-Tomasi features with pyramidal LK tracking, then a per-frame RANSAC similarity or homography fit. The
+    camera path is smoothed with an L1-optimal or Gaussian smoother. Subspace Warp is approximated by bundled-path content-preserving mesh
+    warps. Per-frame transforms and meshes are stored in the project and rendered on the GPU with warp.inverse or warp.mesh. Synthesize
+    Edges reprojects neighbouring frames, so it has a ±range temporal dependency. Analysis runs as a background job.
+  io: >-
+    The analysis is stored in the project (compressed) and invalidated when the source or the in/out points change.
+  limitations: >-
+    Subspace warp will not match Adobe's exactly. It can wobble on parallax-heavy shots. Analysis ignores effects on the same layer
+    unless precomposed (same as Adobe).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Steady this shaky clip" (one click); analysis progress shows in a banner and editing continues meanwhile.
+    defaults: >-
+      Smooth Motion, smoothness 50%, Subspace Warp, crop + auto-scale.
+    automation: >-
+      Analysis starts automatically; when cropping gets extreme it offers "Show whole frame" or "Fill edges".
+    usability_check: >-
+      A first-time user stabilizes a handheld clip with 1 click and can tell how much was cropped from the on-canvas indicator.
+  acceptance: >-
+    AS-4 performer composite (stabilized plate); re-render after reopen is hash-identical with no re-analysis.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.wave-warp
+  name: Wave Warp
+  sources:
+    - ref: S02
+      item: Wave Warp
+      category: Distort
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S12
+      item: Wave Warp
+      category: Distort
+      checked: true
+  artist_can: >-
+    Send a wave (sine, square, triangle, circle, noise and more) travelling across the image in any direction, animating by itself.
+  projection_example: >-
+    A banner of light across the facade waves like a flag in the breeze.
+  controls:
+    - { name: "Wave Type", type: "enum(sine|square|triangle|sawtooth|circle|semicircle|uncircle|noise|smooth-noise)", animatable: false }
+    - { name: "Wave Height", type: float, animatable: true }
+    - { name: "Wave Width", type: float, animatable: true }
+    - { name: "Direction", type: angle, animatable: true }
+    - { name: "Wave Speed", type: float, animatable: true }
+    - { name: "Pinning", type: "enum(none|all-edges|center|…)", animatable: false }
+    - { name: "Phase", type: angle, animatable: true }
+    - { name: "Antialiasing (Best Quality)", type: "enum(low|medium|high)", animatable: false }
+  animation: >-
+    Animates by itself at constant speed; for varying speed set it to 0 and keyframe Phase (or drive Phase from beats).
+  dependencies: [anim.keyframe.core, expr.engine]
+  implementation: >-
+    warp.inverse with periodic wave functions. Phase = Phase + speed × t, a pure function of time; Noise types use a seeded hash noise.
+    Bounds expand by Wave Height on the displaced axis unless edges are pinned.
+  io: >-
+    none
+  limitations: >-
+    The "Wave Height"/"Wave Width" descriptions on S12 look swapped. We follow the visible Adobe behavior: height is amplitude and width is wavelength.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Wave like a flag" — drag the direction arrow on the canvas.
+    defaults: >-
+      Sine wave, 1 cycle per second, height 2% of region, edges pinned on the "hoist" side.
+    automation: >-
+      Pins the edge nearest a selected attachment line (e.g., a pole or wall edge).
+    usability_check: >-
+      A first-time user makes a graphic wave like a flag in 3 or fewer actions.
+  acceptance: >-
+    Mini scene "flag-wave": constant-speed wave; random-access seek matches sequential render.
+  status: not-started
+  evidence: []
+
+# ---------------------------------------------------------------------------
+# Projection-specific distortion capabilities (brief §11A, §1, §15, §19). Not in Adobe's catalog.
+# ---------------------------------------------------------------------------
+
+- id: fx.distort.region-displace
+  name: Region-aware displacement
+  sources:
+    - ref: brief §11A
+      item: Distortion and deformation (region-aware use for architecture)
+      category: Effect library — distortion
+      checked: true
+    - ref: brief §15
+      item: Named regions and region groups
+      category: Projection design
+      checked: true
+  artist_can: >-
+    Apply any displacement (noise, ripple, wave, or a map) so it stays inside chosen architectural regions, pins at their outlines,
+    follows each region's own axes and scale, and never smears light onto excluded areas.
+  projection_example: >-
+    All 24 windows ripple individually while the mullions and the wall between them stay perfectly still.
+  controls:
+    - { name: "Regions", type: region-set, animatable: false }
+    - { name: "Strength", type: float, animatable: true }
+    - { name: "Edge pin width", type: float, animatable: true }
+    - { name: "Edge pin falloff", type: "enum(smooth|linear|hard)", animatable: false }
+    - { name: "Direction frame", type: "enum(comp|region-axes|surface-normal)", animatable: false }
+    - { name: "Per-region offset", type: "enum(none|by-index|seeded-random)", animatable: false }
+    - { name: "Source displacement", type: "enum(noise|ripple|wave|layer)", animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Strength keyframable or audio-driven. Per-region delay and phase come from region index through expr.rigs, so one rig drives 100 windows.
+  dependencies: [map.region, map.surface-2d, fx.distort.turbulent-displace, fx.distort.displacement-map, expr.rigs, ux.recipe-engine]
+  implementation: >-
+    WGSL pass graph. A region-ID raster and signed-distance field (jump flood) come from map.region outlines in the bound content space.
+    Displacement vectors are scaled by an edge falloff from the SDF, rotated into each region's local frame, and applied by warp.field, which
+    rejects source samples from a different region ID so nothing bleeds across. No bounds expansion outside the region set. It runs in
+    show space before out.projector-output.
+  io: >-
+    Regions are referenced by role so the show rebinds to another venue without re-authoring.
+  limitations: >-
+    It needs region outlines (traced or imported). It is not a calibration or output-mask tool; spill protection at the venue is still
+    out.output-mask's job.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Implicit: every distortion recipe applied to a region selection uses it, with a visible "Keep edges still" toggle.
+    defaults: >-
+      Edges pinned over 8% of each region's short side; per-region offset by index; strength scaled to region size.
+    automation: >-
+      Builds region IDs and SDFs from the selection, rescales per region, and rebinds automatically on venue change.
+    usability_check: >-
+      A first-time user selects 12 windows and applies "Ripple like water" in 3 or fewer actions. An automated mask check finds zero
+      displaced pixels outside the windows.
+  acceptance: >-
+    Mini scene "windows-ripple": per-window ripples with still frames; outline overlay shows no cross-region displacement; rebinding to a
+    second venue keeps the behavior (AS-7).
+  status: not-started
+  evidence: []
+
+- id: fx.distort.breathing-wall
+  name: Make the wall breathe
+  sources:
+    - ref: brief §11A
+      item: Breathing walls
+      category: Effect library — distortion
+      checked: true
+    - ref: brief §1
+      item: Buildings appear to change shape
+      category: What the product must enable
+      checked: true
+  artist_can: >-
+    Make a wall or panel inhale and exhale: it swells toward the audience and settles back, with matching light and shadow cues, shaped
+    by the region outline.
+  projection_example: >-
+    The facade breathes slowly with the music's downbeats before it cracks apart.
+  controls:
+    - { name: "Depth", type: float, animatable: true }
+    - { name: "Breath rate", type: "float (s or beats)", animatable: true }
+    - { name: "Edge softness", type: float, animatable: true }
+    - { name: "Shading amount", type: percent, animatable: true }
+    - { name: "Light direction", type: angle, animatable: true }
+    - { name: "Sync to beat", type: bool, animatable: false }
+    - { name: "Irregularity + Seed", type: "float+seed", animatable: true }
+  animation: >-
+    Default seamless loop. The rate can lock to the BPM grid and the depth can follow an audio band, and all values stay keyframable.
+  dependencies: [fx.distort.bulge, fx.distort.mesh-warp, fx.distort.region-displace, fx.perspective.region-relief, audio.analysis, audio.to-keyframes, map.region, map.model-3d, ux.recipe-engine]
+  implementation: >-
+    Recipe-generated stack. A height field comes from the region SDF (smoothed distance transform, power-shaped) times Depth times a
+    periodic envelope. In 2D it drives pseudo-perspective magnification through warp.field plus normal-based shading in WGSL. When
+    map.model-3d exists, a 3D mode displaces vertices along normals in three.js with projective texturing. It is a pure function of time.
+  io: >-
+    none
+  limitations: >-
+    The 2D mode is an illusion that reads correctly only near the chosen audience viewpoint; true 3D mode needs a venue model. It never moves geometry in map.venue or calibration.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make the wall breathe" — select a wall region and choose it from the Movement library.
+    defaults: >-
+      Depth 4% of region height; one breath per 4 beats (or 4 s without music); edges pinned; subtle shading from the show light.
+    automation: >-
+      Derives the height field from the region outline, ties the rate to detected BPM, and generates editable keyframes and expressions.
+    usability_check: >-
+      A first-time user makes a wall breathe in time with music in 3 or fewer actions and under 60 s.
+  acceptance: >-
+    AS-3 Transformation (deformation phase); mini scene "breathing-facade": loop closes exactly and the frame at depth 0 is pixel-identical to the source.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.melting-facade
+  name: Melt it
+  sources:
+    - ref: brief §11A
+      item: Melting facades
+      category: Effect library — distortion
+      checked: true
+  artist_can: >-
+    Make architectural features soften and drip downward under gravity, starting from ledges and sills, then reverse exactly to rebuild.
+  projection_example: >-
+    Windows sag and drip down the wall during a bass drop, then flow back into place.
+  controls:
+    - { name: "Melt amount", type: percent, animatable: true }
+    - { name: "Gravity direction", type: angle, animatable: true }
+    - { name: "Drip length", type: float, animatable: true }
+    - { name: "Drip density", type: float, animatable: true }
+    - { name: "Viscosity", type: float, animatable: true }
+    - { name: "Melt from", type: "enum(top-edges|ledges|selected-paths)", animatable: false }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    Melt amount is the main keyframe; reversing it rebuilds exactly. The time remap can play the melt backwards.
+  dependencies: [fx.distort.turbulent-displace, fx.distort.region-displace, map.region, tool.edge-trace, anim.time-remap, ux.recipe-engine]
+  implementation: >-
+    Procedural, analytic displacement field with no simulation. Displacement points downward and grows with distance below melt-source
+    edges (horizontal edges extracted from region outlines). Seeded 1D noise sets the drip columns, and a viscosity-shaped ramp is driven by
+    Melt amount. Any frame is random-accessible. Rendered with warp.field; streak extension expands bounds downward by Drip length.
+  io: >-
+    none
+  limitations: >-
+    It is not a fluid simulation; physically based melting needs a Blender bake (3D domain). Upward-facing features don't drip.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Melt it" — select regions, adjust "How much" and "How fast"; "Rebuild" appends the reverse.
+    defaults: >-
+      Melt from ledges and sills; drips 15% of region height; 3 s melt; seed fixed per project.
+    automation: >-
+      Finds horizontal edges in the selected regions to start drips; generates the reverse keyframes for "Rebuild".
+    usability_check: >-
+      A first-time user melts windows and rebuilds them in under 2 min; the rebuilt end frame matches the start frame exactly.
+  acceptance: >-
+    AS-3 Transformation; mini scene "melt-and-rebuild": melt 0% is pixel-identical to the source, and the reverse equals the forward frames mirrored in time.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.animated-liquify
+  name: Push and smudge (animated)
+  sources:
+    - ref: brief §11A
+      item: Liquify-like deformation
+      category: Effect library — distortion
+      checked: true
+  artist_can: >-
+    Paint pushes, swirls, pinches and bloats with a brush. Each stroke becomes an editable, keyframable, timed deformation that renders
+    identically every time.
+  projection_example: >-
+    A swirl grows into a stained-glass window on the beat, followed by a pinch on the next window.
+  controls:
+    - { name: "Strokes (tool, path, size, pressure)", type: stroke-list, animatable: true }
+    - { name: "Stroke strength", type: float, animatable: true }
+    - { name: "Stroke start / end time", type: "time[2]", animatable: false }
+    - { name: "Stroke easing", type: "enum(linear|ease|custom-curve)", animatable: false }
+    - { name: "Freeze mask", type: mask, animatable: true }
+    - { name: "Turbulence seed", type: seed, animatable: false }
+  animation: >-
+    Each stroke has its own strength curve, editable in the graph editor. "Animate it" lays strokes out sequentially or on beats.
+  dependencies: [fx.distort.liquify, anim.keyframe.core, anim.graph-editor, mask.bezier, ux.operation-system, map.region, audio.analysis]
+  implementation: >-
+    Each stroke is a parametric deformation primitive (path, brush kernel, tool type) with an animatable strength. At time t, active strokes
+    are composed in order into an rg32float field on a fixed grid in WGSL compute, giving a deterministic result. Rendered with warp.field;
+    per-frame fields are cached in preview.cache. No frame history.
+  io: >-
+    Adobe Liquify meshes cannot be imported. A static snapshot can be converted to one "baked" stroke.
+  limitations: >-
+    Cost grows with the number of active strokes; the UI suggests no more than about 200 per layer. The Reconstruction modes apply per stroke, not to a global mesh.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Long-tail distortion effect or CC plug-in clone. Corner pin, mesh warp, displacement, turbulent displace, ripple, wave warp, transform, offset and the region-aware distortion recipes stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Push and smudge" brush, then "Animate it" (strokes grow in the order painted, or on beats).
+    defaults: >-
+      Each stroke grows over 0.5 s; strokes are spaced by 0.25 s or snapped to beats when music exists.
+    automation: >-
+      Converts painting order into timing, freezes areas outside the selected region, and snaps stroke starts to beat markers.
+    usability_check: >-
+      A first-time user paints 3 strokes and has them grow on successive beats in under 2 min. A re-render gives hash-identical frames.
+  acceptance: >-
+    Mini scene "liquify-on-beat": strokes reproduce identically after reopen and across two render workers.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.liquid-surface
+  name: Turn it into water
+  sources:
+    - ref: brief §11A
+      item: Liquid surfaces, rippling masonry
+      category: Effect library — distortion
+      checked: true
+    - ref: brief §1
+      item: Brick changes into flowing water
+      category: What the product must enable
+      checked: true
+  artist_can: >-
+    Make a surface look as if it is made of, or seen through, moving water, with refracting waves, raindrop impacts and optional caustic
+    light, confined to the chosen region.
+  projection_example: >-
+    The brick wall becomes a rippling water surface with caustic light dancing across it.
+  controls:
+    - { name: "Wave size", type: float, animatable: true }
+    - { name: "Wave speed", type: float, animatable: true }
+    - { name: "Refraction strength", type: float, animatable: true }
+    - { name: "Flow direction", type: angle, animatable: true }
+    - { name: "Caustics amount", type: percent, animatable: true }
+    - { name: "Water tint", type: color, animatable: true }
+    - { name: "Raindrop impacts (rate)", type: float, animatable: true }
+    - { name: "Seed", type: seed, animatable: false }
+  animation: >-
+    All controls keyframable. Impacts can fire from beats or onsets, and a transition mode animates brick → water.
+  dependencies: [fx.distort.displacement-map, fx.distort.turbulent-displace, fx.distort.region-displace, fx.noise-grain.fractal-noise, fx.simulation.wave-world, fx.simulation.caustics, ux.recipe-engine]
+  implementation: >-
+    Recipe. A stateless procedural height field (seeded Gerstner and noise sum) gives normals, which drive a refraction offset through
+    warp.field. Caustics come from the height-field Laplacian, or from fx.simulation.caustics. Impacts are analytic ripple rings, as in
+    CC Ripple Pulse. An optional stateful mode uses fx.simulation.wave-world with checkpointed state.
+  io: >-
+    none
+  limitations: >-
+    The stateless mode is not a physical simulation; interacting waves need the stateful Wave World mode, which is costlier to seek.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Turn it into water" — searching "make this look like water" finds it first.
+    defaults: >-
+      Gentle waves scaled to the region, light caustics, slight blue tint, no rain.
+    automation: >-
+      Builds the height field, map layers and region constraint; matches wave speed to the music tempo when present.
+    usability_check: >-
+      A first-time user turns a selected wall into water in 3 or fewer actions, and searching "water" ranks it first.
+  acceptance: >-
+    Mini scene "brick-to-water": transition plays identically after reopen and on random seeks; acceptance-show material change (brief §1).
+  status: not-started
+  evidence: []
+
+- id: fx.distort.venue-wave
+  name: Send a wave across the building
+  sources:
+    - ref: brief §11A
+      item: Rippling masonry across architectural features
+      category: Effect library — distortion
+      checked: true
+    - ref: brief §16
+      item: Installation-wide coordinates
+      category: Multiple projectors
+      checked: true
+  artist_can: >-
+    Run one continuous ripple, wave or noise warp across many regions, layers and projector outputs, so it lines up across seams and gaps.
+  projection_example: >-
+    A ripple starts at the door and travels over every window and column, staying continuous across two overlapping projectors.
+  controls:
+    - { name: "Origin (venue point)", type: point3d, animatable: true }
+    - { name: "Wave type", type: "enum(ripple|linear|noise)", animatable: false }
+    - { name: "Speed", type: float, animatable: true }
+    - { name: "Wavelength", type: float, animatable: true }
+    - { name: "Amplitude", type: float, animatable: true }
+    - { name: "Decay", type: float, animatable: true }
+    - { name: "Distance mode", type: "enum(flat-facade|along-surface)", animatable: false }
+    - { name: "Regions affected", type: region-set, animatable: false }
+  animation: >-
+    Origin, speed and amplitude keyframable; amplitude can follow audio.
+  dependencies: [map.venue, map.region, map.model-3d, fx.distort.region-displace, fx.distort.ripple, fx.distort.wave-warp, out.projector-output]
+  implementation: >-
+    The displacement field is defined in venue coordinates (facade plane or 3D world position) and sampled per region through its
+    content mapping. It is evaluated before out.projector-output, so overlapping projectors receive identical content. The along-surface
+    mode precomputes geodesic distances on the venue mesh with the heat method and caches them per venue version.
+  io: >-
+    Cached distance fields are stored with the venue version.
+  limitations: >-
+    On non-coplanar surfaces the wave is continuous in surface distance, not in the audience's view. Along-surface mode needs a venue mesh.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Send a wave across the building" — click the starting point on the venue view.
+    defaults: >-
+      Ripple from the clicked point; reaches the farthest region in 3 s; affects all regions except exclusions.
+    automation: >-
+      Chooses flat or along-surface mode depending on whether a venue model exists; excludes regions marked "exclusion".
+    usability_check: >-
+      A first-time user sends a wave from the door across all windows in 3 or fewer actions. An automated seam test shows continuous
+      phase at region boundaries.
+  acceptance: >-
+    AS-5 Multi-projector scene: the wave crosses the overlap with matching content in both projector exports.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.panel-open
+  name: Open like a door
+  sources:
+    - ref: brief §11A
+      item: Opening panels
+      category: Effect library — distortion
+      checked: true
+  artist_can: >-
+    Make a region (door, shutter, panel) appear to swing open on a hinge along one of its edges, with thickness and shading, revealing what is behind.
+  projection_example: >-
+    Facade panels swing open one after another to reveal a glowing interior.
+  controls:
+    - { name: "Hinge edge", type: "enum(left|right|top|bottom|picked-edge)", animatable: false }
+    - { name: "Open angle", type: angle, animatable: true }
+    - { name: "Swing direction", type: "enum(inward|outward)", animatable: false }
+    - { name: "Perspective strength", type: float, animatable: true }
+    - { name: "Panel thickness", type: float, animatable: true }
+    - { name: "Shading", type: percent, animatable: true }
+    - { name: "Reveal layer", type: layer, animatable: false }
+  animation: >-
+    Open angle keyframed with overshoot or settle presets. Sequences across many panels use the sequence tool's offsets.
+  dependencies: [fx.distort.corner-pin, fx.perspective.drop-shadow, map.region, tool.sequence-light-up, 3d.scene, 3d.camera, ux.recipe-engine]
+  implementation: >-
+    In 2.5D the region quad is rotated about the hinge edge in 3D and seen through the audience-view camera. The TS core computes a
+    homography for each frame, which feeds the Corner Pin pass, plus an edge-thickness strip and Lambert shading. When map.model-3d exists,
+    a 3D mode extrudes the region in three.js.
+  io: >-
+    none
+  limitations: >-
+    The 2.5D illusion is correct only near the audience viewpoint. Non-planar regions need the 3D mode.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Open like a door" — click the hinge edge of a region; for many regions, "Open one after another".
+    defaults: >-
+      Opens inward to 75° in 1.2 s with a small settle; the reveal shows the next scene.
+    automation: >-
+      Detects the region's hinge candidates (longest vertical edge) and staggers multiple panels by position.
+    usability_check: >-
+      A first-time user opens 6 window shutters in sequence in under 2 min.
+  acceptance: >-
+    Mini scene "shutters-open": staggered panel opening; export matches preview; venue geometry and calibration unchanged.
+  status: not-started
+  evidence: []
+
+- id: fx.distort.fit-to-region
+  name: Fit into this shape
+  sources:
+    - ref: brief §11A
+      item: Curved and mesh warps; path-based reshaping
+      category: Effect library — distortion
+      checked: true
+    - ref: brief §0.1
+      item: Select the thing, choose what it should do
+      category: User experience
+      checked: true
+  artist_can: >-
+    Stretch a rectangular video or image so it smoothly fills a non-rectangular region (arch, circle, trapezoid, curved panel) without manual mesh editing.
+  projection_example: >-
+    A looping clip fills a gothic arched window exactly, edge to edge.
+  controls:
+    - { name: "Region", type: region, animatable: false }
+    - { name: "Fit mode", type: "enum(stretch|cover|contain|conformal)", animatable: false }
+    - { name: "Corner anchors on outline", type: "point2d[4]", animatable: true }
+    - { name: "Smoothness", type: float, animatable: false }
+    - { name: "Bleed", type: float, animatable: true }
+  animation: >-
+    Anchors and bleed keyframable; follows region edits automatically.
+  dependencies: [map.region, map.surface-2d, fx.distort.mesh-warp, fx.distort.bezier-warp, fx.distort.corner-pin]
+  implementation: >-
+    Maps the unit square onto the region outline. Stretch uses a Coons patch on four outline segments split at the anchors; conformal uses
+    harmonic or mean-value coordinates on a triangulated region mesh. Both are solved in the TS core, cached per outline version and drawn
+    with warp.mesh. Bleed expands the outline for overscan.
+  io: >-
+    none
+  limitations: >-
+    When map.surface-2d already supplies UVs for the region, those are preferred. This effect is for creative fits inside a composition
+    and must not be used to fix projector misalignment (map.calibration).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Dropping media onto a region offers "Fill this shape" as the default choice.
+    defaults: >-
+      Stretch mode; anchors at the outline's extreme corners; 1% bleed.
+    automation: >-
+      Chooses anchors from outline curvature; refits when the region outline changes.
+    usability_check: >-
+      A first-time user drops a clip on an arched window and it fills the arch edge to edge in 1 action.
+  acceptance: >-
+    Mini scene "fill-arch": coverage check shows no unfilled pixels inside the arch and none outside beyond the bleed.
+  status: not-started
+  evidence: []

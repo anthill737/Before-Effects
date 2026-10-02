@@ -1,0 +1,2605 @@
+# Projects, compositions, assets and editing — Before Effects capability register
+# Sources: S01 (AE user guide navigation), S03 (precomposing, nesting, pre-rendering), S32 (selecting and arranging layers), brief §0.4, §0.9, §3. Adobe helpx pages returned HTTP 403 on 2026-10-01; Adobe items authored from knowledge (checked: false).
+
+- id: proj.project-model
+  name: Project model
+  sources:
+    - ref: S01
+      item: "Projects"
+      category: "Projects and compositions"
+      checked: false
+    - ref: "brief §3"
+      item: "real project model with multiple compositions"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Keep everything for a show (scenes, imported media, recipes, venue bindings and settings) in one project that reopens exactly as it was saved.
+  projection_example: >-
+    One project holds the facade show's three scenes, the soundtrack, the binding to the town-hall venue and the export history.
+  controls:
+    - { name: "Project name", type: "string", animatable: false }
+    - { name: "Project seed", type: "seed", animatable: false }
+    - { name: "Working colour space", type: "enum(scene-linear-rec709|acescg|custom-ocio)", animatable: false }
+    - { name: "Default frame rate", type: "float", animatable: false }
+    - { name: "Time display", type: "enum(timecode|frames|seconds)", animatable: false }
+  animation: >-
+    Not animatable itself; it owns every animatable property and evaluates them through one integer-flick time model (anim.time-model).
+  dependencies: []
+  implementation: >-
+    Versioned JSON document (schemaVersion plus stable UUIDv7 node ids) held in core TypeScript as an immutable tree; every mutation is a typed op applied through Immer that records forward and inverse patches. Assets are referenced by id with relative path, absolute path and content hash; venue, show and bindings are separate top-level sections, per the mapping model.
+  io: >-
+    Saved as a single .befx JSON project file plus referenced media; caches, proxies and thumbnails live outside the file and are rebuildable from content hashes.
+  limitations: >-
+    No After Effects .aep round-tripping (see proj.aep-interop). Projects with thousands of layers may need lazy loading of composition subtrees; to be measured in milestone A.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "New show" on the start screen: pick a starter scene or a blank show. The word "project" never needs to be learned beyond Save and Open.
+    defaults: >-
+      1920×1080 at 30 fps until a venue supplies the output layout; a project seed is generated once; the working colour space comes from color.management.
+    automation: >-
+      Creates the first scene, names it after the venue or starter, and organizes imported media without asking about folders.
+    usability_check: >-
+      A first-time user starts a new show from a starter scene and sees an editable preview in under 60 s, answering at most one choice.
+  acceptance: >-
+    AS-3 and AS-7; mini scene "reopen-identical": save, close and reopen; every property evaluates bit-identically at 20 random times and rendered frames match.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: proj.save-reopen
+  name: Save, Save As and reopen
+  sources:
+    - ref: S01
+      item: "Save and back up projects"
+      category: "Projects"
+      checked: false
+    - ref: "brief §21"
+      item: "Milestone B: save/reopen"
+      category: "Build order"
+      checked: true
+  artist_can: >-
+    Save the show, close the app and reopen it later with every layer, keyframe, recipe control and setting intact.
+  projection_example: >-
+    Save the facade show on the laptop at the venue, reopen it at home the next day and keep refining the window sequence.
+  controls:
+    - { name: "Save", type: "action", animatable: false }
+    - { name: "Save As / Save a copy", type: "action", animatable: false }
+    - { name: "Open recent", type: "action", animatable: false }
+    - { name: "Saved-state indicator", type: "enum(saved|saving|unsaved)", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.project-model]
+  implementation: >-
+    Save serializes the current immutable project snapshot in a worker, writes a temporary file and atomically renames it over the target, so a crash mid-save never corrupts the previous file. Reopen validates schemaVersion, runs proj.format-migration, rehydrates the model and lazily rebuilds derived data keyed by content hash.
+  io: >-
+    Writes .befx; media referenced by relative path with absolute-path and content-hash fallbacks.
+  limitations: >-
+    Panel layout and view preferences are per-user settings, not project content. A project with missing media opens with placeholders (proj.relink).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Save" button with a visible "Saved" indicator, plus Ctrl+S; closing with unsaved work shows one clear "Save changes?" prompt.
+    defaults: >-
+      The first save proposes the show's name in Documents/Before Effects/Shows.
+    automation: >-
+      Atomic save, background serialization so editing never stalls, and a "Recent shows" list with thumbnails.
+    usability_check: >-
+      In first-time-user sessions, at least 9 of 10 users confirm their work is saved from the indicator and reopen the show from Recent in under 20 s.
+  acceptance: >-
+    Mini scene "save-reopen-roundtrip": a project using every property type is saved and reopened; the model is deep-equal and rendered frames are identical.
+  status: implemented
+  evidence:
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: proj.format-migration
+  name: Versioned project format and migration
+  sources:
+    - ref: "brief §3"
+      item: "versioned project format that can migrate without silently discarding information"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Open shows made with older versions of the app without losing anything; if something cannot be converted, the app says exactly what and keeps the original data.
+  projection_example: >-
+    A show built last year opens in the new version with its window rig intact, ready for a re-staging at the same building.
+  controls:
+    - { name: "Show migration report", type: "action", animatable: false }
+    - { name: "Back up original before upgrading", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.project-model]
+  implementation: >-
+    Integer schemaVersion with an ordered chain of pure migration functions (vN to vN+1), each covered by fixture projects in headless tests. Unknown fields and node types are preserved verbatim in an "unknown" bag and written back on save; effects removed from the app become disabled placeholders that keep their parameters.
+  io: >-
+    Older project files are read and upgraded; files saved by a newer app version are refused with a clear message instead of being partially loaded.
+  limitations: >-
+    Opening a newer project in an older app is unsupported (no downgrade). Removed effects cannot render, but their data is kept for a later version.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic on open; a short banner says "This show was updated to the new format; your original was backed up", with a "What changed" link.
+    defaults: >-
+      Backup on; migrate in memory on open; the original file is not overwritten until the user saves.
+    automation: >-
+      Runs every migration, preserves unknown data, writes a migration report and backs up the original file.
+    usability_check: >-
+      Opening every historical fixture produces 0 dropped nodes (automated), and a first-time user reopens an older show without facing any decision prompt.
+  acceptance: >-
+    Mini scene "migrate-fixtures": every historical fixture migrates, unknown fields survive a save round trip, and rendered frames match pre-migration references.
+  status: not-started
+  evidence: []
+
+- id: proj.undo-redo
+  name: Undo and redo
+  sources:
+    - ref: S01
+      item: "Undo changes / History"
+      category: "Projects"
+      checked: false
+    - ref: "brief §0.9"
+      item: "reliable undo/redo"
+      category: "User experience"
+      checked: true
+    - ref: "brief §3"
+      item: "Preserve undo/redo across normal editing operations"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Undo and redo any edit, one step or many, including guided actions, recipe changes, script runs and AI assistant edits.
+  projection_example: >-
+    "Light up one after another" was applied to the wrong windows; one undo removes every layer, keyframe and expression that action created.
+  controls:
+    - { name: "Undo", type: "action", animatable: false }
+    - { name: "Redo", type: "action", animatable: false }
+    - { name: "History list (jump to step)", type: "action", animatable: false }
+    - { name: "History memory budget", type: "int", animatable: false }
+  animation: >-
+    Not animatable; undoing restores keyframes, expressions and recipe parameters exactly.
+  dependencies: [ux.operation-system, proj.project-model]
+  implementation: >-
+    Each op yields Immer forward and inverse patches; compound actions (recipe apply, canvas drag, script run, AI edit) are grouped into one labelled transaction, and continuous drags coalesce into one entry. History is bounded by a memory budget with patch compaction, and each step restores the selection and playhead that were current.
+  io: >-
+    History is session-scoped; the autosave journal (proj.autosave-recovery) persists ops for crash recovery.
+  limitations: >-
+    Actions outside the project (deleting a render on disk, uploading to Google Drive) are not undoable; the UI says so before performing them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      An always-visible Undo/Redo pair plus Ctrl+Z / Ctrl+Shift+Z; the history list names steps in plain words, e.g. "Light up windows one after another".
+    defaults: >-
+      At least 500 steps or the memory budget, whichever is reached first.
+    automation: >-
+      Groups multi-step actions into one undo step and restores selection and playhead with each step.
+    usability_check: >-
+      A first-time user undoes a mistaken guided action and confirms the canvas returned to its prior state in under 10 s without help (brief §0.10).
+  acceptance: >-
+    Mini scene "undo-everything": apply 50 mixed ops including recipe, script and AI edits; undo all equals the initial model and redo all equals the final one.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: proj.autosave-recovery
+  name: Autosave and crash recovery
+  sources:
+    - ref: S01
+      item: "Auto-save"
+      category: "Projects"
+      checked: false
+    - ref: "brief §3"
+      item: "autosave and recovery"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Never lose more than a moment of work: the app saves continuously in the background and offers to restore after a crash or power cut.
+  projection_example: >-
+    The laptop loses power during an on-site rehearsal; on restart the show comes back with the last few seconds of edits intact.
+  controls:
+    - { name: "Journal flush interval", type: "duration", animatable: false }
+    - { name: "Snapshots to keep", type: "int", animatable: false }
+    - { name: "Recovery location", type: "file", animatable: false }
+    - { name: "Restore", type: "action", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.save-reopen, ux.operation-system]
+  implementation: >-
+    An append-only journal of serialized ops is flushed every few seconds to a per-project recovery folder, plus periodic full snapshots. On start, an unclean-shutdown marker triggers journal replay onto the last snapshot. Autosave never overwrites the user's saved file.
+  io: >-
+    Recovery folder in app data; snapshots rotate.
+  limitations: >-
+    Media still importing or transcoding at the moment of a crash must be re-imported. Journal replay needs the same app version or a migration.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic. After a crash a single prompt appears: "Restore your show from 2 minutes ago?", with a thumbnail.
+    defaults: >-
+      Journal flush every 5 s, full snapshot every 5 min, keep 20 snapshots.
+    automation: >-
+      Detects crashes, replays edits and shows "Saved" or "Recovered" status without any setup.
+    usability_check: >-
+      In a forced-kill test, a first-time user restores the show and finds the last edit in under 30 s, with at most 5 s of edits lost.
+  acceptance: >-
+    Mini scene "kill-and-recover": kill the process during scripted edits 100 times in CI; every recovery yields a valid project losing at most 5 s of ops.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: proj.recipe-override
+  name: Guided and detailed edits share one project (recipe overrides)
+  sources:
+    - ref: "brief §0.4"
+      item: "guided workflow and detailed tools must edit the same data; advanced edits must not silently get overwritten"
+      category: "User experience"
+      checked: true
+    - ref: "brief §0.1"
+      item: "The app creates the necessary masks, paths, layers, keyframes, expressions underneath"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Use simple controls such as Speed or Colour and also open the real layers, keyframes and expressions underneath. Custom edits are kept and clearly flagged instead of being overwritten when a simple control changes.
+  projection_example: >-
+    After "Light up one after another", the artist hand-tweaks window 7's timing; changing the overall Delay later keeps window 7's custom timing and shows a "1 custom edit" badge.
+  controls:
+    - { name: "Recipe controls (3–5 creative parameters)", type: "float", animatable: true }
+    - { name: "Show custom edits", type: "action", animatable: false }
+    - { name: "Reset item to recipe", type: "action", animatable: false }
+    - { name: "On regenerate", type: "enum(keep-custom|replace-custom|ask)", animatable: false }
+    - { name: "Detach from recipe", type: "action", animatable: false }
+  animation: >-
+    Recipe parameters are ordinary animatable properties; generated keyframes and expressions stay editable and are tracked as overrides once changed.
+  dependencies: [ux.recipe-engine, ux.operation-system, proj.project-model]
+  implementation: >-
+    Generated nodes carry recipeInstanceId and a generator path; any op that touches a generated property records an override (path, generated value, new value) on the recipe instance. Regenerating runs the recipe as a pure function of its parameters and three-way merges against recorded overrides; parameters that can no longer safely adjust a customized item are flagged in the inspector rather than applied.
+  io: >-
+    Recipe instances, parameters and overrides are saved in the project; "Detach" converts the result into plain layers.
+  limitations: >-
+    Structural edits (deleting or re-parenting a generated layer) can limit which simple controls remain safe; those controls show a lock with an explanation instead of guessing.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Always visible: guided controls on top, "Edit animation" and "More controls" below. Customized items carry a small "Custom" badge with "Keep" and "Reset".
+    defaults: >-
+      Keep custom edits on regenerate; badge visible; one-click reset per item.
+    automation: >-
+      Tracks every manual change to recipe-made items, merges on regenerate, and states when a simple control can no longer safely adjust something.
+    usability_check: >-
+      A first-time user tweaks one generated keyframe and then changes the recipe Speed; at least 9 of 10 users correctly predict the tweak survived, and find the Custom badge in under 15 s.
+  acceptance: >-
+    Mini scene "override-survives": a recipe on 20 windows, 3 manual edits and 5 parameter changes leave the manual edits preserved, flagged and undoable; AS-1 uses a recipe-built trace.
+  status: not-started
+  evidence: []
+
+- id: proj.incremental-save
+  name: Save versions (incremental save)
+  sources:
+    - ref: S01
+      item: "Increment and Save"
+      category: "Projects"
+      checked: false
+    - ref: "brief §0.6"
+      item: "Preserve originals and make important creative changes undoable"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Save named versions of the show, such as "before client review", and return to any of them later.
+  projection_example: >-
+    Keep "rehearsal 1" and "opening night" versions of the facade show and compare them side by side.
+  controls:
+    - { name: "Save version", type: "action", animatable: false }
+    - { name: "Version name", type: "string", animatable: false }
+    - { name: "Compare with current", type: "action", animatable: false }
+    - { name: "Restore version", type: "action", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.save-reopen]
+  implementation: >-
+    A version is an immutable snapshot of the project JSON stored content-addressed, with unchanged subtrees deduplicated by hash. Restore issues a single "replace project" op, so restoring is itself undoable.
+  io: >-
+    Versions live in a sidecar folder next to the project; proj.collect-files can include or skip them.
+  limitations: >-
+    Media files are referenced, not versioned; overwriting a media file on disk changes older versions too.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Save a version" next to Save; a list of versions with thumbnails and times.
+    defaults: >-
+      Auto-names versions such as "Version 3 – 14:32" with a thumbnail at the playhead.
+    automation: >-
+      Deduplicates unchanged data and offers a version automatically before risky operations such as format migration or bulk regenerate.
+    usability_check: >-
+      A first-time user saves a version, makes changes and restores the version in under 45 s without help.
+  acceptance: >-
+    Mini scene "version-restore": 10 versions; restoring version 3 renders identically to the frame captured when it was saved.
+  status: not-started
+  evidence: []
+
+- id: proj.composition
+  name: Compositions (scenes)
+  sources:
+    - ref: S01
+      item: "Composition settings"
+      category: "Compositions"
+      checked: false
+    - ref: "brief §3"
+      item: "multiple compositions, configurable dimensions/duration/frame rates"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Create scenes, each with its own size, length, frame rate, background and timeline of layers.
+  projection_example: >-
+    A 7680×1080 scene matching the facade's content atlas, 3 minutes at 30 fps, for the "Waterfall" section of the show.
+  controls:
+    - { name: "Name", type: "string", animatable: false }
+    - { name: "Width × height", type: "size2d", animatable: false }
+    - { name: "Pixel aspect ratio", type: "float", animatable: false }
+    - { name: "Frame rate", type: "float", animatable: false }
+    - { name: "Duration", type: "duration", animatable: false }
+    - { name: "Start timecode", type: "time", animatable: false }
+    - { name: "Background colour", type: "color", animatable: false }
+  animation: >-
+    Settings are not animatable; the composition's time base is the domain for all layer animation.
+  dependencies: [proj.project-model]
+  implementation: >-
+    Composition node {id, size, pixelAspect, frameRate as an exact rational, duration in flicks, ordered layers}; rationals such as 30000/1001 give exact flicks per frame. Changing settings is one op, with an option to keep keyframes at the same absolute time.
+  io: >-
+    Export size and rate default to the composition; render presets may override them.
+  limitations: >-
+    Non-square pixels are supported for source interpretation; projector outputs assume square pixels unless the projector profile says otherwise.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "New scene", sized automatically from the venue's content layout or a short list of common sizes; technical settings sit under "Scene settings".
+    defaults: >-
+      Venue atlas size or 1920×1080; 30 fps; 60 s; black background.
+    automation: >-
+      Sizes the scene to the venue layout, matches the projector output frame rate, and warns once when imported footage uses a different rate.
+    usability_check: >-
+      A first-time user creates a second scene for the facade and starts animating in it in under 30 s without opening Scene settings.
+  acceptance: >-
+    AS-1; mini scene "comp-settings": changing 30 fps to 25 fps keeps keyframes at the same flick times, and exported frame counts verify.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: proj.nesting
+  name: Nested compositions
+  sources:
+    - ref: S03
+      item: "Nesting"
+      category: "Precomposing, nesting, and pre-rendering"
+      checked: false
+    - ref: "brief §3"
+      item: "nested compositions, reusable sequences; Nesting must have defined transform and effect order"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Use one scene inside another as a single layer, reuse it many times, and change it once to update every copy.
+  projection_example: >-
+    A "window flicker" scene nested 24 times, once per window; editing the original updates every window.
+  controls:
+    - { name: "Source scene", type: "layer-ref", animatable: false }
+    - { name: "Open source scene", type: "action", animatable: false }
+    - { name: "Per-instance overrides", type: "action", animatable: false }
+  animation: >-
+    A nested-scene layer has normal transforms, effects, time stretch and time remap; per-instance values come from expr.essential-properties.
+  dependencies: [proj.composition, proj.layer]
+  implementation: >-
+    A composition layer references a composition id; the evaluator renders the child at (parent time minus layer start, mapped through stretch and remap) into an rgba16float target, then applies the layer's masks, effects, layer styles, transform and blend in the documented order. Ops that would make a composition contain itself are rejected.
+  io: >-
+    Each nested composition is stored once and referenced; heavy children can be pre-rendered (proj.pre-render).
+  limitations: >-
+    A composition cannot contain itself directly or indirectly. Children rasterize at their own resolution unless proj.collapse-transformations is on.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Reuse this animation": drag a scene from the content browser onto a region, or turn selected layers into a reusable scene (proj.precompose).
+    defaults: >-
+      Child centred at its own size; frame-rate differences resampled exactly at the parent's rate.
+    automation: >-
+      Detects cycles, keeps frame-rate conversion exact and shows an "Edit original" breadcrumb.
+    usability_check: >-
+      A first-time user reuses one window animation on three windows and edits the original so all three update, in under 2 minutes.
+  acceptance: >-
+    AS-1 and AS-3; mini scene "nest-order": a nested scene with an effect and parent transform matches the documented reference order, and 24 fps content inside a 30 fps parent maps frames exactly.
+  status: not-started
+  evidence: []
+
+- id: proj.precompose
+  name: Precompose
+  sources:
+    - ref: S03
+      item: "Precompose (Leave all attributes / Move all attributes into the new composition / Adjust composition duration / Open new composition)"
+      category: "Precomposing, nesting, and pre-rendering"
+      checked: false
+    - ref: "brief §3"
+      item: "nested compositions"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Wrap selected layers into a new reusable scene in one step, choosing whether their effects and timing move inside or stay on the outside.
+  projection_example: >-
+    Precompose the 12 window layers into "Windows" so a single glow and one mask can be applied over all of them.
+  controls:
+    - { name: "New scene name", type: "string", animatable: false }
+    - { name: "Attributes", type: "enum(leave|move)", animatable: false }
+    - { name: "Fit duration to selected layers", type: "bool", animatable: false }
+    - { name: "Open new scene", type: "bool", animatable: false }
+  animation: >-
+    Keyframes move inside with the layers ("move") or stay on the new scene layer ("leave", single-layer only).
+  dependencies: [proj.nesting, ux.operation-system]
+  implementation: >-
+    One compound op creates the composition, moves the layer subtree, rewires parenting and track-matte references, rewrites expression paths (thisComp.layer() to comp().layer() where needed), and inserts the new layer at the topmost selected index. It is one undo step.
+  io: >-
+    none
+  limitations: >-
+    Expressions referencing layers left outside must be rewritten; the op lists any it could not rewrite instead of leaving them silently broken.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Group into a reusable scene" in the right-click menu, with plain options: "Keep effects on the outside" or "Move everything inside".
+    defaults: >-
+      Move everything inside; fit duration on; stay in the current scene.
+    automation: >-
+      Rewrites references, track mattes and parenting so the result renders identically before and after.
+    usability_check: >-
+      Output is pixel-identical before and after precompose (automated), and a first-time user groups 10 layers in at most 3 actions.
+  acceptance: >-
+    Mini scene "precompose-identity": 30 variants (parenting, mattes, expressions, 3D) precomposed with both options render identical frames.
+  status: not-started
+  evidence: []
+
+- id: proj.collapse-transformations
+  name: Collapse transformations and continuous rasterization
+  sources:
+    - ref: S03
+      item: "Collapse transformations"
+      category: "Precomposing, nesting, and pre-rendering"
+      checked: false
+    - ref: S01
+      item: "Continuously rasterize"
+      category: "Layers"
+      checked: false
+    - ref: "brief §7"
+      item: "Preserve vector sharpness at export resolution"
+      category: "Vector shapes, paths, and drawing"
+      checked: true
+  artist_can: >-
+    Keep nested scenes and vector art razor-sharp when scaled up, and let 3D layers inside a nested scene share the parent's camera.
+  projection_example: >-
+    A nested logo scaled 400% across the facade stays crisp; 3D window panels inside a nested scene use the main scene's camera.
+  controls:
+    - { name: "Collapse / continuously rasterize", type: "bool", animatable: false }
+  animation: >-
+    The switch is not animatable.
+  dependencies: [proj.nesting]
+  implementation: >-
+    When on, the evaluator inlines the child's layers into the parent's render graph with concatenated transforms instead of an intermediate raster, and vectors and text rasterize at final output resolution. Effects on the collapsed layer force a flatten point, which the inspector shows.
+  io: >-
+    none
+  limitations: >-
+    As in After Effects, effects or certain blend combinations on a collapsed layer require flattening; blend modes inside a collapsed child then composite directly into the parent.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Automatic "Keep sharp"; it shows as a toggle under More controls.
+    defaults: >-
+      On for shape and text layers; on for nested scenes without effects.
+    automation: >-
+      Detects scaled-up nested vector content, turns collapsing on, and explains when an effect forces flattening.
+    usability_check: >-
+      A nested vector logo scaled to 400% exports with no measurable edge softening (automated sharpness metric) without the user touching a setting.
+  acceptance: >-
+    Mini scene "sharp-at-scale": 8K export of nested vector art matches a direct-render reference within tolerance.
+  status: not-started
+  evidence: []
+
+- id: proj.pre-render
+  name: Pre-render nested content with automatic cache invalidation
+  sources:
+    - ref: S03
+      item: "Pre-render a nested composition / Create proxy"
+      category: "Precomposing, nesting, and pre-rendering"
+      checked: false
+    - ref: "brief §3"
+      item: "pre-rendering expensive nested content and replacing that cache when its dependencies change"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Turn a slow nested scene into a fast cached render that is replaced automatically when anything it depends on changes.
+  projection_example: >-
+    A heavy particle-and-blur "rain" scene is pre-rendered in the background so the whole show previews in real time.
+  controls:
+    - { name: "Pre-render now", type: "action", animatable: false }
+    - { name: "Use pre-render", type: "bool", animatable: false }
+    - { name: "Re-render automatically when changed", type: "bool", animatable: false }
+    - { name: "Cache format", type: "enum(exr-half|prores-4444|png)", animatable: false }
+  animation: >-
+    Not animatable; a pre-render keeps the child's time mapping, so time-remapped instances still sample the correct frames.
+  dependencies: [proj.nesting, render.queue, preview.cache]
+  implementation: >-
+    The pre-render is keyed by a content hash of the child's evaluated dependency graph (layers, properties, expressions, assets, seeds, effect versions). A background render job writes it from an immutable snapshot; any op that changes the hash marks it stale, and stale caches are never used for export.
+  io: >-
+    Cached files live in the project cache folder; proj.collect-files can include them.
+  limitations: >-
+    Content driven by live inputs cannot be pre-rendered deterministically until baked. Stale caches use disk until purged.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      When a nested scene is slow, the app suggests "Speed up this scene"; one click pre-renders it in the background.
+    defaults: >-
+      Half-float EXR (keeps alpha and high dynamic range); auto re-render on.
+    automation: >-
+      Detects bottleneck nested scenes, pre-renders and swaps them in, and replaces the cache when dependencies change.
+    usability_check: >-
+      After an edit to a pre-rendered scene, a stale cache is never shown in preview or export (automated hash test); a first-time user accepts the suggestion in at most 2 actions.
+  acceptance: >-
+    AS-6; mini scene "stale-prerender": editing any dependency causes re-render, and export frames match an uncached render.
+  status: not-started
+  evidence: []
+
+- id: proj.dependency-view
+  name: Dependency view (flowchart)
+  sources:
+    - ref: S01
+      item: "Composition Flowchart / Composition Mini-Flowchart"
+      category: "Compositions"
+      checked: false
+    - ref: "brief §3"
+      item: "dependency view"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    See which scenes, media, rigs, mattes and expressions depend on what, and jump to any of them.
+  projection_example: >-
+    Before replacing the "brick texture" clip, check which scenes use it, or see what deleting a controller would break.
+  controls:
+    - { name: "Scope", type: "enum(scene|project|selection)", animatable: false }
+    - { name: "Direction", type: "enum(upstream|downstream|both)", animatable: false }
+    - { name: "Show expression links", type: "bool", animatable: false }
+    - { name: "Show media usage", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.nesting, expr.engine]
+  implementation: >-
+    Derived graph built from the project model (scene layers, asset references, parenting, mattes, and expression read-sets recorded by the expression engine), laid out as a layered DAG (elkjs) in React and updated incrementally from op patches.
+  io: >-
+    none
+  limitations: >-
+    Expression dependencies are known only after evaluation; dynamically computed references show as "may depend on" until evaluated.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "What uses this?" on any asset or layer; also shown automatically before delete ("Used by 3 scenes").
+    defaults: >-
+      Focused on the selection, showing downstream users.
+    automation: >-
+      Warns before deleting or replacing anything with dependents and lists them.
+    usability_check: >-
+      A first-time user finds every scene that uses a given video in under 20 s.
+  acceptance: >-
+    Mini scene "deps-graph": a fixture with 40 known dependencies produces exactly those edges.
+  status: not-started
+  evidence: []
+
+- id: proj.layer
+  name: Layers and transforms
+  sources:
+    - ref: S32
+      item: "Layers"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: S01
+      item: "Layer properties: Anchor Point, Position, Scale, Rotation, Opacity"
+      category: "Layers and properties"
+      checked: false
+    - ref: "brief §3"
+      item: "layer transforms"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Place media, shapes, text, solids and nested scenes as layers, each with position, scale, rotation, anchor point, opacity and its own time span.
+  projection_example: >-
+    A flowing-water video layer scaled and positioned to cover the left wing of the facade.
+  controls:
+    - { name: "Anchor point", type: "point2d", animatable: true }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Scale", type: "size2d", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "In / out point", type: "time", animatable: false }
+    - { name: "Layer name", type: "string", animatable: false }
+  animation: >-
+    Every transform property is keyframable and expression-enabled; 3D layers add Z, orientation and per-axis rotation (3d.scene).
+  dependencies: [proj.composition]
+  implementation: >-
+    Layer node {id, kind, sourceRef, inPoint, outPoint and startTime in flicks, stretch, transform, masks, effects, styles, switches, parentId}. Documented per-frame order: source, masks, effects, layer styles, transform (with motion blur), track matte, blend. Matrices compose in core TypeScript; resampling happens on the GPU (proj.layer-sampling).
+  io: >-
+    none
+  limitations: >-
+    Wherever the render order differs from After Effects' order, the difference is documented per layer type.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag media onto the canvas or onto a region; move, scale and rotate with large canvas handles; "Fit to region" places and sizes it.
+    defaults: >-
+      Centred and fitted to the scene or selected region; full opacity.
+    automation: >-
+      Fits new layers to the selected surface or region and names layers after their source.
+    usability_check: >-
+      A first-time user places a video so it covers one wall and rotates it slightly in under 30 s using only canvas handles.
+  acceptance: >-
+    AS-1 to AS-3 baseline; mini scene "transform-matrix": evaluated transforms match reference matrices at 100 random times.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: proj.solid-layer
+  name: Solid colour layers
+  sources:
+    - ref: S01
+      item: "Solid-color layers and solid footage items"
+      category: "Layers"
+      checked: false
+  artist_can: >-
+    Add flat colour layers of any size as backgrounds, light sources inside masks, or carriers for effects.
+  projection_example: >-
+    A white solid masked to the window shapes is the base layer for "Light up one after another".
+  controls:
+    - { name: "Colour", type: "color", animatable: true }
+    - { name: "Size", type: "size2d", animatable: false }
+    - { name: "Name", type: "string", animatable: false }
+  animation: >-
+    Colour is animatable directly, an improvement on After Effects, where a solid's colour is static and needs a Fill effect.
+  dependencies: [proj.layer]
+  implementation: >-
+    Procedural layer rendered as a constant-colour quad in WGSL; no stored pixels. Shared solid definitions appear in the content browser.
+  io: >-
+    none
+  limitations: >-
+    None beyond After Effects parity; solids are procedural, so there is no source file to relink.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Usually created by recipes; manually through "Add > Colour".
+    defaults: >-
+      Scene size; white or the last-used colour.
+    automation: >-
+      Recipes create solids masked to regions and name them by role, e.g. "Window light".
+    usability_check: >-
+      A first-time user adds a full-scene colour background in at most 2 actions.
+  acceptance: >-
+    Mini scene "solid-color-anim": an animated solid colour renders the exact keyframed values at keyframe times.
+  status: not-started
+  evidence: []
+
+- id: proj.null-layer
+  name: Null controllers
+  sources:
+    - ref: S01
+      item: "Null object layers"
+      category: "Layers"
+      checked: false
+    - ref: "brief §3"
+      item: "null controllers"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Use invisible controller layers to move, scale or rotate many layers together, and to host rig controls.
+  projection_example: >-
+    One controller moves all 12 column lights together as the music swells.
+  controls:
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Scale", type: "size2d", animatable: true }
+    - { name: "Rig controls (expression controls)", type: "float", animatable: true }
+  animation: >-
+    Fully keyframable; children follow via parenting; expression controls on the null drive rigs (expr.controllers).
+  dependencies: [proj.layer, proj.parenting]
+  implementation: >-
+    Layer kind "null" with no pixels; it is never rendered, and editor overlays draw its on-canvas handle.
+  io: >-
+    none
+  limitations: >-
+    Nulls never render, including in projector outputs; effects placed on a null have no visible result.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Move these together" creates one automatically; rigs and recipes also create them. Manual route: "Add > Controller".
+    defaults: >-
+      Placed at the centre of the selection.
+    automation: >-
+      Creates the controller at the selection's centre and parents the selection to it without anything jumping.
+    usability_check: >-
+      A first-time user moves 12 layers together with "Move these together" in at most 3 actions.
+  acceptance: >-
+    Mini scene "null-rig": children under an animated controller match reference world positions.
+  status: not-started
+  evidence: []
+
+- id: proj.adjustment-layer
+  name: Adjustment layers
+  sources:
+    - ref: S01
+      item: "Adjustment layers"
+      category: "Layers"
+      checked: false
+    - ref: "brief §3"
+      item: "adjustment layers"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Apply effects to everything beneath a layer at once, limited by its masks and opacity.
+  projection_example: >-
+    An adjustment layer with a warm colour shift, masked to the upper floors, makes them glow during the finale.
+  controls:
+    - { name: "Adjustment layer", type: "bool", animatable: false }
+    - { name: "Opacity (effect mix)", type: "percent", animatable: true }
+    - { name: "Masks", type: "path", animatable: true }
+  animation: >-
+    Opacity, masks and every effect parameter are keyframable and expression-enabled.
+  dependencies: [proj.layer, proj.effect-stack]
+  implementation: >-
+    Render pass that takes the composite of the layers below at that stack position as input, runs the layer's effect stack, and mixes the result back using the layer's coverage (masks × opacity). Bounds are the union of the layers below, clipped to the scene unless overscan is enabled.
+  io: >-
+    none
+  limitations: >-
+    Effects that expand bounds are clipped at the scene edge unless overscan is on; behaviour is documented per effect.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Apply to everything below" when adding a look with no layer selected, or the "Grade the whole scene" recipe.
+    defaults: >-
+      Full scene size, placed above the selection.
+    automation: >-
+      Recipes that affect a whole scene create an adjustment layer and mask it to the chosen regions.
+    usability_check: >-
+      A first-time user applies one look to all layers below in at most 3 actions.
+  acceptance: >-
+    Mini scene "adjustment-equivalence": the adjustment-layer result equals the same effect applied to a precomposition of the layers below.
+  status: not-started
+  evidence: []
+
+- id: proj.guide-layer
+  name: Guide (reference) layers
+  sources:
+    - ref: S01
+      item: "Guide layers"
+      category: "Layers"
+      checked: false
+  artist_can: >-
+    Keep reference photos, sketches and notes visible while working, without them ever appearing in exports or projector outputs.
+  projection_example: >-
+    A photo of the building stays visible as a tracing reference but is never projected onto the building.
+  controls:
+    - { name: "Guide layer", type: "bool", animatable: false }
+    - { name: "Show inside nested scenes", type: "bool", animatable: false }
+  animation: >-
+    Not animatable as a switch; the layer's own properties animate normally for reference.
+  dependencies: [proj.layer]
+  implementation: >-
+    Layer flag read by the render context: the editor preview renders it, while export, pre-render and projector-output contexts skip it. Guide layers inside nested scenes are hidden in the parent by default (After Effects parity).
+  io: >-
+    Excluded from all render outputs; included by proj.collect-files.
+  limitations: >-
+    Guide layers are excluded from every output, including review videos, unless a review export explicitly enables them.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Use as a tracing reference" when importing a photo of the venue.
+    defaults: >-
+      Reference photos become guides at 50% opacity, locked.
+    automation: >-
+      Marks venue photos and sketches as guides automatically and locks them against accidental dragging.
+    usability_check: >-
+      Exports contain 0 guide-layer pixels (automated); a first-time user confirms the reference photo is absent from a test export.
+  acceptance: >-
+    Mini scene "guide-excluded": guide layers appear in preview and are absent from export, pre-render and projector outputs.
+  status: not-started
+  evidence: []
+
+- id: proj.parenting
+  name: Parenting (layer hierarchy)
+  sources:
+    - ref: S01
+      item: "Parent and child layers"
+      category: "Layers"
+      checked: false
+    - ref: "brief §3"
+      item: "parenting"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Attach layers to other layers so they follow their movement, rotation and scale.
+  projection_example: >-
+    Window shutters attached to a wall panel swing open while the panel itself drifts outward.
+  controls:
+    - { name: "Parent", type: "layer-ref", animatable: false }
+    - { name: "Keep current position when attaching", type: "bool", animatable: false }
+    - { name: "Inherit opacity", type: "bool", animatable: false }
+  animation: >-
+    Child transforms are relative to the parent. The parent assignment is not keyframable (After Effects parity); time-varying attachment uses expressions or a rig.
+  dependencies: [proj.layer]
+  implementation: >-
+    The parent chain composes 2D/3D affine matrices in core TypeScript. The attach op optionally compensates the child's transform so its world position is unchanged (pick-whip default), and parent cycles are rejected.
+  io: >-
+    none
+  limitations: >-
+    Opacity is not inherited by default, matching After Effects; an optional "Inherit opacity" switch is a product addition.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Attach to…" then click the target on the canvas, or drag the timeline pick whip.
+    defaults: >-
+      Keep current position when attaching or detaching.
+    automation: >-
+      Compensates child transforms so nothing jumps on attach or detach.
+    usability_check: >-
+      A first-time user attaches shutters to a panel without them jumping, in at most 3 actions.
+  acceptance: >-
+    Mini scene "parent-chain": a five-level chain matches reference matrices, and attach/detach preserves world position.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-sampling
+  name: Layer quality and resampling
+  sources:
+    - ref: S01
+      item: "Layer Quality (Best/Draft/Wireframe) and Sampling (Bilinear/Bicubic)"
+      category: "Layers"
+      checked: false
+  artist_can: >-
+    Choose how images are resampled when scaled or rotated, trading smoothness, sharpness and speed.
+  projection_example: >-
+    Bicubic keeps an enlarged brick texture crisp; nearest-neighbour keeps a pixel-art pattern hard-edged across the facade.
+  controls:
+    - { name: "Quality", type: "enum(draft|best)", animatable: false }
+    - { name: "Sampling", type: "enum(bilinear|bicubic|nearest|lanczos)", animatable: false }
+    - { name: "Mipmaps when shrinking", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.layer]
+  implementation: >-
+    WGSL resample shaders: bilinear with generated mipmaps for downscaling, bicubic (Mitchell–Netravali), nearest, and Lanczos-3 for final renders. Preview may use draft quality, and the preview badge reports the compromise.
+  io: >-
+    Exports always render at Best unless the user explicitly chooses draft.
+  limitations: >-
+    Draft preview differs from export; the difference is labelled (brief §18).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Automatic; "Sharpness when scaling" under More controls.
+    defaults: >-
+      Bicubic with mipmaps.
+    automation: >-
+      Uses mipmapped filtering for strong reductions and suggests nearest-neighbour when a low-resolution pixel-art source is enlarged.
+    usability_check: >-
+      With defaults, a 25%-scaled fine grid shows moiré below the automated threshold, and no user needs to open the setting in the novice journey.
+  acceptance: >-
+    Mini scene "resample-quality": scaled and rotated test patterns compared against reference resamples.
+  status: not-started
+  evidence: []
+
+- id: proj.align-distribute
+  name: Align and distribute layers
+  sources:
+    - ref: S01
+      item: "Align panel (align and distribute layers)"
+      category: "Layers"
+      checked: false
+    - ref: "brief §0.3"
+      item: "snapping, alignment guides"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Line up and evenly space layers relative to each other, the scene, or venue regions.
+  projection_example: >-
+    Spread 8 banner graphics evenly across the 8 columns of the facade.
+  controls:
+    - { name: "Align", type: "enum(left|centre-h|right|top|centre-v|bottom)", animatable: false }
+    - { name: "Distribute", type: "enum(horizontal|vertical)", animatable: false }
+    - { name: "Relative to", type: "enum(selection|scene|regions)", animatable: false }
+  animation: >-
+    Not animatable; alignment writes position values (keyframes at the playhead when the property is animated).
+  dependencies: [proj.layer, map.region]
+  implementation: >-
+    Compound op computing each layer's bounds at the playhead (the same routine as sourceRectAtTime) and applying position deltas as one undo step; region-relative alignment uses map.region bounds in scene space.
+  io: >-
+    none
+  limitations: >-
+    Animated layers are aligned at the playhead only.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Line up" and "Space evenly" buttons; "Spread across these regions" when regions are selected.
+    defaults: >-
+      Relative to the selection.
+    automation: >-
+      With regions selected, places one layer at each region centre in reading order.
+    usability_check: >-
+      A first-time user evenly spaces 8 layers across 8 columns in at most 3 actions.
+  acceptance: >-
+    Mini scene "align-distribute": results match expected positions for each mode, including region-relative.
+  status: not-started
+  evidence: []
+
+- id: proj.effect-stack
+  name: Non-destructive effect stack
+  sources:
+    - ref: S01
+      item: "Apply effects / Effect Controls panel"
+      category: "Effects and animation presets"
+      checked: false
+    - ref: "brief §3"
+      item: "non-destructive effect stacks"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: "brief §6"
+      item: "editable effects ordering"
+      category: "Masks, mattes, compositing, and layer styles"
+      checked: true
+  artist_can: >-
+    Stack any number of effects on a layer, reorder, toggle, copy and animate them without ever changing the source media.
+  projection_example: >-
+    Water texture, then displacement, tint and glow on a window layer; dragging glow above tint changes the result predictably.
+  controls:
+    - { name: "Effect order", type: "int", animatable: false }
+    - { name: "Enable effect", type: "bool", animatable: false }
+    - { name: "Effect parameters", type: "float", animatable: true }
+    - { name: "Copy / paste / duplicate effect", type: "action", animatable: false }
+    - { name: "Reset effect", type: "action", animatable: false }
+  animation: >-
+    Every effect parameter is keyframable and expression-enabled. The enable switch is not animatable; the effect mix (mask.effect-masks) is.
+  dependencies: [proj.layer]
+  implementation: >-
+    Ordered list of effect instances {effectId, effectVersion, params}. Each effect is a WGSL pass graph that declares bounds expansion, temporal dependencies, colour expectation and precision, and the stack compiles into a render sub-graph with automatic intermediate allocation and colour conversions. Effect versions keep old projects rendering identically.
+  io: >-
+    Parameters are saved with the effect version; unknown effects are kept as disabled placeholders.
+  limitations: >-
+    Some effects need a flattened input (forcing rasterization of collapsed or vector layers); per-effect semantics are documented.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Looks are added through "Add a look" in the visual library (ux.effect-library); under More controls the stack is a simple list with eye toggles and drag handles.
+    defaults: >-
+      New effects go at the end; recipes supply complete, pre-ordered stacks.
+    automation: >-
+      Recipes build whole stacks; the app inserts colour conversions and bounds expansion automatically.
+    usability_check: >-
+      A first-time user reorders two effects and sees the preview change in under 20 s.
+  acceptance: >-
+    Brief §6 acceptance: reordering effects changes the result predictably. Mini scene "stack-order": both orders of two effects match reference renders.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-trim
+  name: Trim layers (in and out points)
+  sources:
+    - ref: S32
+      item: "Trim or extend a layer (in and out points)"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: "brief §3"
+      item: "layer trimming"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Change when a layer starts and ends by dragging its ends on the timeline or setting them at the playhead.
+  projection_example: >-
+    Trim the fireworks clip so it plays only during the chorus.
+  controls:
+    - { name: "In point", type: "time", animatable: false }
+    - { name: "Out point", type: "time", animatable: false }
+    - { name: "Trim start/end to playhead", type: "action", animatable: false }
+  animation: >-
+    In and out points are not animatable; they define when the layer exists.
+  dependencies: [proj.layer]
+  implementation: >-
+    Op sets inPoint/outPoint in flicks, quantized to the scene's frame grid (sub-frame values are kept internally for nested rate mismatches). Footage extent is enforced unless the layer is looped or time-remapped.
+  io: >-
+    none
+  limitations: >-
+    Footage cannot extend past its source duration unless looped or time-remapped (anim.time-remap).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag clip ends on the simple timeline; they snap to markers, beats and the playhead.
+    defaults: >-
+      Snapping on; no ripple.
+    automation: >-
+      Snaps to beats, markers and scene boundaries.
+    usability_check: >-
+      A first-time user trims a clip to start exactly at the "Chorus" marker in under 15 s.
+  acceptance: >-
+    Mini scene "trim-frame-exact": trimmed layers begin and end on the exact frames in export (render.verify frame count).
+  status: not-started
+  evidence: []
+
+- id: proj.layer-split
+  name: Split layer
+  sources:
+    - ref: S32
+      item: "Split a layer"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: "brief §3"
+      item: "splitting"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Cut a layer in two at the playhead, each part keeping its effects, masks and keyframes, to change what happens after the cut.
+  projection_example: >-
+    Split the water layer at the drop so the second half gets a different colour treatment.
+  controls:
+    - { name: "Split at playhead", type: "action", animatable: false }
+    - { name: "Place new part", type: "enum(above|below)", animatable: false }
+  animation: >-
+    Both parts keep all keyframes (After Effects parity), so animation continues seamlessly across the cut.
+  dependencies: [proj.layer-trim]
+  implementation: >-
+    Compound op duplicates the layer node with a new id, sets out and in points at the split time, and leaves expression and matte references pointing at the original; one undo step.
+  io: >-
+    none
+  limitations: >-
+    Expressions referencing the layer keep pointing at the first part; the op lists them and offers to retarget.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Cut here" on the timeline at the playhead (Ctrl+Shift+D).
+    defaults: >-
+      New part placed above, named "Water (2)".
+    automation: >-
+      Names the parts and warns about references.
+    usability_check: >-
+      A first-time user cuts a layer at a marker in at most 2 actions.
+  acceptance: >-
+    Mini scene "split-identity": a split layer renders identically to the unsplit layer across the cut.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-slip
+  name: Slip edit
+  sources:
+    - ref: S32
+      item: "Slip edit a layer"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: "brief §3"
+      item: "slipping"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Slide which part of a clip plays without moving where it sits on the timeline.
+  projection_example: >-
+    Keep a window's clip timed to the verse but show a later, better moment of the footage.
+  controls:
+    - { name: "Source offset", type: "time", animatable: false }
+    - { name: "Keyframes follow", type: "enum(timeline|source)", animatable: false }
+  animation: >-
+    Keyframes either stay fixed to scene time (default, so music timing holds) or move with the source.
+  dependencies: [proj.layer-trim]
+  implementation: >-
+    Op shifts the layer's startTime and compensates in and out points so the visible span is unchanged; if keyframes stay on the timeline, the op offsets them inversely, all in one transaction.
+  io: >-
+    none
+  limitations: >-
+    Limited by the source duration unless the source loops.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drag inside a trimmed clip with the slip handle; a filmstrip shows the source time.
+    defaults: >-
+      Keyframes stay on the timeline.
+    automation: >-
+      Clamps to available media and previews frames while slipping.
+    usability_check: >-
+      After a one-line hint, a first-time user shows a later moment of a clip without moving it, in under 20 s.
+  acceptance: >-
+    Mini scene "slip": visible span and keyframe times are unchanged while the source frames shift by the exact offset.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-order
+  name: Layer stacking order
+  sources:
+    - ref: S32
+      item: "Change the stacking order of layers"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: "brief §3"
+      item: "ordering"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Put layers in front of or behind others by dragging in the list or using bring forward and send backward.
+  projection_example: >-
+    Move the glow layer above the window texture so it shines on top.
+  controls:
+    - { name: "Stack position", type: "int", animatable: false }
+    - { name: "Bring to front / forward / backward / to back", type: "action", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.layer]
+  implementation: >-
+    Reorder op moves layer ids in the scene's ordered list. Track mattes and parents reference layer ids rather than adjacency, so reordering never breaks them; 3D layers sort by depth per 3d.scene rules.
+  io: >-
+    none
+  limitations: >-
+    3D layers are ordered by depth, not by stack position; the UI hints at this when a reorder has no visible effect.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag in the layer list, or right-click on the canvas and choose "Bring to front".
+    defaults: >-
+      New layers go above the selection.
+    automation: >-
+      Keeps mattes and parenting intact on reorder.
+    usability_check: >-
+      A first-time user brings a layer to the front in at most 2 actions.
+  acceptance: >-
+    Mini scene "reorder-mattes-intact": reordering 20 layers with mattes and parents keeps every matte and parent link and renders as expected.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-grouping
+  name: Layer groups (timeline folders)
+  sources:
+    - ref: "brief §3"
+      item: "grouping"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: S03
+      item: "Precompose (After Effects' only grouping mechanism)"
+      category: "Precomposing, nesting, and pre-rendering"
+      checked: false
+  artist_can: >-
+    Organize layers into collapsible, named groups that can be hidden, locked or soloed together, without turning them into a separate scene.
+  projection_example: >-
+    Group the 30 window layers of the second floor so the whole floor can be hidden or soloed at once.
+  controls:
+    - { name: "Group name", type: "string", animatable: false }
+    - { name: "Collapsed", type: "bool", animatable: false }
+    - { name: "Group visibility / lock / solo", type: "bool", animatable: false }
+    - { name: "Convert to reusable scene", type: "action", animatable: false }
+  animation: >-
+    Groups are organizational and not animatable; moving a group together uses a controller null ("Move these together").
+  dependencies: [proj.layer, proj.layer-switches]
+  implementation: >-
+    Non-rendering group node in the scene's layer list: it is a UI hierarchy only, and render order is the flattened order. Group switches propagate to members at evaluation, and a convert-to-precompose op is provided.
+  io: >-
+    Saved as group nodes; flattened when exchanging with formats that lack groups.
+  limitations: >-
+    A group does not isolate blend modes or effects (that needs a precomposition); the UI explains this and offers conversion. After Effects has no equivalent, so this is a product addition.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select layers and choose "Group" (Ctrl+G); recipes put their layers into named groups automatically.
+    defaults: >-
+      Named after the recipe or region role, e.g. "Window lights".
+    automation: >-
+      Recipes group generated layers and name groups by role.
+    usability_check: >-
+      A first-time user hides a whole floor of windows in at most 2 actions.
+  acceptance: >-
+    Mini scene "group-render-neutral": grouping and ungrouping never changes rendered output.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-duplicate
+  name: Duplicate, copy and paste layers
+  sources:
+    - ref: S32
+      item: "Duplicate a layer / copy and paste layers"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: "brief §3"
+      item: "duplication"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Duplicate layers, or paste them into other scenes and projects, with all effects, masks, keyframes and expressions intact.
+  projection_example: >-
+    Copy the finished window treatment from the left wing's scene into the right wing's scene.
+  controls:
+    - { name: "Duplicate", type: "action", animatable: false }
+    - { name: "Copy / paste", type: "action", animatable: false }
+    - { name: "Paste at playhead", type: "bool", animatable: false }
+    - { name: "Duplicate N times with offset", type: "int", animatable: false }
+  animation: >-
+    Keyframes and expressions copy with the layer; step-and-repeat can add a per-copy time offset.
+  dependencies: [proj.layer]
+  implementation: >-
+    The clipboard serializes the layer subtree and referenced asset ids to JSON. Paste remaps ids, resolves or imports assets across projects, and rewrites expression references so duplicated rigs point at their own siblings.
+  io: >-
+    Pasting into another project copies asset references, not files; missing media becomes placeholders for proj.relink.
+  limitations: >-
+    Expressions referencing layers outside the copied set keep their original targets, which may not exist in the destination; the paste reports them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Ctrl+D, Ctrl+C / Ctrl+V; "Repeat across selected regions" for many targets at once.
+    defaults: >-
+      Duplicates go directly above the original, with incremented names.
+    automation: >-
+      Auto-increments names and re-links duplicated rigs to their own controllers.
+    usability_check: >-
+      A first-time user copies a finished treatment into another scene in at most 3 actions.
+  acceptance: >-
+    Mini scene "paste-cross-project": layers pasted between projects render identically once media is present.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-switches
+  name: Visibility, solo, mute, lock and shy switches
+  sources:
+    - ref: S32
+      item: "Layer switches: Video, Audio, Solo, Lock, Shy"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: "brief §3"
+      item: "solo/mute/lock, visibility"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Hide, solo, mute, lock or tuck away layers to focus on what you are working on.
+  projection_example: >-
+    Solo the roofline trace to fine-tune it, and lock the venue reference so it cannot be dragged by accident.
+  controls:
+    - { name: "Visible", type: "bool", animatable: false }
+    - { name: "Solo", type: "bool", animatable: false }
+    - { name: "Audio on", type: "bool", animatable: false }
+    - { name: "Lock", type: "bool", animatable: false }
+    - { name: "Hide in timeline (shy)", type: "bool", animatable: false }
+  animation: >-
+    Not animatable; opacity and audio level are the animatable equivalents.
+  dependencies: [proj.layer]
+  implementation: >-
+    Switch flags on layer nodes; solo is resolved per scene in the evaluation context. The op validator rejects canvas edits to locked layers, while the lock itself is an ordinary undoable op.
+  io: >-
+    Before export, the app warns when any layer is soloed or unexpectedly hidden.
+  limitations: >-
+    Solo affects renders (After Effects parity); the export warning prevents a forgotten solo from shipping.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Eye, speaker, solo and lock icons on each layer row with tooltips; the same items on the canvas right-click menu.
+    defaults: >-
+      Venue reference layers start locked.
+    automation: >-
+      Warns about soloed or hidden layers before export.
+    usability_check: >-
+      A first-time user hides and locks a layer in at most 2 actions each; the export warning catches a forgotten solo in 100% of automated cases.
+  acceptance: >-
+    Mini scene "solo-export-warning": export with a soloed layer is flagged; switches survive save and reopen.
+  status: not-started
+  evidence: []
+
+- id: proj.layer-organize
+  name: Layer names, label colours and comments
+  sources:
+    - ref: S32
+      item: "Rename layers / label colors / select label group"
+      category: "Selecting and arranging layers"
+      checked: false
+    - ref: S01
+      item: "Layer comments"
+      category: "Layers"
+      checked: false
+  artist_can: >-
+    Rename layers, colour-code them and leave notes, so a large show stays readable.
+  projection_example: >-
+    All roofline layers are orange and all window layers blue; one click selects every blue layer.
+  controls:
+    - { name: "Name", type: "string", animatable: false }
+    - { name: "Label colour", type: "enum(none|red|orange|yellow|green|cyan|blue|violet|pink|grey)", animatable: false }
+    - { name: "Comment", type: "string", animatable: false }
+    - { name: "Select label group", type: "action", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.layer, expr.layer-references]
+  implementation: >-
+    Metadata on layer nodes with a per-project label palette. Expressions written through the pick whip store the target's stable id alongside its display name, so a rename op updates expression text automatically.
+  io: >-
+    none
+  limitations: >-
+    Hand-typed expressions that build layer names from strings cannot be updated automatically; they are flagged after a rename.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Double-click a name to rename; right-click to choose a colour.
+    defaults: >-
+      Recipes name and colour generated layers by role and type.
+    automation: >-
+      Auto-labels by role, and renames propagate to expression references.
+    usability_check: >-
+      A first-time user renames a layer and selects all layers of the same colour in under 20 s.
+  acceptance: >-
+    Mini scene "rename-propagates": renaming a referenced layer keeps every pick-whipped expression working.
+  status: not-started
+  evidence: []
+
+- id: proj.replace-source
+  name: Replace layer source
+  sources:
+    - ref: S01
+      item: "Replace layer source (Alt-drag) / Replace Footage"
+      category: "Layers / Footage"
+      checked: false
+  artist_can: >-
+    Swap the media or nested scene a layer uses while keeping its position, timing, masks, effects and animation.
+  projection_example: >-
+    Replace the placeholder water video with the final render in all 24 windows at once.
+  controls:
+    - { name: "New source", type: "file", animatable: false }
+    - { name: "Replace everywhere this source is used", type: "bool", animatable: false }
+    - { name: "Fit new source to old size", type: "bool", animatable: false }
+  animation: >-
+    All keyframes, expressions and recipe overrides on the layer are preserved.
+  dependencies: [proj.layer, proj.import-media]
+  implementation: >-
+    Op swaps sourceRef on the selected layers, with optional scale compensation when dimensions differ. Asset-level replacement updates every referencing layer in a single op.
+  io: >-
+    none
+  limitations: >-
+    A shorter replacement may leave layers extending past the new source; the op lists them.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drop new media onto a layer's "Replace" target, or right-click an asset and choose "Replace everywhere".
+    defaults: >-
+      Fit the new source to the old size; replace everywhere when started from the content browser.
+    automation: >-
+      Compensates scale and reports duration differences.
+    usability_check: >-
+      A first-time user replaces a placeholder video across 24 windows in at most 3 actions.
+  acceptance: >-
+    Mini scene "replace-everywhere": 24 layers update; transforms, masks and keyframes are unchanged.
+  status: not-started
+  evidence: []
+
+- id: proj.markers
+  name: Scene and layer markers
+  sources:
+    - ref: S01
+      item: "Layer markers and composition markers (duration, comment, chapter, cue point, protected region)"
+      category: "Timeline / Markers"
+      checked: false
+    - ref: "brief §3"
+      item: "markers"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: "brief §13"
+      item: "beat markers"
+      category: "Sound and music-driven animation"
+      checked: true
+  artist_can: >-
+    Drop named markers on the timeline for song sections, cues and notes, optionally with a duration, and snap edits to them.
+  projection_example: >-
+    Markers named "Verse", "Chorus" and "Drop" let effects and transitions snap to the music.
+  controls:
+    - { name: "Time", type: "time", animatable: false }
+    - { name: "Duration", type: "duration", animatable: false }
+    - { name: "Label / comment", type: "string", animatable: false }
+    - { name: "Colour", type: "color", animatable: false }
+    - { name: "Kind", type: "enum(note|cue|chapter|beat)", animatable: false }
+    - { name: "Protected region", type: "bool", animatable: false }
+  animation: >-
+    Markers are readable from expressions (marker.key(n), marker.nearestKey(time)) and by recipes to trigger animation at sections or beats.
+  dependencies: [proj.composition, proj.layer]
+  implementation: >-
+    Marker arrays on scenes and layers, timed in flicks; layer markers move with the layer. Beat markers generated by audio analysis form a separate track that can be converted to editable markers, and cue markers feed show.cue-list.
+  io: >-
+    Markers export in render manifests (chapters and cues) and import from audio analysis or CSV.
+  limitations: >-
+    Protected regions apply only when a nested scene is time-stretched (After Effects Responsive Design–Time behaviour); exact parity is to be verified.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Mark this moment" (M key), and "Mark the beats" / "Mark the song sections" after adding music.
+    defaults: >-
+      Markers named by section when generated from music; colour by kind.
+    automation: >-
+      Generates section and beat markers from music analysis, and snaps edits to markers.
+    usability_check: >-
+      A first-time user marks the chorus and snaps a layer's start to it in under 30 s.
+  acceptance: >-
+    AS-1 (timed to audio); mini scene "marker-trigger": an expression and a recipe both fire exactly at a marker frame in preview and export.
+  status: not-started
+  evidence: []
+
+- id: proj.work-area
+  name: Work area
+  sources:
+    - ref: S01
+      item: "Work area"
+      category: "Timeline"
+      checked: false
+    - ref: "brief §3"
+      item: "work areas"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Mark the stretch of time to preview or export, so you can loop just the part you are refining.
+  projection_example: >-
+    Loop the 8-second window sequence while tuning its delay.
+  controls:
+    - { name: "Work area start / end", type: "time", animatable: false }
+    - { name: "Trim scene to work area", type: "action", animatable: false }
+    - { name: "Export work area only", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.composition]
+  implementation: >-
+    Scene-level time range in flicks, used for the preview loop range and as the default render range; trimming the scene to it is an undoable op.
+  io: >-
+    Render presets can use the work area as the export range.
+  limitations: >-
+    None significant.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Loop this part" handles on the timeline, or "Loop selection" to fit the selected layers.
+    defaults: >-
+      The whole scene.
+    automation: >-
+      Sets the range from the selection or between the nearest markers.
+    usability_check: >-
+      A first-time user loops a 5-second section in at most 2 actions.
+  acceptance: >-
+    Mini scene "work-area-export": a work-area export has exactly the expected frame count and first frame.
+  status: not-started
+  evidence: []
+
+- id: proj.snapping
+  name: Snapping on canvas and timeline
+  sources:
+    - ref: S01
+      item: "Snapping layers (Snapping option in Tools panel)"
+      category: "Layers"
+      checked: false
+    - ref: "brief §0.3"
+      item: "snapping, alignment guides, readable handles"
+      category: "User experience"
+      checked: true
+    - ref: "brief §0.6"
+      item: "path snapping"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Have layer edges, centres, anchor points, keyframes and clip ends snap to each other, to markers and beats, and to venue region edges.
+  projection_example: >-
+    A banner snaps exactly to a window region's edge; a clip snaps to the "Drop" marker.
+  controls:
+    - { name: "Snapping on", type: "bool", animatable: false }
+    - { name: "Snap targets", type: "enum(edges|centres|anchors|regions|guides|markers|beats|keyframes)", animatable: false }
+    - { name: "Snap distance (screen px)", type: "int", animatable: false }
+  animation: >-
+    Not animatable; snapping produces exact values that are then keyframed normally.
+  dependencies: [proj.layer, map.region]
+  implementation: >-
+    Canvas snapping gathers candidate features (layer bounds, centres, anchors, region edges and corners, guides) in scene space in a spatial index; timeline snapping uses sorted time features. Snapping is a UI helper: ops receive the final values.
+  io: >-
+    none
+  limitations: >-
+    Animated targets snap at the playhead only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      On by default; hold Ctrl to move freely; magnetic indicator lines show what snapped.
+    defaults: >-
+      Regions, edges, centres, markers and beats on; 8 px distance.
+    automation: >-
+      Prioritizes region edges and corners when a venue is loaded.
+    usability_check: >-
+      A first-time user aligns a layer edge to a window region within 1 px in under 15 s.
+  acceptance: >-
+    Mini scene "snap-to-region": snapped positions equal region edge coordinates exactly.
+  status: not-started
+  evidence: []
+
+- id: proj.guides-grids
+  name: Rulers, guides, grids and safe zones
+  sources:
+    - ref: S01
+      item: "Rulers, guides, grids, proportional grid, title/action-safe zones"
+      category: "Composition panel"
+      checked: false
+  artist_can: >-
+    Show rulers, drag guides, show a grid or proportional grid, and see safe-zone overlays while composing.
+  projection_example: >-
+    Guides at each floor line of the facade keep typography placed consistently.
+  controls:
+    - { name: "Show rulers", type: "bool", animatable: false }
+    - { name: "Guides", type: "point2d", animatable: false }
+    - { name: "Grid spacing", type: "int", animatable: false }
+    - { name: "Proportional grid divisions", type: "int", animatable: false }
+    - { name: "Lock guides", type: "bool", animatable: false }
+    - { name: "Guides from venue regions", type: "action", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.composition, map.region]
+  implementation: >-
+    Editor overlay drawn by the canvas UI, outside the render graph; guides are stored per scene. "Guides from venue regions" generates guides along region edges such as floor lines and column edges.
+  io: >-
+    Saved in the project; never rendered.
+  limitations: >-
+    Overlays never appear in exports or projector outputs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Show grid" toggle and "Guides from building", which adds guides along floors and columns.
+    defaults: >-
+      Rulers off; guides snap on.
+    automation: >-
+      Generates guides from venue regions.
+    usability_check: >-
+      A first-time user turns on a grid and adds a guide in under 20 s.
+  acceptance: >-
+    Mini scene "guides-not-rendered": overlays are absent from all outputs.
+  status: not-started
+  evidence: []
+
+- id: proj.search
+  name: Project and timeline search
+  sources:
+    - ref: S01
+      item: "Search in the Project panel and Timeline panel"
+      category: "Projects / Timeline"
+      checked: false
+    - ref: "brief §3"
+      item: "search; project search"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Find any layer, scene, media item, effect, property or marker by name or a plain description.
+  projection_example: >-
+    Type "window 7" to jump to that layer, or "blur" to list every layer using a blur.
+  controls:
+    - { name: "Query", type: "string", animatable: false }
+    - { name: "Scope", type: "enum(project|scene|selection)", animatable: false }
+    - { name: "Filter by kind", type: "enum(all|layers|scenes|media|effects|properties|markers)", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.project-model]
+  implementation: >-
+    In-memory index of names, kinds, effect names, property names, marker comments and recipe names, updated incrementally from op patches, with fuzzy matching. Choosing a result selects and reveals it in the timeline and canvas.
+  io: >-
+    none
+  limitations: >-
+    Searching by value (e.g. a colour word) uses approximate named-colour matching.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      One search box (Ctrl+F) with results grouped as Layers, Scenes, Media, Effects.
+    defaults: >-
+      Whole project.
+    automation: >-
+      Reveals, scrolls to and selects results.
+    usability_check: >-
+      A first-time user finds a named layer in a 200-layer show in under 10 s.
+  acceptance: >-
+    Mini scene "search-index": the index stays consistent after 1,000 random ops (automated).
+  status: not-started
+  evidence: []
+
+- id: proj.property-reveal
+  name: Reveal animated and changed properties
+  sources:
+    - ref: S01
+      item: "Show properties with keyframes (U) / modified properties (UU) / expressions (EE)"
+      category: "Timeline"
+      checked: false
+    - ref: "brief §0.3"
+      item: "Avoid forcing users through deep property trees"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Show only the properties that are animated, changed from default, driven by expressions, customized after a recipe, or in error.
+  projection_example: >-
+    See exactly what a recipe changed on a window layer before tweaking it.
+  controls:
+    - { name: "Show", type: "enum(animated|changed|expressions|custom-edits|errors)", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.layer]
+  implementation: >-
+    Derived filter over the property tree that compares values against defaults and checks keyframe, expression, override and error state; it drives both the timeline and the inspector.
+  io: >-
+    none
+  limitations: >-
+    None significant.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Show what's animated" and "Show what changed" toggles in the inspector.
+    defaults: >-
+      After a recipe, the inspector opens on the changed properties.
+    automation: >-
+      Expands to relevant properties when a layer is selected.
+    usability_check: >-
+      A first-time user identifies which property a recipe animated in under 15 s.
+  acceptance: >-
+    Mini scene "reveal-filters": each filter shows exactly the expected properties on a fixture layer.
+  status: not-started
+  evidence: []
+
+- id: proj.keyboard-navigation
+  name: Keyboard navigation and shortcuts
+  sources:
+    - ref: S01
+      item: "Keyboard shortcuts"
+      category: "Workspace"
+      checked: false
+    - ref: "brief §3"
+      item: "useful keyboard navigation"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: "brief §0.9"
+      item: "keyboard navigation, visible focus"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Move through time, keyframes, layers and panels with the keyboard, using customizable shortcuts.
+  projection_example: >-
+    Step frame by frame through a fast flash sequence to check every window lights in order.
+  controls:
+    - { name: "Shortcut set", type: "enum(before-effects|after-effects-style)", animatable: false }
+    - { name: "Custom binding", type: "string", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.layer]
+  implementation: >-
+    Central command registry in which every command maps to ops or view actions, with layered keymaps. An After Effects-style preset covers frame step, next/previous keyframe, layer in/out, reveal properties and work-area keys. Full focus management and visible focus support accessibility.
+  io: >-
+    Keymaps are user preferences, exportable as JSON.
+  limitations: >-
+    Some After Effects shortcuts conflict with OS or Chromium shortcuts in Electron; those are remapped and documented.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Shortcut hints in tooltips and a "?" cheat sheet; no task requires a shortcut.
+    defaults: >-
+      Before Effects set.
+    automation: >-
+      After an action is used twice from a menu, its tooltip highlights the shortcut.
+    usability_check: >-
+      Automated accessibility test: a keyboard-only user creates, moves, keyframes and previews a layer; novices complete core tasks without any shortcut.
+  acceptance: >-
+    Mini scene "keyboard-only-journey": the brief §0.10 five-minute journey completes with keyboard only.
+  status: not-started
+  evidence: []
+
+- id: proj.templates
+  name: Project templates and starter scenes
+  sources:
+    - ref: S01
+      item: "Project templates (.aet)"
+      category: "Projects"
+      checked: false
+    - ref: "brief §3"
+      item: "Save editable projects and reusable templates"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: "brief §0.2"
+      item: "useful starter scenes and an immediately editable sample"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Start a new show from a template or starter scene, and save your own show as a template for future venues.
+  projection_example: >-
+    Save this year's "Winter facade" show as a template and start next year's show at a different building from it.
+  controls:
+    - { name: "Save as template", type: "action", animatable: false }
+    - { name: "Template name and thumbnail", type: "string", animatable: false }
+    - { name: "Include media", type: "bool", animatable: false }
+    - { name: "Start from template", type: "action", animatable: false }
+  animation: >-
+    Templates keep all animation, recipes and rigs editable.
+  dependencies: [proj.save-reopen, map.venue]
+  implementation: >-
+    A template is a read-only project package with a thumbnail and optional bundled media; opening one creates an untitled copy. Its show content targets region roles, so starting it on another venue lists the roles to bind (map.venue).
+  io: >-
+    Template package (project, media, thumbnail) stored in the user library folder.
+  limitations: >-
+    Retargeting depends on role bindings; unbound roles are listed for the user to assign rather than guessed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      The start screen shows starter scenes with animated thumbnails; "Save as template" lives in the File menu.
+    defaults: >-
+      Include media on; thumbnail from the playhead.
+    automation: >-
+      Always opens a copy, never the template, and lists roles to bind to the current venue.
+    usability_check: >-
+      A first-time user starts from a starter scene and previews it on their surface in under 2 minutes.
+  acceptance: >-
+    AS-7 (bind the same show to another venue); mini scene "template-copy": the template file is unchanged after editing the copy.
+  status: not-started
+  evidence: []
+
+- id: proj.import-media
+  name: Import video, images, sequences and audio
+  sources:
+    - ref: S01
+      item: "Importing footage (video, still images, image sequences, audio)"
+      category: "Importing"
+      checked: false
+    - ref: "brief §0.6"
+      item: "handle media conversion, build proxies"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Bring in videos, images, numbered image sequences and audio just by dragging them in.
+  projection_example: >-
+    Drag in a folder of rendered PNG frames, a ProRes clip and a WAV soundtrack in one go.
+  controls:
+    - { name: "Import", type: "action", animatable: false }
+    - { name: "Treat numbered images as a sequence", type: "bool", animatable: false }
+    - { name: "Import folder", type: "bool", animatable: false }
+    - { name: "Optimize for editing", type: "enum(auto|never|always)", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.project-model]
+  implementation: >-
+    The FFmpeg sidecar probes streams (size, rate, duration, pixel format, alpha, colour metadata, audio layout). Preview decodes through WebCodecs where it is frame-exact, otherwise through FFmpeg into the frame cache. Numbered files are detected as sequences, and variable-frame-rate or long-GOP sources are offered a background transcode to an intra-frame proxy (preview.proxy).
+  io: >-
+    Inputs include MOV/MP4 (H.264, HEVC, ProRes, DNxHR, HAP), PNG/JPEG/TIFF/EXR stills and sequences, and WAV/AIFF/MP3/FLAC audio, per tested FFmpeg support; unsupported codecs are reported explicitly.
+  limitations: >-
+    Variable-frame-rate phone video is conformed to a constant rate (reported). Camera RAW and some proprietary codecs are unsupported unless the FFmpeg build handles them.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag files anywhere, or use "Add content"; items appear with thumbnails.
+    defaults: >-
+      Auto-detect sequences; optimize difficult sources in the background.
+    automation: >-
+      Probes, detects sequences, interprets alpha, frame rate and colour, and builds proxies in the background.
+    usability_check: >-
+      A first-time user imports a video and a music file and sees both in the show in under 30 s.
+  acceptance: >-
+    Mini scene "import-matrix": a test media matrix imports with correct metadata and frame-exact decode; AS-4 uses imported footage.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: proj.source-interpretation
+  name: Interpret footage (size, timing, looping, colour)
+  sources:
+    - ref: S01
+      item: "Interpret footage items (frame rate, pixel aspect ratio, fields and pulldown, looping, color management)"
+      category: "Importing"
+      checked: false
+    - ref: "brief §3"
+      item: "record source dimensions, timing, alpha interpretation, and color space"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    See and correct how a file is read: its size, pixel aspect, frame rate, start timecode, fields, colour space and how many times it loops.
+  projection_example: >-
+    Conform a 25 fps clip to play at 30 fps for the show, or loop a 4-second texture 20 times.
+  controls:
+    - { name: "Assume frame rate", type: "float", animatable: false }
+    - { name: "Pixel aspect ratio", type: "float", animatable: false }
+    - { name: "Fields", type: "enum(off|upper-first|lower-first)", animatable: false }
+    - { name: "Loop count", type: "int", animatable: false }
+    - { name: "Start timecode", type: "time", animatable: false }
+    - { name: "Input colour space", type: "enum(auto|srgb|rec709|rec2020|acescg|linear|custom)", animatable: false }
+  animation: >-
+    Not animatable; the evaluator maps layer time to source frames through these settings.
+  dependencies: [proj.import-media]
+  implementation: >-
+    An interpretation record per asset, stored separately from the probed metadata so changes are reversible. Layer time maps to source frames with exact rational arithmetic in flicks; the input colour space is passed to color.management for the input transform. Deinterlacing uses FFmpeg bwdif.
+  io: >-
+    Interpretations are saved per asset and travel with collected projects.
+  limitations: >-
+    Pulldown removal covers standard cadences only; deinterlacing is basic.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic. Each item shows a plain summary such as "1920×1080, 25 fps, 12 s, transparent background", with "Fix" only when something looks wrong.
+    defaults: >-
+      Probed values; loop once; colour space from metadata.
+    automation: >-
+      Probes and applies interpretations, and warns once about frame-rate mismatch with the show.
+    usability_check: >-
+      In the supplied-asset journey, users make 0 manual interpretation corrections.
+  acceptance: >-
+    Mini scene "interpretation-rates": 23.976, 25, 29.97, 50 and 60 fps sources map frame-exactly into a 30 fps scene.
+  status: not-started
+  evidence: []
+
+- id: proj.alpha-interpretation
+  name: Transparency (alpha) interpretation
+  sources:
+    - ref: S01
+      item: "Alpha channel interpretation (Ignore, Straight-Unmatted, Premultiplied-Matted with color, Guess, Invert Alpha)"
+      category: "Importing"
+      checked: false
+    - ref: "brief §6"
+      item: "alpha interpretation"
+      category: "Masks, mattes, compositing, and layer styles"
+      checked: true
+    - ref: "brief §0.10"
+      item: "without needing to understand alpha premultiplication"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Make transparent media composite cleanly without dark or bright fringes; the app works out how transparency was stored and fixes it.
+  projection_example: >-
+    A logo PNG and a ProRes 4444 smoke clip composite over the facade with no dark halos.
+  controls:
+    - { name: "Transparency", type: "enum(auto|straight|premultiplied|ignore)", animatable: false }
+    - { name: "Premultiplied against colour", type: "color", animatable: false }
+    - { name: "Invert alpha", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.import-media]
+  implementation: >-
+    On decode, sources convert to premultiplied scene-linear rgba16float; straight alpha is premultiplied after linearization, and premultiplied-with-colour sources are unmatted against that colour first. Auto-detect samples edge pixels (colour exceeding alpha implies straight) and uses container metadata when present.
+  io: >-
+    The export alpha convention comes from the render preset (straight for most codecs) and is written to the render manifest to prevent double premultiplication downstream.
+  limitations: >-
+    Auto-detection can be wrong on unusual art; the user can override it, and a transparency-check view helps.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic; if fringes are detected, a quick action appears: "Edges look dark? Fix transparency".
+    defaults: >-
+      Auto.
+    automation: >-
+      Detects the mode, premultiplies consistently and flags suspicious sources.
+    usability_check: >-
+      Supplied assets composite with no fringe above the automated edge-difference threshold, and no novice encounters the word "premultiplied".
+  acceptance: >-
+    Brief §6 acceptance (exported alpha shows no unexplained dark or bright fringes); mini scene "alpha-fringe" with straight, premultiplied and matted test sources.
+  status: not-started
+  evidence: []
+
+- id: proj.layered-file-import
+  name: Layered Photoshop import
+  sources:
+    - ref: S01
+      item: "Import Photoshop files (as composition, retain layer sizes, editable layer styles)"
+      category: "Importing"
+      checked: false
+  artist_can: >-
+    Import a layered Photoshop design as a scene with each layer separate, aligned and ready to animate.
+  projection_example: >-
+    A designer's PSD with each window painted on its own layer becomes 40 animatable layers aligned to the facade.
+  controls:
+    - { name: "Import as", type: "enum(merged|scene|scene-keep-layer-sizes)", animatable: false }
+    - { name: "Editable layer styles", type: "bool", animatable: false }
+    - { name: "Text layers as editable text", type: "bool", animatable: false }
+  animation: >-
+    Imported layers animate like any other; the source PSD can be re-imported to update pixels while keeping animation.
+  dependencies: [proj.import-media, proj.composition]
+  implementation: >-
+    PSD/PSB parsed with ag-psd (MIT) in a worker. Layers become images cropped to their bounds; blend modes map to mask.blend-modes, groups to layer groups or nested scenes, layer masks to masks or alpha, and layer styles to mask.layer-styles where equivalent.
+  io: >-
+    Reads PSD and PSB; no PSD export.
+  limitations: >-
+    Smart objects import as pixels; adjustment layers map only where an equivalent effect exists; everything unsupported is listed in an import report.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects project-management convenience with no projection workflow behind it. Scenes, nesting, layers, trims, replace source, markers, import and AE import stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Drag in a PSD and answer one question: "Keep layers separate?"
+    defaults: >-
+      Scene with layer sizes kept; editable styles on.
+    automation: >-
+      Aligns layers, maps blend modes and styles, and reports anything unsupported.
+    usability_check: >-
+      A first-time user imports a 40-layer PSD and animates one window layer in under 2 minutes.
+  acceptance: >-
+    Mini scene "psd-import-fidelity": the composite of imported layers matches the PSD's flattened preview within tolerance for supported features.
+  status: not-started
+  evidence: []
+
+- id: proj.asset-browser
+  name: Content browser with thumbnails
+  sources:
+    - ref: S01
+      item: "Project panel (folders, thumbnails, columns)"
+      category: "Projects"
+      checked: false
+    - ref: "brief §3"
+      item: "thumbnail browsing"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: "brief §0.5"
+      item: "animated thumbnails"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Browse all media, scenes, rigs and saved looks in the project with animated thumbnails, folders and details.
+  projection_example: >-
+    Hover over a clip thumbnail to scrub through it before dragging it onto a window region.
+  controls:
+    - { name: "View", type: "enum(grid|list)", animatable: false }
+    - { name: "Thumbnail size", type: "int", animatable: false }
+    - { name: "Sort / filter", type: "enum(name|kind|date|duration|unused)", animatable: false }
+    - { name: "Hover scrub", type: "bool", animatable: false }
+    - { name: "New folder", type: "action", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.import-media]
+  implementation: >-
+    Thumbnails and hover-scrub strips are generated in the background by the FFmpeg sidecar and cached by content hash; scenes are thumbnailed by low-resolution headless renders. The grid is a virtualized React list.
+  io: >-
+    Thumbnail cache lives outside the project and is rebuildable.
+  limitations: >-
+    Very long media is sampled for scrub strips rather than fully decoded.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      The "Content" panel; drag items onto the canvas or onto a region.
+    defaults: >-
+      Grid view, auto-folders by kind, hover scrub on.
+    automation: >-
+      Auto-folders by kind, generates thumbnails, and marks unused items.
+    usability_check: >-
+      A first-time user finds and places a specific clip among 50 in under 20 s.
+  acceptance: >-
+    Mini scene "browser-thumbnails": thumbnails for 200 mixed items appear without blocking editing (UI frame time stays within budget).
+  status: not-started
+  evidence: []
+
+- id: proj.relink
+  name: Relink missing media
+  sources:
+    - ref: S01
+      item: "Replace footage / find missing footage"
+      category: "Importing"
+      checked: false
+    - ref: "brief §3"
+      item: "relink missing media"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    When files have moved, point the show at their new location once and every other missing file is found automatically.
+  projection_example: >-
+    After copying the show to the venue laptop, choose the new media folder and all 120 clips reconnect.
+  controls:
+    - { name: "Locate", type: "action", animatable: false }
+    - { name: "Search folder", type: "file", animatable: false }
+    - { name: "Match by", type: "enum(name|name-and-size|content-hash)", animatable: false }
+    - { name: "Relink everything found in folder", type: "bool", animatable: false }
+  animation: >-
+    Not animatable; layers keep all animation while media is offline.
+  dependencies: [proj.import-media, proj.save-reopen]
+  implementation: >-
+    Asset records store relative path, absolute path, size, duration and content hash. Missing files are searched relative to the project first, then in user-chosen folders; matches are verified by size, probe and optional hash, and relinking is one undoable op.
+  io: >-
+    Placeholders render as a labelled checkerboard in preview and block export until resolved or explicitly accepted.
+  limitations: >-
+    Hash matching reads whole files (done in the background); renamed and re-encoded media can only be matched by name, with confirmation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      An error banner such as "12 files are missing — Find them", then choose a folder.
+    defaults: >-
+      Match by name and size, searching subfolders.
+    automation: >-
+      Relative-path resolution and folder-wide matching; placeholders keep layers intact meanwhile.
+    usability_check: >-
+      A first-time user reconnects all missing files of a moved show in at most 3 actions and under 60 s.
+  acceptance: >-
+    AS-7 (move a collected project, relink it).
+  status: implemented
+  evidence:
+    - "Find missing files… (Content panel and import report) searches a folder tree by name, copies found media into the show and relinks with its real details; journey step ae-find-missing-files (2 of 3 found, the third still listed), 2026-10-02"
+
+- id: proj.missing-report
+  name: Missing fonts, codecs, effects and media report
+  sources:
+    - ref: S01
+      item: "Missing fonts / missing effects / missing footage warnings"
+      category: "Projects"
+      checked: false
+    - ref: "brief §3"
+      item: "report missing fonts/codecs"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+    - ref: "brief §0.9"
+      item: "Errors must say what happened, identify the affected item, and offer a practical action"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Get one clear list of everything missing or unsupported (media, fonts, codecs, effects), with what it affects and how to fix it.
+  projection_example: >-
+    Opening the show on another PC reports: "Font 'Gotham Bold' missing — used in 3 titles — Substitute or Locate".
+  controls:
+    - { name: "Show report", type: "action", animatable: false }
+    - { name: "Fix (per item)", type: "action", animatable: false }
+    - { name: "Substitute font", type: "font", animatable: false }
+    - { name: "Accept and ignore", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.relink, text.font-substitution]
+  implementation: >-
+    On load and before render, a validator walks assets, fonts, effect ids and versions, and decodability (an actual FFmpeg decode test, not an extension check). It emits structured issues {kind, item, affected nodes, suggested ops}, which render verification uses to block exports that would be wrong.
+  io: >-
+    Issues are included in render logs and in the proj.collect-files report.
+  limitations: >-
+    Codec support differs by FFmpeg build and hardware decoder; the report states tested results only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A single "Needs attention" badge listing items with one-click fixes.
+    defaults: >-
+      Checked on open and before every export.
+    automation: >-
+      Detects issues, proposes substitutes and relinks, and re-checks after each fix.
+    usability_check: >-
+      A first-time user resolves a missing font and a missing clip from the report in under 90 s.
+  acceptance: >-
+    AS-7; mini scene "missing-everything": a fixture with a missing font, codec, effect and clip lists all four with their affected layers.
+  status: implemented
+  evidence:
+    - "Find missing files… (Content panel and import report) searches a folder tree by name, copies found media into the show and relinks with its real details; journey step ae-find-missing-files (2 of 3 found, the third still listed), 2026-10-02"
+
+- id: proj.collect-files
+  name: Collect files (package for another computer)
+  sources:
+    - ref: S01
+      item: "Collect Files / Reduce Project / Remove Unused Footage / Consolidate All Footage"
+      category: "Projects"
+      checked: false
+    - ref: "brief §3"
+      item: "collect assets for transfer"
+      category: "Projects, compositions, assets, and editing"
+      checked: true
+  artist_can: >-
+    Package the show with all its media, fonts and optional pre-renders into one folder or zip that opens on another computer, optionally dropping unused items.
+  projection_example: >-
+    Collect the facade show onto a USB drive for the venue's playback laptop.
+  controls:
+    - { name: "Destination", type: "file", animatable: false }
+    - { name: "Include", type: "enum(everything|used-only|selected-scenes)", animatable: false }
+    - { name: "Include fonts", type: "bool", animatable: false }
+    - { name: "Include pre-renders and proxies", type: "bool", animatable: false }
+    - { name: "Zip", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [proj.relink, proj.missing-report]
+  implementation: >-
+    Uses the dependency graph to compute required assets for the chosen scenes, checks disk space, copies with progress and hash verification, rewrites paths as relative, and writes a report. Reduce and consolidate operate on the collected copy, never the open project.
+  io: >-
+    Output folder or zip containing the project, media, optional fonts, caches and a report.
+  limitations: >-
+    Font licences may restrict redistribution; the report lists every copied font so the user can check.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Package for another computer" among the export choices.
+    defaults: >-
+      Used items only; fonts included; zip off.
+    automation: >-
+      Finds every dependency, checks disk space and verifies the copies.
+    usability_check: >-
+      A first-time user packages a show and opens it on a second machine with 0 missing items, in at most 4 actions.
+  acceptance: >-
+    AS-7 (move a collected project, relink it, bind the show to another venue).
+  status: not-started
+  evidence: []
+
+- id: proj.aep-interop
+  name: After Effects project import
+  sources:
+    - ref: "brief §2"
+      item: ".aep round-tripping is a separate compatibility question; do not promise it by implication"
+      category: "Define feature completeness"
+      checked: true
+    - ref: S01
+      item: "Projects (.aep)"
+      category: "Projects"
+      checked: false
+  artist_can: >-
+    Possibly open simple After Effects projects (scenes, layers, keyframes, masks, shapes, text) as a starting point.
+  projection_example: >-
+    Bring an older After Effects facade animation in and retarget it to a measured venue.
+  controls:
+    - { name: "Import After Effects project", type: "action", animatable: false }
+    - { name: "Import report", type: "action", animatable: false }
+  animation: >-
+    If built, keyframes, interpolation and supported expressions would carry over; unsupported items would be listed.
+  dependencies: [proj.project-model, proj.composition]
+  implementation: >-
+    Candidate routes: an ExtendScript exporter run inside an installed copy of After Effects that writes JSON; Lottie (bodymovin) JSON import for shapes and text; or direct parsing of the RIFX binary .aep format. No route is chosen.
+  io: >-
+    Import only, if pursued; no .aep export.
+  limitations: >-
+    User 2026-10-02: importing existing After Effects projects and continuing to edit them is REQUIRED; a flattened video does not count. Two routes: (1) an exporter script that runs inside After Effects (needs After Effects installed) for the highest fidelity, and (2) a direct .aep reader for structure, timing and keyframes when After Effects is not available. Every import produces an explicit compatibility report and the original file is never modified. See proj.aep-exporter, proj.aep-reader, proj.aep-report.
+
+    Open question: is After Effects project import wanted at all, and if so through which route (exporter script that needs After Effects installed, Lottie, or binary parsing)? Effect fidelity would be partial, and the brief says not to promise .aep round-tripping.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      If built: "Bring in an After Effects project", followed by a plain report of what came across.
+    defaults: >-
+      Imports into a new scene; unsupported items listed, never silently dropped.
+    automation: >-
+      Maps supported items and lists everything skipped.
+    usability_check: >-
+      If built: a user imports a sample project and understands the skip report in under 2 minutes.
+  acceptance: >-
+    Decide the disposition with the user; if accepted, mini scene "aep-sample" compares renders of imported fixtures.
+  status: implemented
+  evidence:
+    - "docs/06-after-effects-import.md; packages/aep/test (603/603 corpus files read; 113 reader tests), packages/aep/test/import.test.ts (47 end-to-end), journey steps ae-*, 2026-10-02: .aep read directly without After Effects, imported with a per-item compatibility report; original kept"
+
+- id: proj.aep-exporter
+  name: After Effects exporter script (runs inside After Effects)
+  sources:
+    - ref: S01
+      item: Scripting (ExtendScript)
+      checked: false
+    - ref: brief
+      item: User requirement 2026-10-02 (After Effects import)
+      checked: true
+  artist_can: >-
+    Run one script inside After Effects to export a project's compositions, layers, timing, keyframes (with easing), expressions, masks, text, shapes, parenting, cameras, lights, effects and media references for Before Effects.
+  projection_example: >-
+    Bring last year's After Effects facade show into Before Effects and keep editing it.
+  controls:
+    - { name: "Collect media", type: bool, animatable: false }
+  animation: >-
+    Keyframes exported with temporal ease and spatial tangents; expressions exported as source.
+  dependencies: [proj.aep-report]
+  implementation: >-
+    ExtendScript (.jsx) walking the full property tree by matchName and writing versioned JSON; Before Effects maps matchNames to native layers, properties and effects.
+  io: >-
+    Writes a .bfx-ae.json next to the project; never modifies the .aep.
+  limitations: >-
+    Requires After Effects to be installed. Third-party effects export their parameters but render only if an equivalent exists; otherwise the report offers a rendered fallback.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      File > Import After Effects project; follow the two-step guide.
+    defaults: >-
+      Collect media on.
+    automation: >-
+      Converts everything it can and explains the rest.
+    usability_check: >-
+      A user with After Effects imports a project and finds the compatibility report without help.
+  acceptance: >-
+    Representative projects reopen with matching timing and keyframes; the report lists every unsupported item.
+  status: prototype
+  evidence:
+    - "tools/ae-exporter/BeforeEffectsExport.jsx; tools/ae-exporter/test/exporter.test.ts runs it against a simulated AE scripting model built from a real AE 2026 export (all 5181 property-tree entries reproduced). Not yet run inside real After Effects (not installed on the build PC)"
+
+- id: proj.aep-reader
+  name: Direct .aep reader (no After Effects needed)
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (After Effects import)
+      checked: true
+  artist_can: >-
+    Open an .aep file directly to recover compositions, layers, timing, sources, transforms, keyframes and masks when After Effects is not installed.
+  projection_example: >-
+    Recover an old project on a machine without After Effects.
+  controls:
+    - { name: "Import", type: action, animatable: false }
+  animation: >-
+    Keyframes recovered where the binary layout is understood.
+  dependencies: [proj.aep-report]
+  implementation: >-
+    Reader for the RIFX chunk format (folders, items, compositions, layers, property groups by matchName, keyframe blocks), validated against public sample files.
+  io: >-
+    Read-only; original untouched.
+  limitations: >-
+    Reverse-engineered format: coverage is partial and every gap is reported; effects and text may need the exporter route.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      File > Import After Effects project.
+    defaults: >-
+      none
+    automation: >-
+      Chooses the best route automatically.
+    usability_check: >-
+      The report clearly separates transferred, converted, fallback and unsupported items.
+  acceptance: >-
+    Sample .aep files import with correct composition settings, layer order and timing.
+  status: implemented
+  evidence:
+    - "docs/06-after-effects-import.md; packages/aep/test (603/603 corpus files read; 113 reader tests), packages/aep/test/import.test.ts (47 end-to-end), journey steps ae-*, 2026-10-02: .aep read directly without After Effects, imported with a per-item compatibility report; original kept"
+
+- id: proj.aep-report
+  name: After Effects import compatibility report
+  sources:
+    - ref: brief
+      item: User requirement 2026-10-02 (compatibility report)
+      checked: true
+  artist_can: >-
+    See exactly what transferred, what was converted, what uses a rendered fallback and what is unsupported, per composition and layer.
+  projection_example: >-
+    Check that every precomp and mask of an imported show survived before reworking it for a new building.
+  controls:
+    - { name: "Report filters", type: enum, animatable: false }
+  animation: >-
+    Not applicable.
+  dependencies: [proj.project-model]
+  implementation: >-
+    Import produces structured findings (item path, status, reason, action) stored with the project and shown in a report panel.
+  io: >-
+    Exportable as text.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Opens automatically after import.
+    defaults: >-
+      Problems first.
+    automation: >-
+      Links each problem to the affected layer.
+    usability_check: >-
+      Partial conversion is never described as complete.
+  acceptance: >-
+    Every unsupported property in test projects appears in the report.
+  status: implemented
+  evidence:
+    - "docs/06-after-effects-import.md; packages/aep/test (603/603 corpus files read; 113 reader tests), packages/aep/test/import.test.ts (47 end-to-end), journey steps ae-*, 2026-10-02: .aep read directly without After Effects, imported with a per-item compatibility report; original kept"
+
+- id: proj.scene-from-areas
+  name: Scenes built from the same building areas
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Scenes built from the same areas"
+      category: "Scenes and show timeline"
+      checked: true
+  artist_can: >-
+    Build several scenes that all use the same building areas. Each scene decides what plays in each area, but the
+    areas (outlines, names, holes, depth) are defined once for the building, so correcting an area updates every
+    scene.
+  projection_example: >-
+    "Intro", "Water" and "Collapse" all use windows 1 to 24 and the roofline. Moving one outline fixes all three
+    scenes.
+  controls:
+    - { name: "Areas used by this scene", type: "list", animatable: false }
+    - { name: "Add or remove an area from the scene", type: "action", animatable: false }
+    - { name: "Missing-area warnings", type: "view", animatable: false }
+  animation: >-
+    None specific. Each scene has its own timeline.
+  dependencies: [proj.composition, map.region, map.binding, tool.area-assign, mask.area-scene-adjust, ux.scene-timeline]
+  implementation: >-
+    A scene (composition) references venue areas by id or role through the binding (map.binding). Area assignments
+    belong to the scene. The venue is versioned separately, so a scene never copies geometry. A scene warns when an
+    area it uses is deleted or its role is unbound, and offers to reassign.
+  io: >-
+    Scenes reference the venue by id. Exporting a scene alone embeds the area names it needs.
+  limitations: >-
+    Deleting an area leaves its assignments orphaned until reassigned. The warning lists every scene affected.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Add a scene: it starts with all building areas available. Pick what goes on each.
+    defaults: >-
+      A new scene lists every area and has no content until you add some.
+    automation: >-
+      Keeps one shared set of areas and shows which scenes use each area.
+    usability_check: >-
+      A first-time user adds a second scene and fills the same windows differently in under 2 minutes.
+  acceptance: >-
+    Mini scene "three-scenes-same-areas": three scenes share the areas; an outline correction reaches all three.
+  status: not-started
+  evidence: []
+
+- id: proj.scene-save-duplicate
+  name: Save an arrangement as a scene; duplicate a scene and swap content
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Save arrangement as scene; duplicate scene and swap content"
+      category: "Scenes and show timeline"
+      checked: true
+  artist_can: >-
+    Save what is currently on the areas as a named scene, duplicate a scene and swap its content (same layout,
+    different videos), or turn a scene into a starting template, each in a couple of actions.
+  projection_example: >-
+    Duplicate "Summer" as "Winter" and replace its three videos. Placement, timing and effects stay.
+  controls:
+    - { name: "Save arrangement as scene", type: "action", animatable: false }
+    - { name: "Duplicate scene", type: "action", animatable: false }
+    - { name: "Swap content (list of assets with replace targets)", type: "action", animatable: false }
+    - { name: "Save as template", type: "action", animatable: false }
+  animation: >-
+    Keyframes and timing are copied unchanged.
+  dependencies: [proj.scene-from-areas, proj.composition, proj.replace-source, tool.copy-assignment, proj.layer-duplicate, proj.templates]
+  implementation: >-
+    Duplicate clones the scene's assignments with new ids and shares assets until one is replaced. "Swap content"
+    lists the scene's assets with replace targets (proj.replace-source), keeping placement, trim and effects. "Save
+    arrangement as scene" snapshots the current assignments as a new composition and can also register it as a
+    template (proj.templates).
+  io: >-
+    Templates are saved in the project or the user template folder.
+  limitations: >-
+    Swapped content with a different duration changes the loop or trim; the swap list shows the difference.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Right-click a scene: Duplicate, then "Swap content" and choose new files.
+    defaults: >-
+      Duplicates keep all placement and timing.
+    automation: >-
+      Lists every asset in the scene once so a single swap updates every area that uses it.
+    usability_check: >-
+      A first-time user duplicates a scene and swaps two videos in under 1 minute.
+  acceptance: >-
+    Mini scene "duplicate-and-swap": scene duplicated, three assets swapped, export matches preview.
+  status: not-started
+  evidence: []
+
+- id: proj.import-atmosfx
+  name: AtmosFX and projection-stock media import
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "AtmosFX and other projection media import"
+      category: "Media import"
+      checked: true
+  artist_can: >-
+    Bring in AtmosFX-style projection packs and other stock projection media as a library: drop a pack folder in and
+    get named, categorised, previewable clips, with loops and black backgrounds handled correctly.
+  projection_example: >-
+    Drop the "Haunted Windows" pack. It appears under Windows with thumbnails, and a clip is assigned to a window with
+    one drag.
+  controls:
+    - { name: "Pack folder", type: "folder", animatable: false }
+    - { name: "Category tags (window, door, wall, full facade)", type: "tag list", animatable: false }
+    - { name: "Black means no light (Add blend)", type: "bool", animatable: false }
+    - { name: "Loop check", type: "action", animatable: false }
+    - { name: "Keep originals in place or copy", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [proj.import-media, proj.asset-browser, proj.source-interpretation, tool.area-assign, preview.proxy, fx.keying.unmult, mask.blend.lighten]
+  implementation: >-
+    Recursive folder import through the standard media pipeline (probe, proxies). A pack index assigns categories from
+    folder and file names. Clips on black default to the Add blend mode, with Unmult available. Loop quality (first
+    and last frame difference) is computed once and cached. No pack content is bundled with the app, and licence notes
+    that ship with a pack are shown.
+  io: >-
+    Imports MP4, MOV and image sequences. Originals are kept.
+  limitations: >-
+    Pack naming and formats vary, so the importer reports anything it could not classify. Licensing is the user's.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drag a pack folder into the content browser.
+    defaults: >-
+      Clips are sorted into categories and previewed on the building with Add blend if they sit on black.
+    automation: >-
+      Classifies and makes proxies in the background and reports clips it could not understand.
+    usability_check: >-
+      A first-time user imports a pack and puts a clip on a window in under 2 minutes.
+  acceptance: >-
+    Mini scene "pack-import": a pack imports, classifies, loops and exports on a facade.
+  status: not-started
+  evidence: []
+
+- id: proj.clip-duration-edit
+  name: Edit clip and scene-block duration on the timeline
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Timeline clip duration editing"
+      category: "Timeline editing"
+      checked: true
+  artist_can: >-
+    Change how long a clip or scene block lasts by dragging its end or typing a duration, and choose whether that
+    trims the media, stretches its speed, loops it, or ripples everything after it. Edges snap to beats, markers and
+    the playhead.
+  projection_example: >-
+    Drag the end of the water scene to the end of the chorus. The ocean clip loops to fill it and the transition moves
+    with it.
+  controls:
+    - { name: "Duration", type: "time", animatable: true }
+    - { name: "Edit mode (trim, stretch, loop, ripple)", type: "enum", animatable: false }
+    - { name: "Snap to beats and markers", type: "bool", animatable: false }
+  animation: >-
+    Keyframes on a stretched clip scale with it. On a trimmed clip they stay in place.
+  dependencies: [proj.layer-trim, proj.layer-slip, anim.time-stretch, anim.loop, proj.snapping, proj.markers, audio.beat-markers, ux.scene-timeline]
+  implementation: >-
+    Edge drags and numeric entry emit set-in and set-out operations quantised to the frame grid. A modifier key or
+    toolbar mode selects trim, stretch, loop or ripple. On a scene block, the child timeline is clamped or extended
+    with a visible notice, and attached transitions are retimed through the recipe that placed them.
+  io: >-
+    None.
+  limitations: >-
+    Stretching a video changes speed. Looping a clip with a visible seam shows the seam, and the loop check reports
+    it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag the right edge of a clip or block. Hold a key for stretch or ripple.
+    defaults: >-
+      Trim by default, snapping to beats.
+    automation: >-
+      Moves attached transitions and reports the new duration.
+    usability_check: >-
+      A first-time user lengthens a scene to the end of a song section in under 20 s.
+  acceptance: >-
+    Mini scene "duration-edits": trim, stretch, loop and ripple on clips and a scene block; undo restores exactly.
+  status: not-started
+  evidence: []

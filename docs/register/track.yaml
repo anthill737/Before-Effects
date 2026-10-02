@@ -1,0 +1,1088 @@
+# Tracking, roto, cleanup and puppet — Before Effects capability register
+# Sources: S20 (tracking and stabilization incl. Mocha AE, mask/face/3D camera trackers), S21 (Roto Brush, Next-Gen Roto Brush, AI Object Matte, Refine Matte), S22 (Content-Aware Fill), S23 (Puppet tools, Advanced Puppet engine), S01 (Clone Stamp, track mask, 3D Camera Tracker), brief §12. Live pages checked 2026-10-01 where `checked: true`. Footage tracking here is distinct from projector calibration (map.calibration).
+
+- id: track.point
+  name: Point tracking (1-, 2- and 4-point)
+  sources:
+    - ref: S20
+      item: Point tracker — Track Type (Stabilize, Transform, Parallel Corner Pin, Perspective Corner Pin, Raw); feature region, search region, attach point; Analyze forward/backward/1 frame
+      category: Track motion
+      checked: true
+    - ref: S20
+      item: Motion tracking options — Channel (RGB/Luminance/Saturation), Enhance Before Match, Subpixel Positioning, Adapt Feature On Every Frame, If Confidence Is Below (Continue/Stop/Extrapolate/Adapt)
+      category: Track motion
+      checked: true
+  artist_can: >-
+    Track one point for position, two for rotation and scale, or four for perspective corner pinning, frame by frame
+    or in one pass, with control over what image data is matched and what happens when confidence drops.
+  projection_example: >-
+    Track a performer's hand in filmed footage so a projected spark follows it inside the composite.
+  controls:
+    - { name: Track type, type: enum(transform|parallel-corner-pin|perspective-corner-pin|raw), animatable: false }
+    - { name: Track position / rotation / scale, type: flags, animatable: false }
+    - { name: Feature region / search region / attach point, type: rect2d, animatable: true }
+    - { name: Channel, type: enum(rgb|luminance|saturation), animatable: false }
+    - { name: Enhance before match, type: enum(off|blur|enhance), animatable: false }
+    - { name: Subpixel positioning, type: bool, animatable: false }
+    - { name: Adapt feature, type: enum(never|every-frame|below-confidence), animatable: false }
+    - { name: If confidence below, type: enum(continue|stop|extrapolate|adapt), animatable: false }
+    - { name: Analyze, type: enum(back-1|back|forward|forward-1|stop), animatable: false }
+  animation: >-
+    Tracking produces keyframes (attach point, confidence) that are ordinary editable properties (track.data-edit).
+  dependencies: [proj.layer, anim.keyframe.core, track.data-edit, track.attach]
+  implementation: >-
+    Python sidecar with OpenCV: normalised cross-correlation (matchTemplate TM_CCOEFF_NORMED) in the search region with
+    parabolic subpixel refinement, optional pyramidal Lucas–Kanade for robustness; frames come from the media decoder
+    at full resolution; results streamed back as keyframe ops so each analysed frame appears live and is undoable as one step.
+  io: >-
+    Track data saved in the project; exportable as CSV/JSON.
+  limitations: >-
+    Footage tracking is not projector calibration. Occlusions, motion blur and lighting changes cause drift; planar or
+    camera solve may suit better.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Follow this" — click a spot in the footage, then pick what should follow it.
+    defaults: >-
+      One point, RGB, adapt below 80% confidence, subpixel on.
+    automation: >-
+      Auto-sizes feature/search regions from local contrast and motion; stops and highlights frames where confidence drops.
+    usability_check: >-
+      A novice attaches a graphic to a moving object in supplied footage in under 2 minutes.
+  acceptance: >-
+    AS-4 tracked attachment; mini scene "follow-hand": mean error under 1 px against hand-annotated ground truth.
+  status: not-started
+  evidence: []
+
+- id: track.attach
+  name: Apply tracking data to targets
+  sources:
+    - ref: S20
+      item: Motion Target / Edit Target / Apply; Apply dimensions (X and Y, X only, Y only); Attach Point Offset; apply to null and parent
+      category: Track motion
+      checked: true
+  artist_can: >-
+    Send tracking data to any layer, null or effect point, restrict it to X or Y, offset the attach point, and reuse
+    one track on many targets.
+  projection_example: >-
+    One track of a moving drone drives a light glow, a text label and the audio pan at once.
+  controls:
+    - { name: Target, type: property-ref, animatable: false }
+    - { name: Apply dimensions, type: enum(xy|x|y), animatable: false }
+    - { name: Attach point offset, type: point2d, animatable: true }
+    - { name: Via null, type: bool, animatable: false }
+    - { name: Live link (expression) vs bake, type: enum(link|bake), animatable: false }
+  animation: >-
+    Results are keyframes or expression links; re-tracking updates linked targets.
+  dependencies: [track.point, expr.engine, anim.keyframe.core]
+  implementation: >-
+    Apply is an op that writes keyframes or creates a null with keyframes and parents the target; link mode uses an
+    expression reference to the track point so edits to the track propagate.
+  io: >-
+    none
+  limitations: >-
+    Motion-blurred attached layers need shutter phase −½ shutter angle to avoid lead/lag (set automatically).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      After tracking: drag the track onto any layer, or pick "Make this follow".
+    defaults: >-
+      Via null, linked.
+    automation: >-
+      Sets the target layer's motion-blur shutter phase to centre blur on the attach point.
+    usability_check: >-
+      A user applies one track to two targets in under 30 s.
+  acceptance: >-
+    AS-4; mini scene "one-track-many-targets".
+  status: not-started
+  evidence: []
+
+- id: track.data-edit
+  name: Editable tracking data
+  sources:
+    - ref: S20
+      item: Motion tracking properties (Feature Center, Feature Size, Search Offset, Search Size, Confidence, Attach Point, Attach Point Offset); correcting a motion track; editing motion paths
+      category: Track motion
+      checked: true
+  artist_can: >-
+    See and fix tracks: edit track points on a motion path, view confidence over time, re-track a section, delete bad
+    frames, smooth jitter, average trackers and import/export data.
+  projection_example: >-
+    Fix five drifting frames where the performer's hand passes behind a prop, without re-tracking the shot.
+  controls:
+    - { name: Confidence graph, type: display, animatable: false }
+    - { name: Re-track range, type: time-range, animatable: false }
+    - { name: Smooth, type: float, animatable: false }
+    - { name: Average selected tracks, type: action, animatable: false }
+    - { name: Import/export track data, type: action, animatable: false }
+  animation: >-
+    Track points are keyframes editable in the motion path and graph editor.
+  dependencies: [anim.motion-path, anim.graph-editor, track.point]
+  implementation: >-
+    Tracks stored as keyframed properties with per-frame confidence; smoothing is a deterministic Savitzky–Golay or
+    Gaussian filter op; export formats CSV/JSON and Nuke .chan for cameras.
+  io: >-
+    CSV/JSON import/export; Mocha-style corner-pin text import.
+  limitations: >-
+    Smoothing removes real high-frequency motion along with jitter.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      Low-confidence frames show red on the track; "Fix these frames" re-tracks or interpolates them.
+    defaults: >-
+      Confidence threshold 80%.
+    automation: >-
+      Offers interpolation across short gaps automatically.
+    usability_check: >-
+      A user repairs a 5-frame drift in under 60 s.
+  acceptance: >-
+    Mini scene "occluded-hand": repaired track error under 1 px on repaired frames.
+  status: not-started
+  evidence: []
+
+- id: track.stabilize
+  name: Stabilization
+  sources:
+    - ref: S20
+      item: Stabilize Motion (position → Anchor Point, rotation, scale keyframes); Warp Stabilizer
+      category: Track motion
+      checked: true
+  artist_can: >-
+    Remove camera shake or lock a moving object still in frame, choosing which of position, rotation and scale to
+    stabilise, with automatic reframing to hide edges.
+  projection_example: >-
+    Steady handheld footage of dancers before playing it inside a large window region.
+  controls:
+    - { name: Method, type: enum(point-tracker|automatic), animatable: false }
+    - { name: Stabilise position / rotation / scale, type: flags, animatable: false }
+    - { name: Result, type: enum(smooth-motion|no-motion), animatable: false }
+    - { name: Smoothness, type: percent, animatable: false }
+    - { name: Framing, type: enum(stabilize-only|crop|crop-auto-scale|synthesize-edges), animatable: false }
+  animation: >-
+    Generates anchor/rotation/scale keyframes (point method) or a stabilisation warp (automatic).
+  dependencies: [track.point, fx.distort.warp-stabilizer]
+  implementation: >-
+    Point method writes compensating keyframes. Automatic method: OpenCV feature tracks (goodFeaturesToTrack + LK) →
+    camera path smoothing → per-frame similarity/perspective warp applied as a WGSL warp pass; the effect-facing
+    controls are shared with fx.distort.warp-stabilizer.
+  io: >-
+    Stabilisation solve cached per clip.
+  limitations: >-
+    Rolling-shutter and parallax-heavy shots need the subspace/mesh method, which is approximate.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Steady this shot".
+    defaults: >-
+      Smooth motion, 50% smoothness, crop + auto-scale.
+    automation: >-
+      Analyses in the background and reports the zoom needed.
+    usability_check: >-
+      A user stabilises a shaky clip in one action and can undo it.
+  acceptance: >-
+    Mini scene "steady-dancers": residual motion reduced by ≥ 80% on a reference shot.
+  status: not-started
+  evidence: []
+
+- id: track.planar
+  name: Planar tracking
+  sources:
+    - ref: S20
+      item: Planar Tracking with Mocha AE (GPU-accelerated; motion blur and off-screen objects)
+      category: Track motion
+      checked: true
+  artist_can: >-
+    Track a flat surface (a wall, screen, sign or floor) as a plane through perspective changes, partial occlusion and
+    motion blur.
+  projection_example: >-
+    Track the side of a moving bus in footage so a replacement advert sticks to it in a show segment.
+  controls:
+    - { name: Plane shape, type: bezier, animatable: true }
+    - { name: Motion model, type: enum(translation|similarity|affine|perspective), animatable: false }
+    - { name: Exclusion shapes, type: bezier-list, animatable: true }
+    - { name: Track direction, type: enum(forward|backward|both), animatable: false }
+    - { name: Min % pixels used, type: percent, animatable: false }
+  animation: >-
+    Produces a per-frame homography plus corner keyframes; shapes are keyframable.
+  dependencies: [track.data-edit, mask.bezier]
+  implementation: >-
+    OpenCV in the sidecar: AKAZE/ORB features inside the plane mask, RANSAC/MAGSAC homography (findHomography with
+    USAC_MAGSAC), then ECC refinement (findTransformECC, MOTION_HOMOGRAPHY) for subpixel accuracy; exclusion shapes
+    mask out occluders.
+  io: >-
+    Exports corner pin/transform data; imports Mocha corner-pin text.
+  limitations: >-
+    Needs texture on the plane; non-planar surfaces drift.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Stick to this surface" — click inside the surface in the footage.
+    defaults: >-
+      Perspective model; plane outline auto-drawn from a SAM 2 segment of the clicked surface.
+    automation: >-
+      Proposes the plane outline and occluder exclusions automatically.
+    usability_check: >-
+      A novice replaces a screen in supplied footage in under 3 minutes.
+  acceptance: >-
+    Mini scene "screen-replace": corner error under 1.5 px RMS vs ground truth.
+  status: not-started
+  evidence: []
+
+- id: track.planar-attach
+  name: Planar attachment (corner pin, transform, spline export)
+  sources:
+    - ref: S20
+      item: Applying Mocha AE data — Create Track Data; Export Option Corner Pin or Transform; Create AE Masks; Apply Matte
+      category: Track motion
+      checked: true
+  artist_can: >-
+    Pin any layer onto a tracked plane, apply the plane's transform to other layers, or turn tracked shapes into masks or mattes.
+  projection_example: >-
+    A tracked doorway in footage gets a projected-glow layer pinned into it and a matte that hides a passer-by.
+  controls:
+    - { name: Export as, type: enum(corner-pin|transform|mask|matte), animatable: false }
+    - { name: Target layer, type: layer-ref, animatable: false }
+    - { name: Motion blur on pinned layer, type: bool, animatable: false }
+  animation: >-
+    Exports become keyframes on fx.distort.corner-pin or transforms, or animated masks.
+  dependencies: [track.planar, fx.distort.corner-pin, mask.bezier, mask.track-matte]
+  implementation: >-
+    Ops convert the homography series into corner-pin keyframes, decomposed transforms, or per-frame mask paths;
+    matte mode rasterises shapes with feather in WGSL.
+  io: >-
+    none
+  limitations: >-
+    Transform decomposition loses perspective; corner pin keeps it.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      After tracking: drag a layer onto the tracked surface.
+    defaults: >-
+      Corner pin with motion blur matching the footage.
+    automation: >-
+      Fits the dropped layer to the plane's corners.
+    usability_check: >-
+      A user pins a layer to a tracked plane in one drag.
+  acceptance: >-
+    Mini scene "screen-replace" pinned content stays within 1.5 px.
+  status: not-started
+  evidence: []
+
+- id: track.mask
+  name: Mask tracking
+  sources:
+    - ref: S20
+      item: Mask tracker
+      category: Track motion
+      checked: true
+    - ref: S01
+      item: Track mask — methods Position; Position & Scale; Position, Scale & Rotation; Position, Scale, Rotation & Skew; Perspective
+      category: Animate in After Effects
+      checked: false
+  artist_can: >-
+    Make a drawn mask follow the object it surrounds through a shot.
+  projection_example: >-
+    A mask drawn around a performer's face follows them so a colour treatment stays on the face only.
+  controls:
+    - { name: Method, type: enum(position|position-scale|position-scale-rotation|position-scale-rotation-skew|perspective), animatable: false }
+    - { name: Track direction, type: enum(forward|backward|1-frame), animatable: false }
+  animation: >-
+    Writes mask path keyframes.
+  dependencies: [mask.bezier, track.planar]
+  implementation: >-
+    Uses the planar tracker engine on the mask's interior with the chosen motion model, writing transformed mask paths per frame.
+  io: >-
+    none
+  limitations: >-
+    Deforming objects need roto (track.roto) instead.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      Right-click a mask → "Follow the object".
+    defaults: >-
+      Position, scale and rotation.
+    automation: >-
+      Picks perspective automatically if the region is a flat surface viewed at an angle.
+    usability_check: >-
+      A user tracks a mask over 5 s in one action.
+  acceptance: >-
+    Mini scene "face-mask-follow".
+  status: not-started
+  evidence: []
+
+- id: track.face
+  name: Face tracking
+  sources:
+    - ref: S20
+      item: Face tracker — outline and detailed features (pupils, mouth, nose)
+      category: Track motion
+      checked: true
+  artist_can: >-
+    Track a face outline or detailed features (eyes, pupils, mouth, nose) to drive masks, effects or animations.
+  projection_example: >-
+    A performer's mouth opening drives the brightness of a projected light burst in the composite.
+  controls:
+    - { name: Mode, type: enum(outline|detailed-features), animatable: false }
+    - { name: Feature data outputs, type: display, animatable: false }
+  animation: >-
+    Outputs keyframed points and scalar measures (mouth openness, eye distance) usable by expressions.
+  dependencies: [track.data-edit, expr.engine, mask.bezier]
+  implementation: >-
+    MediaPipe Face Landmarker (Apache-2.0, ≈4 MB model, 478 landmarks) in the sidecar; landmarks smoothed and written
+    as track points and a face-outline mask.
+  io: >-
+    none
+  limitations: >-
+    Profiles and occluded faces lose landmarks; one face per tracker.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Track this face".
+    defaults: >-
+      Outline mask plus key features.
+    automation: >-
+      Detects the face automatically; no clicking needed.
+    usability_check: >-
+      A user drives an effect from mouth openness in under 3 minutes.
+  acceptance: >-
+    Mini scene "mouth-drive".
+  status: not-started
+  evidence: []
+
+- id: track.camera-solve
+  name: 3D camera solve (camera tracker)
+  sources:
+    - ref: S20
+      item: 3D Camera tracker — extract camera motion and 3D scene data
+      category: Track motion
+      checked: true
+    - ref: S01
+      item: 3D Camera Tracker effect — Shot type, solve method, track points, ground plane/origin, Create Camera, Create Null/Solid/Text, average error
+      category: Work with 3D composition
+      checked: false
+  artist_can: >-
+    Recover the moving camera and a cloud of 3D points from filmed footage, set ground and origin, and place 3D
+    objects that stay locked into the footage.
+  projection_example: >-
+    A drone shot of the venue is solved so a virtual dragon can fly around the real tower in the audience preview.
+  controls:
+    - { name: Shot type, type: enum(fixed-fov|variable-zoom|specify-fov), animatable: false }
+    - { name: Solve method, type: enum(auto|typical|mostly-flat|tripod-pan), animatable: false }
+    - { name: Set ground plane and origin, type: action, animatable: false }
+    - { name: Scale (known distance), type: float, animatable: false }
+    - { name: Create camera / null / plane / text, type: action, animatable: false }
+    - { name: Average error, type: display, animatable: false }
+  animation: >-
+    Produces a keyframed camera and nulls; data editable like any camera.
+  dependencies: [3d.camera, 3d.scene, track.data-edit, track.roto]
+  implementation: >-
+    Sidecar job: pycolmap (BSD) incremental SfM with sequential matching on decoded frames (moving objects masked by
+    SAM 2), or Blender headless libmv tracker as an alternative; camera converted to the app's metres/Y-up convention.
+    The effect-facing controls correspond to fx.perspective.3d-camera-tracker in the effect catalog.
+  io: >-
+    Camera export as .chan/JSON/glTF camera; point cloud as PLY.
+  limitations: >-
+    Fails on pure rotation without parallax (tripod mode), featureless or highly dynamic shots. Not projector calibration.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Add 3D to this footage" → analyse → click the ground.
+    defaults: >-
+      Auto method; origin at clicked ground point; scale 1 unit = 1 m from a user-entered known distance (optional).
+    automation: >-
+      Masks moving people automatically before solving; reports quality in plain words (Good/Usable/Poor).
+    usability_check: >-
+      A user places a 3D object that stays locked in a supplied drone shot in under 5 minutes of interaction.
+  acceptance: >-
+    Mini scene "drone-solve": reprojection error under 0.7 px on the reference shot.
+  status: not-started
+  evidence: []
+
+- id: track.roto
+  name: Propagated segmentation (Roto Brush equivalent)
+  sources:
+    - ref: S21
+      item: Roto Brush (Next-Gen Roto Brush 3.0, Roto Brush 2, Roto Brush 1); strokes, spans, base frames, propagation; Version; Quality; Invert Foreground/Background; Enable Classic Controls
+      category: Roto Brush and Refine Matte
+      checked: true
+  artist_can: >-
+    Paint rough foreground and background strokes on a few frames and get a matte that propagates through the shot,
+    correcting it with more strokes where it slips.
+  projection_example: >-
+    Cut out a dancer from rehearsal footage so they appear to perform inside a window of the building.
+  controls:
+    - { name: Foreground / background stroke, type: tool, animatable: false }
+    - { name: Base frames, type: frame-list, animatable: false }
+    - { name: Span, type: time-range, animatable: false }
+    - { name: Quality, type: enum(standard|best), animatable: false }
+    - { name: Invert foreground/background, type: bool, animatable: false }
+    - { name: Brush size, type: float, animatable: false }
+  animation: >-
+    Matte is a cached per-frame sequence; corrections on any frame re-propagate the affected span.
+  dependencies: [track.object-matte, track.refine-edge, track.matte-cache, mask.track-matte]
+  implementation: >-
+    SAM 2.1 video predictor in the sidecar: strokes become positive/negative point and mask prompts on base frames;
+    propagation forward and backward through the span using SAM 2's memory bank; masks streamed back as 8/16-bit alpha
+    and cached (track.matte-cache).
+  io: >-
+    Model download: SAM 2.1 checkpoints, Apache-2.0 — tiny ≈160 MB, small ≈185 MB, base+ ≈320 MB, large ≈900 MB.
+  limitations: >-
+    Hair, motion blur and transparency need track.refine-edge; long occlusions may lose the object; ML output can
+    vary across GPU/driver versions, which is why mattes are frozen to cache before export.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Cut out the performer": brush over them once; fix with green (keep) / red (remove) strokes.
+    defaults: >-
+      Base+ model, best quality, propagate across the whole clip.
+    automation: >-
+      Downloads the model on first use (size shown), propagates in the background showing progress, flags frames
+      where the matte area jumps suspiciously.
+    usability_check: >-
+      A novice gets a clean cutout of a dancer over 10 s of supplied footage in under 5 minutes of interaction.
+  acceptance: >-
+    AS-4 performer composite; mini scene "dancer-roto": J&F ≥ 0.85 against a hand-made reference matte.
+  status: not-started
+  evidence: []
+
+- id: track.object-matte
+  name: Object matte (click to select a subject)
+  sources:
+    - ref: S21
+      item: AI-powered Object Matte — Object Matte Tool, Quick Selection Tool, Selection Brush Tool, Refine Edge Tool; propagate and freeze
+      category: Roto Brush and Refine Matte
+      checked: true
+  artist_can: >-
+    Click or box-select a subject to get an instant matte, refine it with quick-selection and brush tools, and
+    propagate it across frames.
+  projection_example: >-
+    Click a cyclist in street footage to isolate them for a projected chase sequence.
+  controls:
+    - { name: Click / box prompt, type: tool, animatable: false }
+    - { name: Quick selection, type: tool, animatable: false }
+    - { name: Selection brush (add/subtract), type: tool, animatable: false }
+    - { name: Multiple objects, type: object-list, animatable: false }
+  animation: >-
+    Propagation as in track.roto.
+  dependencies: [track.roto, track.matte-cache]
+  implementation: >-
+    SAM 2.1 image/video predictor with point and box prompts, multi-object tracking via separate object IDs; optional
+    SAM 3 (text-prompted, "select the person") if its licence and size suit, evaluated later.
+  io: >-
+    Same model downloads as track.roto.
+  limitations: >-
+    Ambiguous clicks may select a part rather than the whole object; the app offers the three SAM mask candidates.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      Click the subject → pick "This whole thing / Just this part".
+    defaults: >-
+      Whole-object candidate; propagate through clip.
+    automation: >-
+      Shows three candidate mattes and picks the largest plausible one.
+    usability_check: >-
+      A user isolates a subject with one click and one candidate choice in under 10 s per object.
+  acceptance: >-
+    Mini scene "cyclist-matte".
+  status: not-started
+  evidence: []
+
+- id: track.refine-edge
+  name: Refine edge and matte refinement
+  sources:
+    - ref: S21
+      item: Roto Brush & Refine Edge effect — Fine-tune Roto Brush Matte, Roto Brush Matte, Render Refine Edge, Base Refine Edge Radius, Fine-tune Refine Edge Matte, Refine Edge Matte, Use Motion Blur, Decontaminate Edge Colors; Refine Edge Tool
+      category: Roto Brush and Refine Matte
+      checked: true
+  artist_can: >-
+    Turn a hard segmentation into a soft, natural edge with feather, contrast, shift edge and chatter reduction, recover
+    hair and motion-blurred edges, and remove background colour spill at edges.
+  projection_example: >-
+    A dancer's hair edges blend cleanly over a bright projected background without a dark halo.
+  controls:
+    - { name: Feather, type: float, animatable: true }
+    - { name: Contrast, type: percent, animatable: true }
+    - { name: Shift edge, type: percent, animatable: true }
+    - { name: Reduce chatter, type: percent, animatable: true }
+    - { name: Refine edge radius / brush, type: float, animatable: false }
+    - { name: Use motion blur (samples / shutter angle), type: int, animatable: false }
+    - { name: Decontaminate edge colours (amount / extend radius), type: percent, animatable: true }
+  animation: >-
+    Refinement parameters keyframable; refined matte cached.
+  dependencies: [track.roto, fx.matte.refine-soft-matte, fx.matte.refine-hard-matte]
+  implementation: >-
+    Trimap from the segmentation band → ViTMatte (MIT) alpha matting in the sidecar for hair-level detail; temporal
+    chatter reduction by flow-guided averaging (RAFT, BSD-3); feather/contrast/shift and decontamination as WGSL passes
+    on premultiplied linear data.
+  io: >-
+    Model downloads: ViTMatte ≈100–400 MB depending on variant (MIT); RAFT ≈20 MB (BSD-3).
+  limitations: >-
+    Semi-transparent objects (smoke, glass) remain hard; refined edges are only as good as the trimap.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Soften the edges" slider and "Fix hair" brush on any cutout.
+    defaults: >-
+      Feather 1 px, chatter reduction 30%, decontaminate on.
+    automation: >-
+      Auto-detects hair-like edge regions and refines them without brushing.
+    usability_check: >-
+      Users rate edge quality acceptable after one slider adjustment in 8 of 10 cases on supplied footage.
+  acceptance: >-
+    AS-4 corrected edges; exported alpha shows no dark/bright fringe beyond tolerance.
+  status: not-started
+  evidence: []
+
+- id: track.matte-cache
+  name: Freeze and cache ML results
+  sources:
+    - ref: S21
+      item: Freeze button — cache and lock segmentation for spans, saved with the project
+      category: Roto Brush and Refine Matte
+      checked: true
+  artist_can: >-
+    Lock a finished matte, fill, depth map or track so it never recalculates and renders identically every time.
+  projection_example: >-
+    Freeze the dancer matte before the show render so a driver update cannot change the cutout.
+  controls:
+    - { name: Freeze / unfreeze, type: action, animatable: false }
+    - { name: Cache location, type: path, animatable: false }
+    - { name: Status, type: display, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [proj.project-model, preview.disk-cache]
+  implementation: >-
+    Results written as image sequences (16-bit PNG alpha / half EXR) in a project-relative cache keyed by inputs hash +
+    model ID + parameters; render jobs read frozen caches only and refuse to run inference during export.
+  io: >-
+    Frozen caches are collected with the project (proj collect) and are required for reproducible renders.
+  limitations: >-
+    Caches can be large (≈ 1–4 MB per HD frame); disk usage shown.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Automatic: finished AI results freeze when you leave the tool; padlock icon shows status.
+    defaults: >-
+      Auto-freeze on.
+    automation: >-
+      Re-freezes when inputs change and warns if an export would use a stale result.
+    usability_check: >-
+      Users never see an export wait for AI inference in testing.
+  acceptance: >-
+    AS-6: two exports of a roto shot are bit-identical; export log shows zero inference calls.
+  status: not-started
+  evidence: []
+
+- id: track.matte-to-mask
+  name: Convert mattes to editable masks
+  sources:
+    - ref: S20
+      item: Mocha AE — Create AE Masks (spline to native mask)
+      category: Track motion
+      checked: true
+    - ref: brief
+      item: §12 manually corrected object isolation
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Turn an AI or tracked matte into animated Bezier masks that can be edited point by point.
+  projection_example: >-
+    Convert a performer matte to masks, then hand-fix the outline on frames where a prop confused the AI.
+  controls:
+    - { name: Point density, type: float, animatable: false }
+    - { name: Simplify tolerance, type: float, animatable: false }
+    - { name: Keyframe every N frames, type: int, animatable: false }
+  animation: >-
+    Produces mask path keyframes with consistent point counts for smooth interpolation.
+  dependencies: [mask.bezier, track.roto, track.planar-attach]
+  implementation: >-
+    Contour extraction (OpenCV findContours) → curve fitting to Bezier (Schneider fit) with point correspondence across
+    frames to keep vertex counts stable.
+  io: >-
+    none
+  limitations: >-
+    Topology changes (object splitting) create separate masks.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Make the outline editable" on a cutout.
+    defaults: >-
+      Keyframe every 2 frames, moderate simplification.
+    automation: >-
+      Keeps point count stable to avoid boiling.
+    usability_check: >-
+      A user hand-fixes one frame of a converted mask in under 60 s.
+  acceptance: >-
+    Mini scene "mask-fix": converted mask matches the matte within 1 px mean distance.
+  status: not-started
+  evidence: []
+
+- id: track.content-aware-fill
+  name: Content-aware fill (object removal)
+  sources:
+    - ref: S22
+      item: Content-Aware Fill panel — Fill Target, Alpha Expansion, Fill Method (Object, Surface, Edge Blend), Lighting Correction (Subtle/Moderate/Strong), Range, Create Reference Frame, Generate Fill Layer; settings (Output Depth, Output Location)
+      category: Remove objects from your videos
+      checked: true
+  artist_can: >-
+    Remove an unwanted object from video by masking it; the app fills the hole from surrounding frames or surface
+    texture, with lighting correction and optional hand-painted reference frames.
+  projection_example: >-
+    Remove a lamp post and a passer-by from footage of the venue used for the audience preview.
+  controls:
+    - { name: Fill method, type: enum(object|surface|edge-blend), animatable: false }
+    - { name: Alpha expansion, type: float, animatable: false }
+    - { name: Lighting correction, type: enum(off|subtle|moderate|strong), animatable: false }
+    - { name: Range, type: enum(work-area|entire-duration), animatable: false }
+    - { name: Reference frames, type: layer-list, animatable: false }
+    - { name: Output depth, type: enum(8|16|32), animatable: false }
+  animation: >-
+    Fill layer is a cached sequence; masks driving the hole are animatable/trackable.
+  dependencies: [track.mask, track.roto, track.matte-cache, track.clone-paint, mask.bezier]
+  implementation: >-
+    Sidecar: ProPainter (flow-guided video inpainting with RAFT flow completion) for Object; planar-tracked texture
+    propagation plus LaMa for Surface; LaMa or Telea/biharmonic for Edge Blend; reference frames injected as
+    known pixels; lighting correction via per-frame local colour transfer. Processing chunked for 16 GB VRAM.
+  io: >-
+    Writes fill sequences (PNG 8/16-bit or EXR 32-bit) to a project-relative Fills folder. Downloads: ProPainter ≈150 MB
+    + RAFT/flow-completion ≈40 MB (S-Lab non-commercial licence, acceptable for personal use); big-lama ≈200 MB (Apache-2.0).
+  limitations: >-
+    Complex moving textures (water, crowds) and large holes fail; ProPainter is VRAM-hungry above 1080p (processed in
+    tiles/chunks); non-commercial licences restrict any future commercial use.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Remove this": brush or click the object, choose "Moving thing / Flat surface / Small blemish".
+    defaults: >-
+      Object method, alpha expansion 5 px, lighting correction Moderate.
+    automation: >-
+      Builds and tracks the hole mask from a click (SAM 2), picks the method from camera motion, renders in the
+      background prioritising the frame under the playhead.
+    usability_check: >-
+      A novice removes a passer-by from 5 s of supplied footage in under 5 minutes of interaction.
+  acceptance: >-
+    Mini scene "remove-passerby": no visible ghosting on review by two viewers; fill cached and reused for export.
+  status: not-started
+  evidence: []
+
+- id: track.clone-paint
+  name: Clone and paint cleanup
+  sources:
+    - ref: S01
+      item: Clone Stamp tool (source layer, source time, offset, aligned, lock source time); Eraser; Paint tools
+      category: Drawing, Painting, and Paths
+      checked: false
+    - ref: S22
+      item: Reference frame cleanup (Clone Stamp / patch on a single frame)
+      category: Remove objects from your videos
+      checked: true
+  artist_can: >-
+    Paint out blemishes, wires or markers by cloning from another place or time, frame by frame or across a duration,
+    and fix a single reference frame that guides content-aware fill.
+  projection_example: >-
+    Clone out tracking markers on a performer's costume before compositing them into the show.
+  controls:
+    - { name: Source layer / point, type: point2d, animatable: true }
+    - { name: Source time shift / lock source time, type: time, animatable: false }
+    - { name: Aligned, type: bool, animatable: false }
+    - { name: Brush size / hardness / opacity, type: float, animatable: false }
+    - { name: Duration, type: enum(constant|write-on|single-frame|custom), animatable: false }
+  animation: >-
+    Strokes are animatable paint strokes (write-on, duration), consistent with the paint tools.
+  dependencies: [proj.layer, shape.path, track.point]
+  implementation: >-
+    Clone strokes are vector paint strokes (Skia path) rasterised per frame in WGSL sampling the source layer at a time
+    offset; strokes can follow a track via track.attach. Shares the stroke engine with the paint tools in the shape area.
+  io: >-
+    none
+  limitations: >-
+    Manual work per shot; large removals belong to content-aware fill.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Touch up" brush: paint over the spot; source picked automatically nearby.
+    defaults: >-
+      Source offset auto-chosen from similar texture; stroke lasts the whole clip and follows tracking if present.
+    automation: >-
+      Suggests a clean source region and attaches strokes to a track automatically.
+    usability_check: >-
+      A user removes a tracking marker across 3 s of footage in under 2 minutes.
+  acceptance: >-
+    Mini scene "marker-cleanup".
+  status: not-started
+  evidence: []
+
+- id: track.puppet
+  name: Puppet mesh deformation
+  sources:
+    - ref: S23
+      item: Puppet Position Pin tool; mesh from alpha auto-trace, mask, shape or text outline; Expansion; Density (Advanced engine) / Triangles (Legacy); Show mesh; multiple meshes; Puppet engine choice
+      category: Animate with Puppet tools
+      checked: true
+  artist_can: >-
+    Drop pins on a drawing, logo or footage layer and drag them to bend it naturally, with the rest of the image
+    deforming as rigidly as possible.
+  projection_example: >-
+    A drawn vine on the facade sways and curls as the wind rises in the music.
+  controls:
+    - { name: Position pin, type: point2d, animatable: true }
+    - { name: Mesh density, type: int, animatable: true }
+    - { name: Expansion, type: float, animatable: true }
+    - { name: Outline source, type: enum(alpha|mask|shape|text), animatable: false }
+    - { name: Show mesh, type: bool, animatable: false }
+    - { name: Engine, type: enum(advanced|legacy), animatable: false }
+  animation: >-
+    Pins auto-keyframe on drag; mesh evaluated statelessly per frame from pin positions.
+  dependencies: [proj.layer, anim.keyframe.core, anim.motion-path, mask.bezier, shape.path, text.layer]
+  implementation: >-
+    Outline from alpha (marching squares) or vector paths; constrained Delaunay triangulation; As-Rigid-As-Possible
+    deformation solved with a prefactored sparse system (Cholesky in WASM) per frame; mesh rendered as a WGSL textured
+    triangle mesh; deterministic since it depends only on pin values at t.
+  io: >-
+    none
+  limitations: >-
+    Mesh is built at the frame it was created and does not follow motion in footage; very dense meshes slow interaction.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Bend it" — click points on the artwork to add pins, drag to pose.
+    defaults: >-
+      Advanced engine, density 10, expansion 3 px.
+    automation: >-
+      Auto-builds the mesh from the clicked outline; suggests pin spots at extremities.
+    usability_check: >-
+      A novice makes a drawn figure wave its arm in under 2 minutes.
+  acceptance: >-
+    Mini scene "vine-sway": identical frames when seeking backwards vs playing forwards.
+  status: not-started
+  evidence: []
+
+- id: track.puppet-advanced-pin
+  name: Advanced puppet pins (position, rotation, scale)
+  sources:
+    - ref: S23
+      item: Advanced Pins (position, scale and rotation); Mesh Rotation Refinement
+      category: Animate with Puppet tools
+      checked: true
+  artist_can: >-
+    Control a pin's position, rotation and scale together so a region (a head, a hand) turns and grows as a unit.
+  projection_example: >-
+    A projected character's head turns to look at the audience while its body stays put.
+  controls:
+    - { name: Position, type: point2d, animatable: true }
+    - { name: Rotation, type: angle, animatable: true }
+    - { name: Scale, type: percent, animatable: true }
+    - { name: Mesh rotation refinement, type: float, animatable: true }
+  animation: >-
+    All three channels keyframable; rotation/scale handles on canvas (Shift for 15° / 5% steps).
+  dependencies: [track.puppet]
+  implementation: >-
+    ARAP with per-pin rotation/scale constraints (local frame targets) in the same solver.
+  io: >-
+    none
+  limitations: >-
+    Animating only some channels can shear the mesh (as Adobe documents); the app warns.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      Pin type "Turn & grow"; drag the outer ring to rotate, the square handle to scale.
+    defaults: >-
+      All three channels keyed together.
+    automation: >-
+      Keys position, rotation and scale together to avoid shearing.
+    usability_check: >-
+      A user turns a character's head in under 60 s.
+  acceptance: >-
+    Mini scene "head-turn".
+  status: not-started
+  evidence: []
+
+- id: track.puppet-bend-pin
+  name: Bend pins
+  sources:
+    - ref: S23
+      item: Bend Pins (automatic position from surrounding pins; scale and rotation control)
+      category: Animate with Puppet tools
+      checked: true
+  artist_can: >-
+    Rotate or scale part of the mesh around a pin whose position follows its neighbours, for breathing or wagging motion.
+  projection_example: >-
+    A drawn creature's chest breathes in time with the bass while it walks.
+  controls:
+    - { name: Rotation, type: angle, animatable: true }
+    - { name: Scale, type: percent, animatable: true }
+  animation: >-
+    Rotation and scale keyframable and audio-drivable.
+  dependencies: [track.puppet, audio.drive]
+  implementation: >-
+    Bend pins contribute rotation/scale targets while their position is solved freely in the ARAP system.
+  io: >-
+    none
+  limitations: >-
+    Large bends without nearby position pins can drift.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      Pin type "Breathe / wag".
+    defaults: >-
+      Scale oscillation 95–105% when used from the "Breathe" recipe.
+    automation: >-
+      Recipe adds the oscillation expression automatically.
+    usability_check: >-
+      A user makes a shape breathe in two actions.
+  acceptance: >-
+    Mini scene "breathing-creature".
+  status: not-started
+  evidence: []
+
+- id: track.puppet-starch
+  name: Starch pins (stiffness)
+  sources:
+    - ref: S23
+      item: Puppet Starch tool — Amount, Extent (Legacy); Starch as stiffness between pins and convertible Pin Type (Advanced)
+      category: Animate with Puppet tools
+      checked: true
+  artist_can: >-
+    Stiffen parts of the artwork so they bend less, preventing unwanted distortion.
+  projection_example: >-
+    Keep a logo's lettering rigid while its ribbon tail waves.
+  controls:
+    - { name: Amount, type: float, animatable: true }
+    - { name: Extent (legacy), type: float, animatable: true }
+    - { name: Pin type (position/starch), type: enum(position|starch), animatable: false }
+  animation: >-
+    Amount keyframable.
+  dependencies: [track.puppet]
+  implementation: >-
+    Per-triangle stiffness weights in the ARAP energy (advanced engine); legacy extent mode reproduces area-based starch.
+  io: >-
+    none
+  limitations: >-
+    Over-starching fights deform pins and can cause snapping.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Keep this part stiff" brush/pin.
+    defaults: >-
+      Low amount (0.1) to prevent tearing without rigidity.
+    automation: >-
+      Adds light starch near pins automatically when tearing is detected.
+    usability_check: >-
+      A user stops a letterform from bending in one action.
+  acceptance: >-
+    Mini scene "rigid-logo-ribbon".
+  status: not-started
+  evidence: []
+
+- id: track.puppet-overlap
+  name: Overlap pins (front/back ordering)
+  sources:
+    - ref: S23
+      item: Puppet Overlap tool — In Front, Extent
+      category: Animate with Puppet tools
+      checked: true
+  artist_can: >-
+    Choose which parts of a deformed image appear in front when they overlap.
+  projection_example: >-
+    A projected figure's arm crosses in front of its face during a wave.
+  controls:
+    - { name: In front, type: float, animatable: true }
+    - { name: Extent, type: float, animatable: true }
+  animation: >-
+    In Front usually animated with hold keyframes.
+  dependencies: [track.puppet]
+  implementation: >-
+    Per-vertex depth from summed overlap influences applied to the mesh draw (depth test in the mesh pass).
+  io: >-
+    none
+  limitations: >-
+    Influence ends abruptly at extent (as in AE).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Bring to front" pin.
+    defaults: >-
+      In front 50, extent fitted to the clicked limb.
+    automation: >-
+      Uses hold keyframes automatically when animating ordering.
+    usability_check: >-
+      A user fixes an arm hidden behind a face in one action.
+  acceptance: >-
+    Mini scene "arm-front".
+  status: not-started
+  evidence: []
+
+- id: track.puppet-record
+  name: Puppet motion recording
+  sources:
+    - ref: S23
+      item: Record animation by sketching motion with the Puppet Pin tool; Record Options (Speed, Smoothing, Use Draft Deformation)
+      category: Animate with Puppet tools
+      checked: true
+  artist_can: >-
+    Perform motion by dragging pins in real time while the timeline plays, then refine the recorded paths.
+  projection_example: >-
+    Puppeteer a projected character's dance by mouse in time with the music.
+  controls:
+    - { name: Speed, type: percent, animatable: false }
+    - { name: Smoothing, type: float, animatable: false }
+    - { name: Draft deformation, type: bool, animatable: false }
+  animation: >-
+    Produces dense pin position keyframes, simplified by smoothing.
+  dependencies: [track.puppet, anim.motion-path, audio.preview-sync]
+  implementation: >-
+    Pointer samples timestamped against the playback clock (with audio) are converted to keyframes at frame times,
+    then simplified; recording is one undo step.
+  io: >-
+    none
+  limitations: >-
+    Real-time recording quality depends on preview frame rate; draft deformation helps.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      Hold Ctrl and drag a pin while it plays: "Perform the motion".
+    defaults: >-
+      Speed 100%, smoothing medium, music playing.
+    automation: >-
+      Returns to the start time for another take; keeps takes as alternatives.
+    usability_check: >-
+      A user records a 5 s puppet motion on the first or second try.
+  acceptance: >-
+    Mini scene "puppet-take": recorded keyframes align to the music within one frame.
+  status: not-started
+  evidence: []
+
+- id: track.puppet-pin-animation
+  name: Pin animation and rigging
+  sources:
+    - ref: S23
+      item: Deform pin Position auto-keyframing; motion paths of pins
+      category: Animate with Puppet tools
+      checked: true
+    - ref: brief
+      item: §12 editable pin animation
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Edit pin keyframes on motion paths and in the graph editor, link pins to nulls, trackers or audio, and reuse the
+    pin set as a rig.
+  projection_example: >-
+    Pins on a drawn tree's branches follow nulls driven by a wind-strength slider that rises with the music.
+  controls:
+    - { name: Pin → null link, type: layer-ref, animatable: false }
+    - { name: Pin source, type: enum(keyframes|null|track|expression), animatable: false }
+    - { name: Save as rig, type: action, animatable: false }
+  animation: >-
+    Keyframes, expressions, tracker and audio drive are all supported per pin.
+  dependencies: [track.puppet, expr.rigs, track.attach, audio.drive, anim.graph-editor]
+  implementation: >-
+    Pin positions are ordinary properties; "pins to nulls" generates nulls and expression links via the recipe engine.
+  io: >-
+    Rigs saved as presets.
+  limitations: >-
+    Rigs depend on mesh outline; changing the artwork may need re-pinning.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Motion tracking, stabilisation, roto and cleanup serve moving footage. Projection targets a fixed building, and region suggestion (map.region-suggest) plus photo tracing cover outlining. Revisit for moving subjects."
+  milestone: D
+  beginner:
+    action: >-
+      "Make controllable" on a puppet: creates on-canvas handles (nulls).
+    defaults: >-
+      One handle per pin.
+    automation: >-
+      Creates and links nulls automatically.
+    usability_check: >-
+      A user drives a pin from a slider in under 60 s.
+  acceptance: >-
+    Mini scene "wind-tree".
+  status: not-started
+  evidence: []

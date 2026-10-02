@@ -1,0 +1,1852 @@
+# Mapping (venue, surfaces, regions, projectors, calibration) — Before Effects capability register
+# Sources: brief §0.2, §0.6, §1, §9, §14, §15, §19, §22; S27 MadMapper features; S28 TouchDesigner Projection Mapping (Kantan Mapper, camSchnappr, Stoner, sweetSpot, Vioso); S29 Resolume edge blending / Output Transformation. Live pages checked 2026-10-01.
+
+- id: map.venue
+  name: Venue model
+  sources:
+    - ref: brief §15
+      item: "Import a venue model or build a simple measured proxy; version and restore installation settings"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §9
+      item: "Distinct objects for physical installation geometry and animated creative geometry"
+      category: "True 3D and 2.5D workspace"
+      checked: true
+  artist_can: >-
+    Keep the physical place (its measured geometry, named regions, projectors and calibration) as its own
+    document, separate from the creative show. The show can then be reused elsewhere, and creative editing never
+    moves the building.
+  projection_example: >-
+    "Town Hall north face" holds a proxy model, 24 window regions, one projector and calibration v3. Two different
+    shows bind to it.
+  controls:
+    - { name: "Venue name and notes", type: "string", animatable: false }
+    - { name: "Units", type: "enum(m, cm, mm, ft, in)", animatable: false }
+    - { name: "World origin and up axis", type: "transform", animatable: false }
+    - { name: "Geometry, regions, projectors", type: "list", animatable: false }
+    - { name: "Active calibration version", type: "select", animatable: false }
+  animation: >-
+    Not animatable by design. Animated venue-shaped objects use derived creative copies (map.derive-creative-geometry).
+  dependencies: [proj.project-model, ux.operation-system]
+  implementation: >-
+    A separate versioned `venue` document in the core model, with its own ID, history and `venue.*` op namespace.
+    Geometry is stored as content-addressed glTF blobs. Shows reference a venue only through map.binding. In three.js
+    the venue lives in a dedicated scene group/layer that creative ops cannot target.
+  io: >-
+    Saved inside the project and exportable as a standalone venue package (JSON + GLB + reference photos) for reuse
+    with other shows.
+  limitations: >-
+    A venue is only as accurate as its inputs. Every dimension records its provenance (measured, traced, estimated),
+    and the app never presents an estimate as a measurement.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Set up the space" → "Start from a photo", "Start from a model" or "Start from a simple shape".
+    defaults: >-
+      One venue per new project, metric units, origin at the bottom-left of the main wall.
+    automation: >-
+      Creates the venue, a default projector and an empty binding as soon as the user picks a starting path.
+    usability_check: >-
+      After guided setup, at least 4 of 5 first-time users say correctly which items belong to "the space" and which
+      to "the show". An automated test proves that no creative op changes venue data.
+  acceptance: >-
+    AS-7 (same show bound to another venue). Mini scene "venue-separation": a brick-collapse animation leaves the
+    venue geometry and the calibration hash unchanged.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: map.venue-import
+  name: Import venue model
+  sources:
+    - ref: brief §15
+      item: "Import a venue model"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S27
+      item: "3D object surface"
+      category: "Surfaces"
+      checked: true
+    - ref: S28
+      item: "CamSchnappr — aligns virtual models to physical structures"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Bring in a 3D model of the building, room or object (glTF/GLB, OBJ, FBX) as the venue's physical geometry. Set
+    its units, up axis and origin, and simplify it for mapping.
+  projection_example: >-
+    Import an architect's OBJ of a church facade, convert millimetres to metres, and stand it on the ground plane.
+  controls:
+    - { name: "File", type: "file", animatable: false }
+    - { name: "Unit scale", type: "enum + float", animatable: false }
+    - { name: "Up axis", type: "enum(Y, Z)", animatable: false }
+    - { name: "Placement (origin, ground)", type: "transform", animatable: false }
+    - { name: "Simplify to (triangles)", type: "int", animatable: false }
+    - { name: "Propose regions from parts/materials", type: "bool", animatable: false }
+  animation: >-
+    None. Embedded model animation is ignored for venues, and the app warns about it.
+  dependencies: [3d.model-import, map.venue, map.uv-content-space]
+  implementation: >-
+    three.js GLTFLoader/OBJLoader/FBXLoader in a worker, normalized to GLB in the venue package. meshoptimizer (WASM)
+    simplification. xatlas (WASM) auto-UV when the model lacks usable UVs. Units come from glTF (metres) or the FBX
+    UnitScaleFactor; for OBJ the user picks from detected size candidates.
+  io: >-
+    Imports glTF/GLB/OBJ/FBX and keeps the original. Photogrammetry or LiDAR scans exported to OBJ/glTF use the same
+    path.
+  limitations: >-
+    CAD/BIM formats (DWG, IFC, STEP) are not imported directly; convert them in Blender first. Open question: is
+    direct IFC import wanted? Scan accuracy belongs to the scanner, and dense scans need simplification.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Set up the space" → "Start from a model" → pick a file.
+    defaults: >-
+      Auto-detected units and up axis, model placed on the ground, simplified above 500k triangles.
+    automation: >-
+      Unit sniffing from the model's size, auto-UV, and mesh parts proposed as candidate regions.
+    usability_check: >-
+      A first-time user imports a supplied GLB venue and sees it correctly scaled and upright in under 2 minutes
+      without opening advanced options.
+  acceptance: >-
+    AS-2 (tunnel in a modelled wall). Mini scene "import-venue": the same facade as OBJ (mm) and GLB (m) produces
+    identical world sizes.
+  status: not-started
+  evidence: []
+
+- id: map.venue-proxy
+  name: Measured proxy from primitives and traced outlines
+  sources:
+    - ref: brief §15
+      item: "Build a simple measured proxy using primitives and traced outlines"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §0.2
+      item: "Import path for a simple shape"
+      category: "Clear, flexible route through a show"
+      checked: true
+  artist_can: >-
+    Build a simple stand-in for the real surface from planes, boxes, cylinders and extruded traced outlines, using
+    tape-measure dimensions, when no model exists.
+  projection_example: >-
+    A 12 m × 8 m flat facade plane with 0.3 m-deep window recesses extruded from the traced window outlines.
+  controls:
+    - { name: "Primitive (flat wall, wall corner, box, column, extruded outline)", type: "enum", animatable: false }
+    - { name: "Dimensions", type: "vec3 (metres)", animatable: false }
+    - { name: "Position and rotation", type: "transform", animatable: false }
+    - { name: "Recess depth per region", type: "float", animatable: false }
+    - { name: "Snap to other primitives", type: "bool", animatable: false }
+  animation: >-
+    None. Proxy geometry is physical and static.
+  dependencies: [map.venue, map.photo-trace, map.scale-reference, shape.path]
+  implementation: >-
+    Parametric primitive ops generate three.js BufferGeometry with planar UVs in metres. Traced outlines are
+    flattened with Skia CanvasKit and triangulated (earcut), and recesses are made as inset faces (manifold-3d WASM
+    when booleans are needed). Each primitive keeps its parameters, so dimensions stay editable.
+  io: >-
+    Exportable as GLB, so the proxy can be refined in Blender and re-imported.
+  limitations: >-
+    A proxy is an approximation. Bulges, ornaments and leaning walls leave residual errors that need a residual warp
+    (out.residual-warp) or a real model.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Start from a simple shape" → Flat wall / Two walls at a corner / Box / Column, then type width and height.
+    defaults: >-
+      A 10 m × 6 m flat wall facing the audience.
+    automation: >-
+      When a photo has been traced, proposes the wall size from the traced outline plus one known measurement.
+    usability_check: >-
+      Given measurements on a card, a first-time user builds a two-wall corner proxy in under 3 minutes.
+  acceptance: >-
+    AS-1. Mini scene "proxy-corner": a two-wall proxy with recessed windows renders correct recess side faces from
+    the projector camera.
+  status: not-started
+  evidence: []
+
+- id: map.scale-reference
+  name: Real-world scale and measurement guidance
+  sources:
+    - ref: brief §0.6
+      item: "The interface must guide necessary physical measurements"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: brief §15
+      item: "Simple measured proxy"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+  artist_can: >-
+    Tell the app one or more real distances (a door's width, the wall height, the projector's distance from the
+    wall). Traced shapes and proxies then have their true size, and the app lists which measurements are still
+    missing for the chosen setup.
+  projection_example: >-
+    Measure one door (0.95 m wide) so all traced windows get true sizes, and recipes scale light trails correctly.
+  controls:
+    - { name: "Reference segment (2 points)", type: "point2d[2]", animatable: false }
+    - { name: "Real length", type: "float + unit", animatable: false }
+    - { name: "Measurement source (tape, laser, drawing, estimate)", type: "enum", animatable: false }
+    - { name: "Projector distance and height", type: "float", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.venue, map.photo-trace]
+  implementation: >-
+    Measurements are stored as venue constraints. With several references, scale is a least-squares fit, and
+    disagreement above 2% is flagged. A per-setup-path checklist lists what is needed: a planar 2D path needs none
+    for alignment, but recipe scaling and projector placement need one distance.
+  io: >-
+    Measurements travel with the venue package.
+  limitations: >-
+    The app cannot check that a measurement is correct; it can only detect inconsistent ones.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Measure one thing" card with an illustration — "Measure the width of this door and type it here."
+    defaults: >-
+      Units from the OS locale. The suggested reference is the largest clearly bounded rectangle.
+    automation: >-
+      Computes scale, flags conflicting measurements, and explains which missing measurement affects what.
+    usability_check: >-
+      Users enter one measurement and get the sample venue's scale within ±2% without help (at least 4 of 5).
+  acceptance: >-
+    Mini scene "scale-from-door": the traced facade width matches the surveyed width within 2%.
+  status: not-started
+  evidence: []
+
+- id: map.photo-trace
+  name: Photo-reference tracing
+  sources:
+    - ref: brief §0.2
+      item: "A photo can help trace surfaces; do not pretend it supplies accurate 3D geometry or projector calibration"
+      category: "Clear, flexible route through a show"
+      checked: true
+    - ref: S28
+      item: "Kantan Mapper — define 2D polygons and bezier outlines"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Load a photo of the building and trace windows, doors, edges and walls over it. Optionally straighten a
+    perspective photo using a rectangle of known size, so the traced shapes have correct proportions.
+  projection_example: >-
+    A phone photo of the facade taken from across the street, straightened using the four corners of the main wall.
+  controls:
+    - { name: "Photo", type: "file", animatable: false }
+    - { name: "Straighten (4 corners of a known rectangle)", type: "point2d[4]", animatable: false }
+    - { name: "Rectangle real size", type: "vec2", animatable: false }
+    - { name: "Lens bend correction", type: "float", animatable: false }
+    - { name: "Photo opacity", type: "percent", animatable: false }
+    - { name: "Tracing tool (rectangle, polygon, Bezier, line)", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.venue, map.region, map.edge-snap, shape.path]
+  implementation: >-
+    Rectification by homography: a 4-point normalized DLT in TS, or OpenCV findHomography with RANSAC in the vision
+    sidecar for more points. Optional single-coefficient radial undistortion, with a starting guess from the EXIF
+    focal length. Traced outlines are stored in venue-plane coordinates, which become metres after map.scale-reference.
+  io: >-
+    JPEG/PNG/HEIC/TIFF photos, with EXIF read. The original photo is kept unmodified.
+  limitations: >-
+    A photo gives 2D outlines on one plane. It does not give depth, projector position or calibration. Non-planar
+    facades and lens distortion leave errors until physical calibration. The UI says so where the photo is loaded.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Start from a photo" → drop a photo → "Click the four corners of a flat rectangle you can measure."
+    defaults: >-
+      Photo at 60% opacity. The rectangle tool is preselected for windows, with snapping on.
+    automation: >-
+      Proposes straightening corners from detected dominant lines (OpenCV line segment detector + vanishing points)
+      for the user to confirm.
+    usability_check: >-
+      Users straighten the sample photo and trace 6 windows in under 5 minutes. In a post-task question, every tested
+      user says that the photo alone does not align the projector.
+  acceptance: >-
+    AS-1. Mini scene "photo-rectify": a synthetic photo with known homography is rectified to within 0.5% of true
+    proportions.
+  status: implemented
+  evidence:
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: map.region
+  name: Named regions
+  sources:
+    - ref: brief §15
+      item: "Identify named regions: windows, rooflines, columns, walls, doors, and exclusions"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S27
+      item: "Mask / Multiple bezier masks per surface / Lines"
+      category: "Surfaces"
+      checked: true
+  artist_can: >-
+    Name the parts of the physical place — windows, doors, walls, columns, rooflines, edges, and areas to keep dark —
+    so effects and recipes can target them by meaning.
+  projection_example: >-
+    24 windows, 4 columns, one roofline edge and a "keep dark" region over the entrance doors.
+  controls:
+    - { name: "Type (window, door, wall, column, roofline, edge, ledge, arch, keep dark, custom)", type: "enum", animatable: false }
+    - { name: "Name", type: "string", animatable: false }
+    - { name: "Shape (closed outline or open edge path)", type: "path", animatable: false }
+    - { name: "Recess depth", type: "float", animatable: false }
+    - { name: "Tags", type: "string[]", animatable: false }
+    - { name: "Size, centroid, index (read-only)", type: "derived", animatable: false }
+  animation: >-
+    Region geometry is static. Derived attributes (index, centroid, size, edge length) are exposed read-only to
+    expressions and recipes, e.g. delay by index.
+  dependencies: [map.venue, shape.path, ux.canvas-direct, expr.engine]
+  implementation: >-
+    A region is a venue entity {id, type, name, tags, outline, surfaceRef, attributes}. The outline is a Bezier path
+    in surface coordinates, or a set of mesh faces picked by raycast and crease-angle flood fill on 3D models.
+    Derived attributes (area, centroid, bbox, perimeter, arc-length parameterization) are cached and exposed to
+    expr.engine as e.g. `region("Window 3").centroid` and `thisRegion.index`.
+  io: >-
+    The region list is exportable as JSON/SVG and travels with the venue package.
+  limitations: >-
+    A region describes the intended physical area. Its accuracy depends on the trace or model and on calibration.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Draw or click an area on the canvas, then pick Window / Door / Wall / Edge / Keep dark from a short palette.
+    defaults: >-
+      Auto-numbered names ("Window 1…"). The type is guessed from shape: a tall rectangle suggests a window, a thin
+      open path an edge.
+    automation: >-
+      Type suggestion, numbering, and repeated-member proposals (map.region-auto-group).
+    usability_check: >-
+      Users create and name 8 window regions and one keep-dark area on the sample in under 4 minutes.
+  acceptance: >-
+    AS-1 (paths around windows and rooflines). Mini scene "regions-basic".
+  status: implemented
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: map.region-group
+  name: Region groups and ordering
+  sources:
+    - ref: brief §15
+      item: "Region groups"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §19
+      item: "Assign a reusable animation to all windows with adjustable order and delays"
+      category: "Projection-specific creative tools"
+      checked: true
+  artist_can: >-
+    Group regions (all windows, ground-floor windows, left columns) and give the group an order, so one action can
+    target all of them with timing offsets.
+  projection_example: >-
+    "Top floor windows", ordered right to left, drives a sequential light-up.
+  controls:
+    - { name: "Members", type: "region-ref[]", animatable: false }
+    - { name: "Order (left→right, right→left, top→bottom, bottom→top, centre-out, along a path, random, custom)", type: "enum", animatable: false }
+    - { name: "Random seed", type: "int", animatable: false }
+    - { name: "Dynamic rule (type/tag query)", type: "query", animatable: false }
+  animation: >-
+    Order and index are inputs to animation offsets. The order itself is not keyframed.
+  dependencies: [map.region]
+  implementation: >-
+    A group is a venue entity with static members or a dynamic query, plus an ordering rule evaluated to a stable
+    index list. Seeded random order uses the stateless core RNG. Index, count and normalized position are exposed to
+    expressions and to tool.apply-across-regions.
+  io: >-
+    Saved with the venue. Show roles can bind to a group (map.binding).
+  limitations: >-
+    Spatial ordering on curved or multi-wall venues uses projected 2D positions, so the order can surprise and must
+    be shown visually.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select several regions → "Make a group". Drag an arrow across the facade to set the order.
+    defaults: >-
+      Left to right, then top to bottom. Automatic groups per type ("All windows").
+    automation: >-
+      Creates type groups automatically and shows order numbers on the canvas while the group is selected.
+    usability_check: >-
+      Users make a "top floor windows" group ordered right to left in under 1 minute.
+  acceptance: >-
+    AS-1. Mini scene "group-order": changing the order rule reorders a sequence without other edits.
+  status: not-started
+  evidence: []
+
+- id: map.region-auto-group
+  name: Auto-proposed repeated-region groups
+  sources:
+    - ref: brief §0.6
+      item: "Automatically propose repeated-region groups"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Let the app spot repeated shapes, such as rows of similar windows or evenly spaced columns. It proposes groups and
+    any missing members, and you accept or correct them.
+  projection_example: >-
+    After the user traces 2 windows, the app proposes the remaining 22 windows of the grid as outlines plus a group.
+  controls:
+    - { name: "Similarity tolerance", type: "percent", animatable: false }
+    - { name: "Proposed groups (accept, reject)", type: "list", animatable: false }
+    - { name: "Complete the grid", type: "bool", animatable: false }
+    - { name: "Align members to grid", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.region, map.region-group, ux.suggestions]
+  implementation: >-
+    Region descriptors (size, aspect, shape signature) plus spatial clustering: DBSCAN on centroids and 1D clustering
+    of x/y for rows and columns. Missing lattice members are proposed by copying a template outline. Optional
+    verification by OpenCV matchTemplate on the rectified photo. Nothing is created until the user accepts.
+  io: >-
+    None.
+  limitations: >-
+    Irregular facades, partial occlusion (trees, signs) and perspective-unrectified photos reduce accuracy.
+    Proposals always need confirmation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A suggestion chip appears after 2–3 traced windows — "Found 21 similar windows — add them?" — with preview
+      outlines. Accept all, or click any to remove it.
+    defaults: >-
+      On. Medium tolerance.
+    automation: >-
+      Detection, grid completion, grouping and ordering.
+    usability_check: >-
+      On the 24-window sample, after tracing 2 windows, at least 90% of windows are proposed correctly, and users
+      finish accepting/correcting in under 1 minute.
+  acceptance: >-
+    Mini scene "auto-group-grid": 24 of 24 windows found on the sample with fewer than 2 false positives.
+  status: not-started
+  evidence: []
+
+- id: map.region-suggest
+  name: Suggested region outlines from the photo
+  sources:
+    - ref: brief §0.6
+      item: "Automate tedious preparation; let users accept or correct suggestions"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Click a window in the photo and get a fitted outline, or ask the app to propose outlines for every visible opening.
+  projection_example: >-
+    One click per arched window produces clean arch outlines that would take minutes each to draw.
+  controls:
+    - { name: "Click to suggest", type: "point2d", animatable: false }
+    - { name: "Suggest all openings", type: "button", animatable: false }
+    - { name: "Fit (rectangle, arch, polygon, free)", type: "enum", animatable: false }
+    - { name: "Simplify", type: "float", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.photo-trace, map.region, map.edge-snap]
+  implementation: >-
+    SAM 2 point-prompted segmentation of the reference photo in the vision sidecar (shared with track.roto). The
+    resulting mask is turned into an outline with OpenCV findContours + approxPolyDP / minAreaRect fits, transformed
+    into rectified venue coordinates, then snapped (map.edge-snap).
+  io: >-
+    None.
+  limitations: >-
+    Reflections, shadows, curtains and trees confuse segmentation. Suggestions always require confirmation. Needs
+    the CUDA vision sidecar, and manual tracing remains the fallback.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      In tracing mode, the "Magic outline" tool: click inside a window.
+    defaults: >-
+      Rectangle fit for rectangular-looking masks, polygon otherwise.
+    automation: >-
+      Segmentation, outline fitting and type suggestion.
+    usability_check: >-
+      Users outline 10 arched windows with the magic tool in under 2 minutes, editing fewer than 20% of the outlines.
+  acceptance: >-
+    Mini scene "suggest-arches": the mean outline error is below 1% of the window width on the sample photo.
+  status: implemented
+  evidence:
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: map.edge-snap
+  name: Path snapping to edges
+  sources:
+    - ref: brief §0.6
+      item: "Automatically propose path snapping"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: brief §0.3
+      item: "Use snapping, alignment guides, readable handles, and forgiving hit targets"
+      category: "Keep the canvas central"
+      checked: true
+  artist_can: >-
+    While drawing or editing outlines and paths, snap to real edges in the photo, model edges and corners, other
+    regions and guides. Lines then follow the architecture without precise mouse work.
+  projection_example: >-
+    Freehand-dragging along a crooked roofline produces a clean path that hugs the photographed edge.
+  controls:
+    - { name: "Snap targets (photo edges, model edges, corners, regions, grid)", type: "flags", animatable: false }
+    - { name: "Snap radius", type: "px", animatable: false }
+    - { name: "Temporarily disable (hold Alt)", type: "modifier", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.photo-trace, map.venue, shape.path]
+  implementation: >-
+    For photos, Canny + LSD line segments from OpenCV in the sidecar, cached per photo, plus a TS distance-transform
+    field for live snapping. For models, crease and silhouette edges (three.js EdgesGeometry with an angle threshold)
+    projected into the current view. Freehand uses a live-wire (Dijkstra on gradient cost) magnetic path. A small
+    label shows what was snapped to.
+  io: >-
+    None.
+  limitations: >-
+    Strong shadows, ornament and low-contrast edges can attract snapping incorrectly. Holding Alt places points freely.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Always on while drawing. The label "snapped to edge" appears next to the cursor.
+    defaults: >-
+      Photo and model edges, corners and region outlines on. 8 px radius.
+    automation: >-
+      Edge extraction runs in the background when a photo or model is added.
+    usability_check: >-
+      Without zooming, users trace a 5-segment roofline on the sample that lies within 3 px of the photo edge.
+  acceptance: >-
+    AS-1 (paths around rooflines). Mini scene "snap-roofline".
+  status: prototype
+  evidence:
+    - "journey: points snap to existing corners (excluding the dragged corner); Shift constrains to 45°. Snapping to photo edges is not built yet."
+
+- id: map.surface-2d
+  name: 2D polygon and Bezier surfaces
+  sources:
+    - ref: brief §15
+      item: "2D polygon/Bezier surfaces"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S27
+      item: "Quad, Circle, Triangle / Mask / Lines"
+      category: "Surfaces"
+      checked: true
+    - ref: S28
+      item: "Kantan Mapper — Quad and Freeform shapes"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Without any 3D model, draw flat surfaces (polygon, Bezier shape, triangle, circle, line) directly in the
+    projector's picture to receive content. This is the classic 2D mapping workflow.
+  projection_example: >-
+    In a small room, outline three hanging panels directly on the live projector output and give each its own loop.
+  controls:
+    - { name: "Shape type", type: "enum", animatable: false }
+    - { name: "Points and Bezier handles", type: "point2d[]", animatable: false }
+    - { name: "Content role", type: "role-ref", animatable: false }
+    - { name: "Content fit (fit, fill, stretch, tile)", type: "enum", animatable: false }
+    - { name: "Edge feather", type: "float", animatable: false }
+  animation: >-
+    Surface geometry is static (it is physical). Content inside animates normally.
+  dependencies: [map.venue, map.projector, out.projector-output, shape.path]
+  implementation: >-
+    Surfaces are venue entities in normalized projector-raster coordinates. They are rendered as triangulated meshes
+    (Skia-flattened Bezier outlines + earcut), with UVs from the surface's content rectangle and analytic-coverage
+    antialiased edges in WGSL. While editing, the selected outline is drawn live on the projector output.
+  io: >-
+    Exportable in the venue package. Usable with out.mapping-data-export.
+  limitations: >-
+    Tied to one projector's raster: if the projector moves, the surfaces need re-adjusting (unlike model-based
+    mapping). No 3D perspective awareness beyond the warp.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Draw on the projector" mode in Set up the space: click points while watching the real object.
+    defaults: >-
+      Polygon tool, content set to Fit.
+    automation: >-
+      Closes shapes on clicking near the first point, and offers corner pinning (map.surface-warp) for 4-point shapes.
+    usability_check: >-
+      With a live projector, users outline a panel and see content inside it within 2 minutes.
+  acceptance: >-
+    Mini scene "panels-2d": three polygon surfaces with independent content; exported projector video matches the
+    live output.
+  status: implemented
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+    - "journey: uitest photo-new-project, trace-rect-window, find-similar-windows (5/5 found), trace-roofline, keep-light-off, correct-outline (+undo), animate-own-windows, projector-respects-keep-off, save-close-reopen — on a generated photo of a different building"
+
+- id: map.surface-warp
+  name: Quad, corner-pin and mesh warp surfaces
+  sources:
+    - ref: brief §15
+      item: "Corner and mesh adjustment"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S27
+      item: "Mesh Warping — Unlimited points Bezier Meshwarping"
+      category: "Surfaces"
+      checked: true
+    - ref: S28
+      item: "Stoner — 4-point corner-pin plus mesh warper; Perspective or Bilinear"
+      category: "Projection Mapping"
+      checked: true
+    - ref: S29
+      item: "Output Transformation — perspective warp and bezier warp subdivisions"
+      category: "Advanced Output"
+      checked: true
+  artist_can: >-
+    Fit content onto a surface by dragging its four corners (perspective-correct). Then refine it with a grid of
+    Bezier mesh points for curved or imperfect surfaces.
+  projection_example: >-
+    A banner hanging with a slight sag: corner-pin to its corners, then pull the middle row of the mesh down.
+  controls:
+    - { name: "Corners", type: "point2d[4]", animatable: false }
+    - { name: "Mode (perspective, bilinear)", type: "enum", animatable: false }
+    - { name: "Grid rows and columns", type: "int[2]", animatable: false }
+    - { name: "Mesh points with Bezier handles", type: "point2d[]", animatable: false }
+    - { name: "Lock point / reset", type: "action", animatable: false }
+  animation: >-
+    Not animatable: this is installation geometry. Creative animated warps are fx.distort.corner-pin and
+    fx.distort.mesh-warp.
+  dependencies: [map.surface-2d, out.projector-output]
+  implementation: >-
+    The corner pin is a TS 4-point homography. The mesh is a bicubic Bezier patch grid evaluated to a dense
+    tessellated mesh with UVs, rendered as a textured mesh so content is resampled only once. This object type is
+    separate from creative fx.distort.* effects and lives only in venue/output space.
+  io: >-
+    Warp data exportable as JSON and as a UV-remap EXR (out.mapping-data-export).
+  limitations: >-
+    A mesh warp fits what the projector sees; it does not encode depth. Perspective illusions still need model-based
+    mapping (map.model-3d) and an audience viewpoint.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Corner handles appear on the selected surface, live on the projector. Arrow keys nudge 1 px (Shift for 10 px).
+      "Add bend points" reveals a 3×3 grid.
+    defaults: >-
+      Perspective mode. A 3×3 grid when bend points are enabled.
+    automation: >-
+      Handles snap to region corners when the venue has regions.
+    usability_check: >-
+      Users fit a rectangle onto a skewed physical panel to within about 1 cm (visual check) in under 2 minutes.
+  acceptance: >-
+    Mini scene "warp-banner". AS-1 uses corner pinning for the simple-surface path.
+  status: not-started
+  evidence: []
+
+- id: map.model-3d
+  name: Model-based 3D mapping
+  sources:
+    - ref: brief §15
+      item: "Model-based 3D alignment"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S28
+      item: "CamSchnappr — aligns virtual models to physical structures"
+      category: "Projection Mapping"
+      checked: true
+    - ref: S27
+      item: "3D object surface / 3D camera calibration"
+      category: "Surfaces / Calibration"
+      checked: true
+  artist_can: >-
+    Map onto the real 3D shape. The app renders the venue model from the calibrated projector's point of view, so
+    content lands correctly on every face — recesses, corners and columns included — and stays consistent across
+    projectors.
+  projection_example: >-
+    A corner building with two walls and columns lit by one projector; window recess side walls get their own content.
+  controls:
+    - { name: "Content mode per layer (on surface / from audience viewpoint)", type: "enum", animatable: false }
+    - { name: "Render quality (antialiasing, texture filtering)", type: "enum", animatable: false }
+  animation: >-
+    Content on the surfaces animates normally. The projector camera is fixed by calibration.
+  dependencies: [map.venue, map.projector, map.calibration-3d, map.uv-content-space, 3d.scene]
+  implementation: >-
+    The three.js WebGPU renderer draws the venue geometry with the projector camera, using an off-axis projection
+    built from the solved intrinsics (map.projector). Each surface's material samples the content texture through
+    mesh UVs (map.uv-content-space) or through audience projective texturing (map.audience-viewpoint). The result is
+    the projector raster, which then passes through the output stages (out.projector-output).
+  io: >-
+    Projector rasters render through out.projector-video. Venue model and calibration export through
+    out.mapping-data-export.
+  limitations: >-
+    Accuracy is bounded by the model's accuracy and the calibration residuals. Unmodelled details need a residual
+    warp.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic once the venue has a model and the projector is calibrated: "Your content now follows the building's
+      shape."
+    defaults: >-
+      All content "on surface" (UV) unless a recipe needs a viewpoint.
+    automation: >-
+      Picks the mapping mode, builds projector cameras from calibration, and re-renders when calibration changes.
+    usability_check: >-
+      In the sample corner-building scene, at least 4 of 5 users place content that wraps around a column without
+      meeting the word "UV".
+  acceptance: >-
+    AS-2 (wall opening onto a 3D tunnel with fixed projector calibration). Mini scene "corner-columns".
+  status: not-started
+  evidence: []
+
+- id: map.uv-content-space
+  name: Content coordinates separate from projector coordinates
+  sources:
+    - ref: brief §15
+      item: "Keep editable UV/content coordinates and projector coordinates distinct"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §17
+      item: "Reusable content masters: composition, surface atlas, or individual regions"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Design content in a stable surface space (per region, per wall, or a whole-venue atlas) that does not change
+    when the projector moves or is recalibrated.
+  projection_example: >-
+    A projector is re-hung 30 cm lower. After recalibration, every animation still sits on the same bricks without
+    edits.
+  controls:
+    - { name: "Content layout (per region, per surface, atlas, single canvas)", type: "enum", animatable: false }
+    - { name: "Content resolution (px per metre)", type: "float", animatable: false }
+    - { name: "Atlas padding/bleed", type: "px", animatable: false }
+  animation: >-
+    None. The layout is structural.
+  dependencies: [map.venue, map.region, proj.composition]
+  implementation: >-
+    Each venue surface has a UV parameterization in physical units: planar for proxies, xatlas for imported models.
+    A content composition maps to UV through a layout transform. Projector coordinates exist only downstream of
+    calibration. The default content density comes from the projector's px per metre on that surface (map.coverage),
+    rounded up.
+  io: >-
+    Master export in an atlas or per-region layout, with layout JSON (render.queue).
+  limitations: >-
+    A model's UVs can have seams. Effects that cross seams (blur, displacement) need atlas bleed or surface-continuous
+    evaluation, which is documented per effect.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Hidden by default: users just design "on the wall". More controls → "Content resolution: Auto (matches the
+      projector)".
+    defaults: >-
+      Per-surface layout. Auto resolution.
+    automation: >-
+      Computes the layout, resolution and atlas packing.
+    usability_check: >-
+      §0.10: common tasks complete without users needing to understand UVs. A UI copy audit finds no "UV" in the
+      default path, and recalibration preserves content placement (automated).
+  acceptance: >-
+    Mini scene "recalibrate-keeps-content": changing projector pose plus recalibration keeps the content-to-brick
+    error below 1 content pixel.
+  status: not-started
+  evidence: []
+
+- id: map.projector
+  name: Projector model
+  sources:
+    - ref: brief §15
+      item: "Physical projector position/orientation, field of view, lens shift, aspect ratio, and output resolution"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S28
+      item: "camSchnappr — position, rotation, scale and viewing angle of the projector camera"
+      category: "Projection Mapping"
+      checked: true
+    - ref: S27
+      item: "8k maximum output resolution per projector"
+      category: "Video Output"
+      checked: true
+  artist_can: >-
+    Describe the real projector — where it sits and points, its throw ratio or zoom, lens shift, aspect and
+    resolution — so previews and calibration start close to reality.
+  projection_example: >-
+    A 1920×1080 projector with throw ratio 1.39–2.09 and +50% vertical lens shift, on a tripod 25 m from the facade.
+  controls:
+    - { name: "Position", type: "point3d", animatable: false }
+    - { name: "Orientation (pan, tilt, roll)", type: "angle[3]", animatable: false }
+    - { name: "Throw ratio or zoom range", type: "float | range", animatable: false }
+    - { name: "Lens shift H/V", type: "percent[2]", animatable: false }
+    - { name: "Native resolution and aspect", type: "int[2]", animatable: false }
+    - { name: "Mounting (floor, ceiling, rear)", type: "enum", animatable: false }
+    - { name: "Brightness (lumens, informational)", type: "float", animatable: false }
+  animation: >-
+    Not animatable. Physical projectors do not move during a show; moving heads are out of scope unless decided
+    otherwise.
+  dependencies: [map.venue]
+  implementation: >-
+    Intrinsics are stored as (fx, fy, cx, cy, optional k1). From the spec sheet, fx = throw ratio × width in pixels,
+    and lens shift offsets the principal point by a percentage of image size. Intrinsics are fixed from spec or
+    solved by map.calibration-3d. A three.js camera with a custom off-axis projectionMatrix is built from them,
+    alongside a frustum gizmo in the venue view.
+  io: >-
+    Saved in the venue and recorded in out.manifest.
+  limitations: >-
+    Spec-sheet throw ratios are nominal. Zoom and focus positions are not knowable without calibration, so they are
+    marked "estimated" until solved.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Add projector" → pick a resolution and (optionally) type the throw ratio from the spec sheet. Drag the
+      projector icon in the venue view.
+    defaults: >-
+      1920×1080, throw ratio 1.5, no lens shift, aimed at the main wall's centre.
+    automation: >-
+      Auto-aims at the selected surface and warns when the frustum misses parts of the venue.
+    usability_check: >-
+      Users place a projector so its frustum covers the sample facade in under 2 minutes.
+  acceptance: >-
+    Mini scene "projector-frustum": the frustum from spec values matches a synthetic ground truth within 1%.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: map.calibration
+  name: Correspondence-point calibration (planar)
+  sources:
+    - ref: brief §15
+      item: "Correspondence-point calibration with residual/error feedback and manual refinement"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §0.6
+      item: "Numbered target points; visualize alignment error and save the result for reuse"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: S28
+      item: "camSchnappr — control points dragged to their real-world position on the projector output"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Align the projector to the real surface by matching numbered points. A marker appears on the projector; you drag
+    it onto the real corner it names. After enough points, the mapping snaps into place.
+  projection_example: >-
+    The four corners of the main wall plus two window corners align a flat facade at 0.8 px RMS.
+  controls:
+    - { name: "Points (venue point ↔ projector pixel)", type: "pair[]", animatable: false }
+    - { name: "Solve mode (auto, flat surface, 3D)", type: "enum", animatable: false }
+    - { name: "Active point / next point", type: "select", animatable: false }
+    - { name: "Nudge step", type: "px", animatable: false }
+    - { name: "Exclude point", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.projector, map.region, out.projector-output, map.calibration-residuals, ux.guided-calibration]
+  implementation: >-
+    In planar mode, 4+ correspondences between venue-plane coordinates and projector pixels produce a normalized-DLT
+    homography with LM refinement. This runs in TS, so the solve updates on every drag (about 16 ms debounce);
+    OpenCV findHomography with RANSAC in the sidecar is the robust option and test oracle. Targets are chosen
+    automatically as well-spread corners of large regions. Results are saved as calibration versions. 3D mode is
+    map.calibration-3d.
+  io: >-
+    Saved in the venue. Exportable as JSON (homography, points, residuals). The version hash is referenced by
+    out.manifest.
+  limitations: >-
+    Planar mode assumes the area is flat; non-flat surfaces leave residual misalignment for mesh refinement or a 3D
+    model. Accuracy depends on point spread and care in placing points.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Through ux.guided-calibration: "Move point 1 to the top-left corner of the wall", with a photo thumbnail
+      highlighting that corner.
+    defaults: >-
+      4 auto-chosen points for flat surfaces, auto-solve on, 1 px nudge.
+    automation: >-
+      Target choice, continuous solving, outlier flagging, and saving the version on exit.
+    usability_check: >-
+      Physical test with a real projector on a flat wall: a first-time user reaches ≤3 px RMS in under 10 minutes
+      using only on-screen instructions. A canned example does not count.
+  acceptance: >-
+    AS-1. Mini scene "planar-calib": a synthetic projector with known homography is recovered within 0.1 px from exact
+    points, and within 1.5 px RMS with ±2 px point noise.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: map.calibration-3d
+  name: Projector pose and lens solve against a 3D model
+  sources:
+    - ref: S28
+      item: "camSchnappr — at least 6 points; OpenCV calibrateCamera intrinsics and extrinsics; Calibration Error; Zero Tangent Distance default"
+      category: "Projection Mapping"
+      checked: true
+    - ref: S27
+      item: "3D camera calibration"
+      category: "Calibration"
+      checked: true
+    - ref: brief §15
+      item: "Model-based 3D alignment; correspondence-point calibration"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+  artist_can: >-
+    For model-based mapping, solve the projector's real position, direction and lens from points clicked on the 3D
+    model and matched on the building.
+  projection_example: >-
+    Eight points on a two-wall corner (roof corners, door corners, column bases) solve pose plus lens at 1.6 px RMS.
+  controls:
+    - { name: "Points (model point ↔ projector pixel)", type: "pair[]", animatable: false }
+    - { name: "Solve (position only / position + lens)", type: "enum", animatable: false }
+    - { name: "Use lens from spec sheet", type: "bool", animatable: false }
+    - { name: "Lens distortion (off, k1)", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration, map.projector, map.model-3d, map.calibration-residuals]
+  implementation: >-
+    OpenCV in the vision sidecar. Position only: solvePnP (SOLVEPNP_SQPNP, then solvePnPRefineLM) with intrinsics
+    from map.projector; needs 4+ points and works on coplanar ones. Position + lens: calibrateCamera on a single
+    view with CALIB_USE_INTRINSIC_GUESS, CALIB_FIX_ASPECT_RATIO, CALIB_ZERO_TANGENT_DIST and k-terms fixed unless
+    enabled; needs 6+ non-coplanar points (as camSchnappr). A TS Levenberg–Marquardt port gives live feedback while
+    dragging; the sidecar result is authoritative. The OpenCV camera is converted to three.js (flip Y/Z), and a
+    warning appears when points are near-coplanar for a lens solve or cover under 30% of the raster.
+  io: >-
+    Intrinsics/extrinsics/points are saved per calibration version and exportable as JSON.
+  limitations: >-
+    A lens solve from one view with few points can be unstable; fixing the lens from spec is preferred when known.
+    Differences between the model and the real building appear as residuals that no solve can remove.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      The same guided flow as map.calibration, with suggested points on the model. "2 more points let us work out
+      the projector's lens."
+    defaults: >-
+      Position-only solve when spec values exist; position + lens after 6 well-spread non-coplanar points.
+    automation: >-
+      Chooses the solve type from the point configuration, suggests the next most informative point, and flags
+      degeneracy.
+    usability_check: >-
+      Physical test on a two-wall corner: a first-time user reaches ≤4 px RMS in under 15 minutes.
+  acceptance: >-
+    AS-2 (fixed projector calibration). Mini scene "pnp-synthetic": recovers a synthetic pose within 1 cm / 0.1° from
+    exact points. Reordered ahead of E because AS-2 and all model-based mapping depend on it.
+  status: not-started
+  evidence: []
+
+- id: map.calibration-residuals
+  name: Calibration error visualization
+  sources:
+    - ref: brief §15
+      item: "Residual/error feedback"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §0.6
+      item: "Visualize alignment error"
+      category: "Automate tedious preparation"
+      checked: true
+    - ref: S28
+      item: "camSchnappr — Calibration Error (sum of squared distances)"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    See how well the alignment fits. Each point shows an arrow and a colour for its error, the overall score is in
+    plain words, and points that disagree with the rest are flagged.
+  projection_example: >-
+    "Alignment: good (0.9 px). Point 5 looks off by 14 px — check that it is on the right corner."
+  controls:
+    - { name: "Show error arrows", type: "bool", animatable: false }
+    - { name: "Units (projector px, mm on surface)", type: "enum", animatable: false }
+    - { name: "Thresholds (good, fair)", type: "px[2]", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration]
+  implementation: >-
+    Per-point reprojection error in projector pixels, converted to approximate millimetres on the surface using the
+    px/m from map.coverage. RMS and max, plus leave-one-out residuals to find outliers. Default colour scale: green
+    under 1 px, amber under 3 px, red at 3 px or more. Arrows draw in the app and optionally on the projector output.
+  io: >-
+    Residuals are stored with each calibration version and recorded in the manifest.
+  limitations: >-
+    Low error at the points does not guarantee alignment between points (model error, sparse points). The UI
+    recommends checking with map.test-pattern.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A traffic-light badge, "Alignment: good / fair / needs work", next to the calibration step.
+    defaults: >-
+      Arrows on, px units.
+    automation: >-
+      Outlier detection and a "check this point" hint.
+    usability_check: >-
+      When one point is deliberately misplaced by 15 px, at least 4 of 5 users find and fix it from the hint alone.
+  acceptance: >-
+    Mini scene "outlier-point": a corrupted point is identified by leave-one-out in 100% of seeded trials.
+  status: not-started
+  evidence: []
+
+- id: map.calibration-refine
+  name: Manual calibration refinement
+  sources:
+    - ref: brief §15
+      item: "Manual refinement"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S28
+      item: "camSchnappr — drag points or use the arrow keys for fine adjustment"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Fine-tune after solving: nudge points with arrow keys, adjust the projector position/lens with fine sliders, add
+    extra points in problem areas, and fix leftover local errors with a residual mesh warp.
+  projection_example: >-
+    The left tower is 6 px off after the solve. Add a point there, re-solve, then fix a 2 px bulge with the residual
+    warp.
+  controls:
+    - { name: "Nudge (1 px; 0.1 px with modifier)", type: "action", animatable: false }
+    - { name: "Fine position/lens sliders", type: "float[]", animatable: false }
+    - { name: "Add point here", type: "action", animatable: false }
+    - { name: "Magnifier on projector output", type: "bool", animatable: false }
+    - { name: "Fix leftovers with mesh", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration, map.calibration-3d, out.residual-warp]
+  implementation: >-
+    Nudges are coalesced ops (one undo step per burst). Added points trigger a re-solve. Leftover error goes to
+    out.residual-warp, whose grid can be initialised from per-point residual vectors with a thin-plate-spline fit
+    sampled at the grid. A loupe overlay on the projector output magnifies around the active point.
+  io: >-
+    Saved in the calibration version.
+  limitations: >-
+    Large manual corrections hide model or measurement problems, so the UI warns when the residual warp exceeds a set
+    amount.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Fine-tune" step after solving: arrow keys move the highlighted point; "Fix small leftovers".
+    defaults: >-
+      1 px nudge. The magnifier appears automatically on the projector while a point is active.
+    automation: >-
+      Auto-initialises the residual warp from measured errors.
+    usability_check: >-
+      Users bring a deliberately offset corner back within 1 px using arrow keys only, in under 1 minute.
+  acceptance: >-
+    Mini scene "refine-bulge".
+  status: not-started
+  evidence: []
+
+- id: map.calibration-versions
+  name: Calibration lock, versions and restore
+  sources:
+    - ref: brief §15
+      item: "Lock calibration while editing creative content; version and restore installation settings"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S28
+      item: "camSchnappr — calibration values saved in the project camera component"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Lock the alignment while working on the show, save named versions ("Opening night"), compare them, and restore
+    an earlier one.
+  projection_example: >-
+    After a windy night moved the projector, compare tonight's calibration with yesterday's, and restore if needed.
+  controls:
+    - { name: "Lock", type: "bool", animatable: false }
+    - { name: "Save version (name, note)", type: "action", animatable: false }
+    - { name: "Version list / restore", type: "list", animatable: false }
+    - { name: "Compare (overlay two versions)", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration, ux.operation-system]
+  implementation: >-
+    Calibration state (points, solve, projector pose/intrinsics, residual warp, output masks, blend, output colour)
+    is snapshotted as immutable, content-hashed versions in the venue. Locking is an op-system guard that rejects
+    `venue.calibration.*` ops with a plain-language message and an "Unlock" action. Exports reference the version
+    hash in out.manifest.
+  io: >-
+    Versions travel with the venue package.
+  limitations: >-
+    A version records settings, not the physical rig. If hardware moved, restoring settings does not realign it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A lock icon on the Space step. The app auto-locks when you leave calibration and shows "Saved as Calibration 3
+      (today 21:40)".
+    defaults: >-
+      Auto-version on leaving calibration. Locked during creative work.
+    automation: >-
+      Automatic versioning and locking.
+    usability_check: >-
+      Users restore a previous calibration after a bad edit in under 1 minute. There are zero accidental calibration
+      edits during a 20-minute creative task (logged).
+  acceptance: >-
+    AS-5 and AS-7 manifests reference the calibration version. Mini scene "restore-calib".
+  status: not-started
+  evidence: []
+
+- id: map.coverage
+  name: Coverage and occlusion visualization
+  sources:
+    - ref: brief §15
+      item: "Visualize coverage and obvious occlusion, without presenting an approximate optical preview as a surveyed lighting result"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+  artist_can: >-
+    See which parts of the building each projector reaches, which are hidden behind other geometry, where pixels are
+    stretched thin at steep angles, and where projectors overlap.
+  projection_example: >-
+    A balcony shadows the windows below it from a low projector. Moving the projector up 2 m in the plan shows the
+    shadow shrinking.
+  controls:
+    - { name: "View (coverage, shadowed, pixel density, angle, overlap count)", type: "enum", animatable: false }
+    - { name: "Warning thresholds", type: "float[]", animatable: false }
+    - { name: "Per-projector toggle", type: "bool[]", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.projector, map.model-3d, map.venue-preview]
+  implementation: >-
+    A three.js depth pass from each projector camera determines visibility (shadow-map test) for every venue
+    fragment. Pixel density comes from screen-space derivatives of the projector raster coordinate (px per metre),
+    incidence from dot(normal, projector ray), and overlap from the count of projectors with visibility. Shown as a
+    false-colour overlay in the venue view.
+  io: >-
+    A coverage report image can be exported.
+  limitations: >-
+    Geometric approximation only: no surface reflectance, ambient light, lens vignetting, focus or real brightness.
+    Labelled "Approximate coverage — not a light measurement".
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Where will light land?" toggle in the venue view, plus warnings such as "The top of the tower is out of
+      Projector 1's reach."
+    defaults: >-
+      Coverage + shadowed view.
+    automation: >-
+      Recomputes on any projector or venue change and raises warnings for uncovered regions that have content bound
+      to them.
+    usability_check: >-
+      Users identify an occluded area in the sample in under 1 minute.
+  acceptance: >-
+    AS-5 (overlap checked). Mini scene "balcony-shadow".
+  status: not-started
+  evidence: []
+
+- id: map.cameras
+  name: Projector, content and audience cameras
+  sources:
+    - ref: brief §15
+      item: "Distinguish projector camera, content camera, and audience preview camera"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+  artist_can: >-
+    Work with three clearly different cameras: projector cameras (where light comes from, locked to calibration),
+    content cameras (creative 3D scene views that can animate), and audience cameras (where people stand to watch).
+  projection_example: >-
+    Animate a content camera flying down the tunnel without touching the projector camera; preview from "Audience:
+    street centre".
+  controls:
+    - { name: "Camera role", type: "enum(projector, content, audience)", animatable: false }
+    - { name: "View through", type: "select", animatable: false }
+    - { name: "Colour-coded gizmos and labels", type: "bool", animatable: false }
+  animation: >-
+    Content cameras are fully animatable (3d.camera). Projector cameras are not. Audience cameras are normally static.
+  dependencies: [map.projector, 3d.camera, map.audience-viewpoint]
+  implementation: >-
+    Camera entities carry a role enum. Projector cameras live in the venue and are read-only outside calibration.
+    Content cameras live in compositions (3d.camera). Audience cameras are venue entities used by projective
+    texturing and preview. The render graph binds each pass to a role, and the viewport shows a role badge.
+  io: >-
+    Roles are preserved in project files and manifests.
+  limitations: >-
+    None beyond clarity of presentation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Viewport camera menu with plain names: "Projector 1 view", "Audience: street centre", "My animation camera".
+    defaults: >-
+      Canvas shows "On the building from the audience".
+    automation: >-
+      Creates the projector camera from calibration and a default audience camera.
+    usability_check: >-
+      In a task that animates a 3D camera move, no participant accidentally moves a projector camera (logged), and
+      users reach "what the projector sees" in 1 click.
+  acceptance: >-
+    AS-2. Mini scene "three-cameras".
+  status: not-started
+  evidence: []
+
+- id: map.audience-viewpoint
+  name: Audience viewpoint for perspective illusions
+  sources:
+    - ref: brief §15
+      item: "Allow a chosen audience viewpoint for perspective-dependent illusions"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S28
+      item: "sweetSpot — perspective-correct rendering from observer position"
+      category: "Projection Mapping"
+      checked: true
+    - ref: brief §22
+      item: "AS-2 depth illusion with controlled audience viewpoint"
+      category: "Acceptance shows"
+      checked: true
+  artist_can: >-
+    Choose where the audience stands, so depth illusions (tunnels, protruding blocks, false perspective) look
+    correct from that spot.
+  projection_example: >-
+    The tunnel behind the main door is rendered for a viewer at the centre of the square, 1.7 m eye height, 30 m
+    away.
+  controls:
+    - { name: "Audience position", type: "point3d", animatable: true }
+    - { name: "Eye height", type: "float", animatable: false }
+    - { name: "Look-at target", type: "point3d", animatable: false }
+    - { name: "Sweet-spot radius (preview)", type: "float", animatable: false }
+    - { name: "Layer mode (on surface / from viewpoint)", type: "enum", animatable: false }
+  animation: >-
+    The position can be keyframed for experiments, but is normally static.
+  dependencies: [map.cameras, map.model-3d, 3d.scene]
+  implementation: >-
+    The creative 3D scene is rendered from the audience camera into a texture, projected onto venue geometry by
+    projective texturing (uv = AudienceViewProj × worldPos), and then rendered from the projector camera
+    (map.model-3d) — the same technique as sweetSpot. Each layer picks "on surface (UV)" or "from viewpoint".
+  io: >-
+    The viewpoint is recorded in exports and manifests.
+  limitations: >-
+    A perspective illusion is correct only from the chosen point, and distortion grows with distance from it. The app
+    shows the sweet-spot zone but cannot make an illusion work from everywhere.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Where will people watch from?" — drag a person icon onto the street in the venue view.
+    defaults: >-
+      1.7 m eye height. Centred, at about 2× the facade width away.
+    automation: >-
+      Depth recipes (tool.recess-tunnel) switch their layers to viewpoint mode automatically.
+    usability_check: >-
+      Users place the audience point and preview the tunnel from 3 other positions in under 2 minutes.
+  acceptance: >-
+    AS-2. Mini scene "tunnel-viewpoint": the tunnel's vanishing point aligns within 1° from the sweet spot.
+  status: not-started
+  evidence: []
+
+- id: map.venue-preview
+  name: Preview on the venue from any viewpoint
+  sources:
+    - ref: brief §1
+      item: "Preview on a representation of the physical installation"
+      category: "What the product must enable"
+      checked: true
+    - ref: brief §15
+      item: "Preview other viewpoints to reveal their limitations"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: brief §17
+      item: "Audience/venue preview videos for review"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Watch the show as it will look on the building — on the photo, or on the 3D venue at night — from the audience
+    spot or any other position, and walk around to see where illusions break.
+  projection_example: >-
+    Orbit to a side street and see the tunnel illusion skew; export an audience-view preview video for the client.
+  controls:
+    - { name: "Preview mode (projector view, on photo, 3D venue)", type: "enum", animatable: false }
+    - { name: "Viewpoint (audience points, free orbit)", type: "select", animatable: false }
+    - { name: "Ambient light", type: "percent", animatable: false }
+    - { name: "Show frustums / distortion warning", type: "bool", animatable: false }
+  animation: >-
+    Free-orbit camera paths can be keyframed for preview videos.
+  dependencies: [map.venue, map.calibration, map.cameras, render.queue]
+  implementation: >-
+    Photo mode: the projector raster is mapped back onto the rectified photo through the calibration (inverse
+    homography) and added over a darkened photo. 3D mode: the venue mesh is textured with the reference photo by
+    photo-camera projective texturing (photo pose from the same solvePnP), with each projector's image added as a
+    projective light, rendered from any viewpoint. Preview video presets go through render.queue.
+  io: >-
+    Audience/venue preview video export.
+  limitations: >-
+    A simulation only: real brightness, surface colour, ambient light and projector black level differ. Labelled
+    "Preview — not a light measurement".
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The default canvas view after setup is "On the building". A viewpoint dropdown includes "Walk around".
+    defaults: >-
+      On-photo preview in B, 3D venue in C. Ambient 15%.
+    automation: >-
+      Builds the preview from whatever venue data exists and warns where viewpoint illusions break.
+    usability_check: >-
+      Users switch to a "from across the street" viewpoint and back in ≤2 actions.
+  acceptance: >-
+    AS-2 (preview other viewpoints). Mini scene "preview-photo-vs-3d": the 3D preview of the projector output matches
+    the photo-mode preview at the photo camera within 2 px.
+  status: implemented
+  evidence:
+    - "journey: uitest steps resolution-full/half/quarter/eighth/auto (exact canvas sizes 1920×1080 → 240×135), zoom-is-display-only, view-3d/projector/show with pixel checks, frame-step, loop-range, cache-first-playback (30/30 fps, 0 skipped), edit-invalidates-only-affected, enlarge, pop-out; export at full size after Quarter preview"
+    - "unit: core invalidation tests (affectedByPatches)"
+
+- id: map.test-pattern
+  name: Venue-aligned test patterns
+  sources:
+    - ref: brief §15
+      item: "Test patterns"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S27
+      item: "Built-in Grids and Test Pattern"
+      category: "Video Output"
+      checked: true
+  artist_can: >-
+    Project patterns aligned to the venue — outlines of all regions, numbered region labels, a metre grid on each
+    wall, the calibration points — to check alignment on the real building.
+  projection_example: >-
+    All window outlines in thin green lines show at a glance that the top-right window is 5 cm off.
+  controls:
+    - { name: "Pattern (region outlines, region numbers, metre grid, surface IDs, calibration points, solid per region)", type: "enum", animatable: false }
+    - { name: "Line width", type: "px", animatable: false }
+    - { name: "Colour and brightness", type: "color", animatable: false }
+  animation: >-
+    Optional slow chase of region outlines for finding regions in the field.
+  dependencies: [map.region, out.projector-output, out.test-pattern]
+  implementation: >-
+    Patterns are generated in venue/surface space (WGSL SDF lines on UV/world coordinates) and pushed through the
+    full mapping and output pipeline, so they verify the whole chain. Raster-level output patterns are
+    out.test-pattern.
+  io: >-
+    None.
+  limitations: >-
+    Outlines show where the venue model says things are, so model errors look like calibration errors. The help
+    text explains how to tell them apart.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A "Check alignment" button on the Space step shows region outlines on the building.
+    defaults: >-
+      Region outlines in green with numbers.
+    automation: >-
+      Highlights regions whose outline error is above threshold, when camera checks are available (E).
+    usability_check: >-
+      In the field test, users spot a 5 cm misaligned window outline from the audience position.
+  acceptance: >-
+    AS-1 and AS-5 physical checks.
+  status: prototype
+  evidence:
+    - "journey: projector-output-window step — full-screen output on chosen display at projector resolution, identify/grid/checker/white/black/colors patterns, open/close; display identification overlays. Physical projection NOT yet verified on hardware."
+
+- id: map.structured-light
+  name: Structured-light camera-assisted alignment
+  sources:
+    - ref: brief §15
+      item: "Advanced mapping scope: structured-light/camera-assisted alignment"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S27
+      item: "Space Scanner using structured light"
+      category: "Calibration"
+      checked: true
+    - ref: S28
+      item: "Kinect Calibration / Vioso"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Use a camera to measure the projector-to-building relationship. The projector shows stripe patterns, a camera
+    photographs them, and the app recovers dense correspondences for calibration and warp.
+  projection_example: >-
+    A curved stone arch with no clear corners is scanned with a webcam to build a dense warp.
+  controls:
+    - { name: "Camera source (webcam, imported photo set)", type: "select", animatable: false }
+    - { name: "Pattern (Gray code + phase shift)", type: "enum", animatable: false }
+    - { name: "Exposure / pattern brightness", type: "float", animatable: false }
+    - { name: "Region of interest", type: "polygon", animatable: false }
+    - { name: "Result quality map", type: "view", animatable: false }
+  animation: >-
+    None.
+  dependencies: [map.calibration-3d, out.projector-output, out.residual-warp]
+  implementation: >-
+    The OpenCV structured_light module (GrayCodePattern; opencv-contrib-python) in the vision sidecar decodes
+    projector↔camera correspondences. The camera is calibrated with a checkerboard (calibrateCamera). With a venue
+    model, correspondences feed map.calibration-3d; otherwise they produce a dense residual warp valid for the camera
+    viewpoint. Patterns are shown through out.projector-output, and capture uses getUserMedia or a folder of photos.
+  io: >-
+    Captured images are saved for re-decoding.
+  limitations: >-
+    Needs a camera, darkness and a stable setup. A single camera is correct only for its own viewpoint unless combined
+    with a 3D model. Results need separate hardware and mathematical validation, and the app never implies automatic
+    calibration from a single photograph.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Advanced tools → "Scan with a camera" wizard (not on the guided path).
+    defaults: >-
+      Gray code with 8 phase-shift frames; ROI from the projector frustum.
+    automation: >-
+      Exposure bracketing and an automatic quality map.
+    usability_check: >-
+      Pilot users complete a scan with a webcam and reach ≤2 px residual on a curved test object in under 15 minutes.
+  acceptance: >-
+    Mini scene "scan-arch" (physical). Recorded residuals and drift.
+  status: not-started
+  evidence: []
+
+- id: map.curved-surface
+  name: Curved, dome and panoramic surfaces
+  sources:
+    - ref: brief §15
+      item: "Curved/dome/panoramic surfaces with separate hardware and mathematical validation"
+      category: "Projection design, surfaces, and calibration"
+      checked: true
+    - ref: S28
+      item: "Vioso — calibration data for panorama displays and domes"
+      category: "Projection Mapping"
+      checked: true
+  artist_can: >-
+    Map onto curved screens, cylinders, domes and panoramic walls, with matching content layouts (cylindrical,
+    equirectangular, fisheye/domemaster).
+  projection_example: >-
+    A 180° cylindrical gallery wall with an equirectangular panorama; a small dome with fisheye content.
+  controls:
+    - { name: "Surface (cylinder segment, sphere/dome, freeform)", type: "enum", animatable: false }
+    - { name: "Radius / arc angle", type: "float", animatable: false }
+    - { name: "Content layout (cylindrical, equirectangular, fisheye)", type: "enum", animatable: false }
+  animation: >-
+    None for the surface. Content animates normally.
+  dependencies: [map.venue-proxy, map.model-3d, map.structured-light]
+  implementation: >-
+    Parametric curved proxies (three.js) with analytic UVs per layout, projected through the model-based path.
+    Content cameras can render cubemaps reprojected to equirect/fisheye in WGSL. Calibration uses map.calibration-3d
+    with markers, or map.structured-light for featureless surfaces.
+  io: >-
+    Equirect/fisheye master export layouts.
+  limitations: >-
+    Smooth surfaces lack natural correspondence points; accurate alignment usually needs markers or structured light.
+    Each workflow is validated separately before it is claimed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Start from a simple shape" → Curved wall / Dome.
+    defaults: >-
+      180° cylinder segment, equirectangular content.
+    automation: >-
+      Picks the content layout from the surface type.
+    usability_check: >-
+      Users set up a curved wall from radius and arc measurements in under 3 minutes.
+  acceptance: >-
+    Mini scene "cylinder-pano" (synthetic and physical).
+  status: not-started
+  evidence: []
+
+- id: map.binding
+  name: Bindings from show roles to venue regions
+  sources:
+    - ref: brief §19
+      item: "Store venue-independent show logic separately from installation bindings"
+      category: "Projection-specific creative tools"
+      checked: true
+    - ref: brief §1
+      item: "A design can be reused on another installation without rebuilding its animation"
+      category: "What the product must enable"
+      checked: true
+  artist_can: >-
+    Connect the show's roles ("all windows", "main wall", "roofline") to this venue's actual regions — automatically
+    for most, by drag-and-drop for the rest.
+  projection_example: >-
+    Role "Windows (ordered)" → the venue group "All windows, left to right"; role "Hero wall" → "Wall A".
+  controls:
+    - { name: "Role list", type: "list", animatable: false }
+    - { name: "Bound regions/groups per role", type: "region-ref[]", animatable: false }
+    - { name: "Order source (role order, group order)", type: "enum", animatable: false }
+    - { name: "Unbound role warnings", type: "view", animatable: false }
+  animation: >-
+    None. Bindings are resolved at evaluation time.
+  dependencies: [map.venue, map.region-group, tool.show-logic]
+  implementation: >-
+    A binding is a separate document {showId, venueId, venueVersion, role → ordered region IDs, per-role fit and scale
+    parameters}. Evaluation resolves role references in layers and recipes through the binding at render time.
+    Unbound roles render nothing and raise a warning. Auto-binding matches role type ↔ region type and tags, names,
+    counts and relative position.
+  io: >-
+    Saved separately from show and venue, and recorded in the manifest as a binding hash.
+  limitations: >-
+    Roles that depend on exact geometry (a viewpoint-tuned tunnel in a specific door) bind but still need review.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Mostly invisible: applying content to selected windows creates the role "Windows", bound to them. The Space
+      panel shows "Windows → 24 windows".
+    defaults: >-
+      Auto-created roles named after the selection.
+    automation: >-
+      Role creation and binding on every apply.
+    usability_check: >-
+      The word "binding" never appears in the default path, and in a reuse task users can explain where the windows'
+      animation went.
+  acceptance: >-
+    AS-7. Mini scene "role-binding": unbinding a role removes its output without deleting the animation.
+  status: not-started
+  evidence: []
+
+- id: map.rebind
+  name: Rebind a show to another venue
+  sources:
+    - ref: brief §22
+      item: "AS-7: bind the same show to another venue"
+      category: "Acceptance shows"
+      checked: true
+    - ref: brief §1
+      item: "Reuse on another installation without rebuilding animation"
+      category: "What the product must enable"
+      checked: true
+  artist_can: >-
+    Open an existing show on a different venue. The app proposes how roles map to the new regions, adapts timing and
+    scale to the new sizes, and reports anything it couldn't map.
+  projection_example: >-
+    A show built for a 24-window town hall runs on an 18-window library. The sequence keeps its total duration and
+    the delays respace.
+  controls:
+    - { name: "Target venue", type: "select", animatable: false }
+    - { name: "Proposed mapping (accept, edit)", type: "list", animatable: false }
+    - { name: "When counts differ (respace, repeat, trim)", type: "enum", animatable: false }
+    - { name: "Scale to region size", type: "bool", animatable: false }
+  animation: >-
+    Recipe-generated timing is regenerated for the new targets; manual overrides are preserved and flagged.
+  dependencies: [map.binding, ux.recipe-engine, ux.auto-adapt]
+  implementation: >-
+    Auto-bind solver: matches by role type, tags and names; ordered groups map by count and spatial order;
+    one-to-one roles use Hungarian assignment on descriptor distance. Recipe instances regenerate with the new
+    targets while preserving overrides. The report lists unmatched roles and count mismatches with chosen policies.
+  io: >-
+    Writes a new binding document; the show is unchanged.
+  limitations: >-
+    Viewpoint illusions and hand-placed keyframes tied to particular coordinates cannot be adapted automatically.
+    They are listed for review.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Use this show on another space" → choose venue → review "22 of 24 roles matched; 'Tower' has no match: pick
+      a region or skip".
+    defaults: >-
+      Respace sequences, scale effects to region size.
+    automation: >-
+      Matching, adaptation and the report.
+    usability_check: >-
+      Users rebind the sample show to a second supplied venue and start an export in under 10 minutes.
+  acceptance: >-
+    AS-7 (bind the same show to another venue).
+  status: not-started
+  evidence: []
+
+- id: map.derive-creative-geometry
+  name: Movable creative copies of venue geometry
+  sources:
+    - ref: brief §9
+      item: "Moving a virtual brick for a collapse illusion must not move the measured building or its calibration"
+      category: "True 3D and 2.5D workspace"
+      checked: true
+  artist_can: >-
+    Make an animatable copy of part of the building (a wall, a window frame, bricks) to move, break or deform for
+    illusions, while the real venue stays fixed.
+  projection_example: >-
+    Copy Wall A as a brick-patterned mesh, then let the bricks fall and rebuild.
+  controls:
+    - { name: "Source region/faces", type: "region-ref", animatable: false }
+    - { name: "Subdivide as (none, bricks, tiles, Voronoi)", type: "enum", animatable: false }
+    - { name: "Keep linked to source", type: "bool", animatable: false }
+  animation: >-
+    The copy is ordinary creative 3D geometry: fully animatable, simulatable and expression-linkable.
+  dependencies: [map.region, 3d.scene, 3d.material-pbr]
+  implementation: >-
+    An op copies venue geometry (mesh faces or extruded region outlines) into the creative 3D scene as a new object
+    with matching UVs and the photo texture, plus a link back to its source role for regeneration after rebinding.
+    The copy renders through the projector camera like any creative geometry; venue entities stay read-only.
+  io: >-
+    None.
+  limitations: >-
+    The copy uses the venue's approximation of the surface; fine physical details are not in it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Reached through recipes ("Crack and rebuild", "Push out"); also right-click a region → "Make a movable copy".
+    defaults: >-
+      Linked to source, no subdivision.
+    automation: >-
+      Recipes create and subdivide copies automatically.
+    usability_check: >-
+      Automated: after any animation of the copy, the venue and calibration hashes are unchanged. Users never see
+      the real venue move (think-aloud).
+  acceptance: >-
+    AS-3 (fragmentation and reassembly).
+  status: not-started
+  evidence: []
+
+- id: map.surface-compensation
+  name: Surface colour and texture compensation
+  sources:
+    - ref: brief §14
+      item: "Treat real surface color, ambient light, and projector limitations as installation constraints"
+      category: "Color precision and image quality"
+      checked: true
+    - ref: brief §16
+      item: "Treat surface response and optical differences as measured limitations"
+      category: "Multiple projectors and output management"
+      checked: true
+  artist_can: >-
+    Partly compensate for a coloured or textured surface (red brick, patchy stone) by measuring it with a camera and
+    adjusting the projected image.
+  projection_example: >-
+    A patched facade with lighter replacement bricks looks more uniform under white light.
+  controls:
+    - { name: "Measure surface (camera capture)", type: "action", animatable: false }
+    - { name: "Compensation strength", type: "percent", animatable: true }
+    - { name: "Per-region trim (brightness, tint)", type: "float[]", animatable: true }
+  animation: >-
+    Strength is animatable, so compensation can be faded in and out.
+  dependencies: [map.structured-light, out.output-color]
+  implementation: >-
+    Candidate design: camera-captured surface albedo per projector pixel (through structured-light correspondences),
+    then per-pixel radiometric compensation in WGSL, clamped to the projector's range. Simple per-region trims work
+    without a camera.
+  io: >-
+    Captured albedo maps are stored with the calibration version.
+  limitations: >-
+    Decision 2026-10-02: basic radiometric compensation (per-region gain from a camera capture) is planned; it only partly works and needs physical validation with real hardware.
+
+    Open question: is radiometric compensation worth building for this user's venues? It only partly works (it
+    cannot undo dark-surface absorption, and it lowers contrast), and it needs a calibrated camera and stable ambient
+    light. Until decided, the app offers per-region colour and brightness trims.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Advanced tools → "Even out the surface" (if built). Per-region trims sit in the region's More controls.
+    defaults: >-
+      Off.
+    automation: >-
+      Capture and map computation.
+    usability_check: >-
+      To be defined if adopted: users even out a two-tone test wall within a target ΔL* in under 10 minutes.
+  acceptance: >-
+    To be defined if adopted.
+  status: not-started
+  evidence: []
+
+- id: map.area-roles
+  name: Area roles (content boundary, surface, effect source)
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Roles for areas: visible-content boundary, surface, effect source"
+      category: "Building areas"
+      checked: true
+  artist_can: >-
+    Say what each building area is for: the boundary inside which content may be seen, a surface that receives
+    content, a source that emits effects (smoke from a window, water from a gutter), or several at once. Recipes and
+    effects read these roles instead of asking you each time.
+  projection_example: >-
+    A window is the content boundary for the aquarium video and the source for smoke rising out of it, while the wall
+    around it is the surface the smoke drifts across.
+  controls:
+    - { name: "Roles (content boundary, surface, effect source)", type: "enum set", animatable: false }
+    - { name: "Emission edge or side for sources", type: "enum", animatable: false }
+    - { name: "Role defaults per area type", type: "table", animatable: false }
+  animation: >-
+    Roles are static venue attributes. Effect sources can be keyframed through the effects that use them.
+  dependencies: [map.region, map.region-group, map.binding, tool.fill-region, fx.simulation.emission-masks]
+  implementation: >-
+    A region attribute roles (set of boundary, surface, source) stored on the venue region, so every scene shares it.
+    Defaults come from the region type (window = boundary + source, wall = surface, edge = source). Recipes read roles
+    through the binding: fill uses boundary areas, emission masks use source areas, containment (map.area-containment)
+    uses boundary and surface.
+  io: >-
+    Part of the venue package; rebinding to another venue maps roles by role name.
+  limitations: >-
+    Roles describe intent only. They do not change calibration or output masks.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select an area, then tick what it is for in the area card: Shows content, Receives content, Emits effects.
+    defaults: >-
+      Windows and doors show content and emit effects. Walls receive content. Edges emit effects.
+    automation: >-
+      Infers roles from the area type chosen while tracing, so most users never open the role control.
+    usability_check: >-
+      A first-time user makes smoke rise from a window and stay on the wall without touching a role control.
+  acceptance: >-
+    Mini scene "roles-window-smoke": one window is boundary and source, the wall is the surface; the same roles drive
+    two scenes.
+  status: not-started
+  evidence: []
+
+- id: map.area-containment
+  name: Contain effects within an area or extend beyond it
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Contain smoke, water and fragments within an area, or let them extend beyond it"
+      category: "Building areas"
+      checked: true
+  artist_can: >-
+    For smoke, water, particles, glow and fragments, choose per effect whether the result stays inside the area
+    (clipped, or bouncing off its edges) or spills over neighbouring surfaces up to a distance you set. This is a
+    creative choice and is separate from the output safety masks.
+  projection_example: >-
+    Smoke stays inside its window. Water overflows the sill and runs down the wall. Shatter fragments fall past the
+    facade onto the plaza.
+  controls:
+    - { name: "Containment (inside, soft edge, extend beyond, extend up to distance)", type: "enum", animatable: false }
+    - { name: "Spill distance", type: "float", animatable: true }
+    - { name: "Edge behaviour (clip, reflect, fade, pass through)", type: "enum", animatable: false }
+  animation: >-
+    Spill distance and softness are keyframable. Changing the containment mode re-prepares any simulation that depends
+    on it.
+  dependencies: [map.area-roles, mask.creative-vs-output, mask.area-defaults, fx.simulation.collision-surfaces, fx.simulation.gpu-smoke-2d, fx.simulation.water-surface-2d, fx.simulation.liquid-2d, fx.simulation.rigid-body-fracture, out.output-mask]
+  implementation: >-
+    Containment compiles to a creative matte from the area outline (hard clip with feather) for non-simulated looks,
+    or to a solver boundary (obstacle and domain mask from the area signed-distance field) for smoke, water and
+    fragments, so they meet the edge instead of being clipped afterwards. Extend beyond enlarges the domain by the
+    spill distance. Output safety masks still apply last (out.output-mask).
+  io: >-
+    Stored on the effect instance in the scene.
+  limitations: >-
+    Boundary-aware simulations must be prepared again when containment changes. Containment does not stop projector
+    light from reaching things that must stay dark; that is the output mask.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Effect controls show "Keep inside this area" or "Let it spill" with a distance.
+    defaults: >-
+      Smoke, water and particles stay inside their area. Fragments fall freely.
+    automation: >-
+      Builds the solver boundary or matte from the area outline and re-prepares the simulation when needed.
+    usability_check: >-
+      A first-time user changes smoke from contained to spilling and sees the difference in one preview.
+  acceptance: >-
+    Mini scene "contain-vs-spill": the same smoke and water effect contained, then spilling over the wall; export
+    matches preview.
+  status: not-started
+  evidence: []
+
+- id: map.area-depth
+  name: Depth for building areas
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Building photos, geometry, tracing, reusable surfaces, depth, masks"
+      category: "Building areas"
+      checked: true
+  artist_can: >-
+    Give each area a depth (set back into the wall or standing out from it) by typing a distance, dragging in the 3D
+    view, or estimating it from the photo. Parallax, relief, shadows and occlusion then know where each area sits.
+  projection_example: >-
+    Each window recess is 0.3 m deep and the balcony stands out 0.8 m, so a moving light throws believable shadows
+    into the recesses.
+  controls:
+    - { name: "Depth offset from the wall plane (m)", type: "float", animatable: false }
+    - { name: "Estimate from photo", type: "action", animatable: false }
+    - { name: "Depth map (per area)", type: "image", animatable: false }
+    - { name: "Use estimated or manual", type: "enum", animatable: false }
+  animation: >-
+    None. Moving geometry belongs to creative geometry (3d.physical-vs-creative).
+  dependencies: [map.region, map.venue-proxy, pass.depth-estimate, pass.depth, map.audience-viewpoint, fx.perspective.region-relief, 3d.shadows, track.matte-cache]
+  implementation: >-
+    A region attribute depthOffset in metres along the surface normal, with an optional per-pixel depth map from Depth
+    Anything cached by track.matte-cache. The flat proxy is extruded into stepped geometry for the audience-viewpoint
+    render, relief and shadows. A manual value always overrides an estimate. Depth is relative unless a measured
+    reference is given (map.scale-reference).
+  io: >-
+    Part of the venue package.
+  limitations: >-
+    Estimated depth is relative and can be wrong on glass and reflections. The result is an illusion that holds from
+    the audience viewpoint only.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select an area, then "Set depth": type a distance or press "Guess from photo".
+    defaults: >-
+      Windows recess 0.2 m. Everything else sits on the wall plane.
+    automation: >-
+      Estimates depth for the whole photo once and offers it per area to accept or correct.
+    usability_check: >-
+      A first-time user gives a window recess and sees a shadow fall inside it in under 2 minutes.
+  acceptance: >-
+    Mini scene "window-recess": a moving light throws a shadow into a recess whose depth was typed, then estimated.
+  status: not-started
+  evidence: []

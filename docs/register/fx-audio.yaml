@@ -1,0 +1,767 @@
+# Audio — Before Effects capability register
+# Sources: S02 effect list + support matrix (Audio table, checked live 2026-10-01); S35 Audio effects (checked live 2026-10-01; lists Compressor, De-esser (beta), Distortion and Gate, which are not yet in the S02 matrix); brief §13, §17, §18. Shared rule: every effect runs as Web Audio nodes (or an AudioWorklet with shared DSP code) for preview, and the identical graph renders in an OfflineAudioContext for export, so export matches preview.
+
+- id: fx.audio.backwards
+  name: Backwards
+  sources:
+    - ref: S02
+      item: Backwards
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Backwards effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Play a layer's sound in reverse while its frames stay in order, optionally swapping left and right.
+  projection_example: >-
+    Reverse a cymbal crash into a swelling whoosh that lands exactly on a facade reveal.
+  controls:
+    - { name: Swap Channels, type: bool, animatable: false }
+  animation: >-
+    None beyond layer trims; the reversed sound follows layer in/out points.
+  dependencies: [audio.track, proj.layer]
+  implementation: >-
+    The decoded PCM for the layer's trimmed range is reversed once into a cached AudioBuffer (keyed by source and trim), and both the preview AudioBufferSourceNode and OfflineAudioContext render use it. Swap uses a ChannelSplitter/ChannelMerger pair.
+  io: >-
+    none
+  limitations: >-
+    Re-trimming invalidates the reversed cache, which costs a short recompute for long layers.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Play the sound backwards" in the sound layer's quick actions; the "Reverse swell into reveal" recipe uses it.
+    defaults: >-
+      Channels not swapped.
+    automation: >-
+      The recipe aligns the reversed peak to the selected marker.
+    usability_check: >-
+      A first-time user reverses a sound and lines its end up with a marker in two actions or fewer and under 20 s.
+  acceptance: >-
+    Mini scene "reverse-swell": exported audio sample-matches the offline preview render; peak lands on the marker frame.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.bass-treble
+  name: Bass & Treble
+  sources:
+    - ref: S02
+      item: Bass & Treble
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Bass & Treble effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Boost or cut the low and high frequencies of a sound with two simple controls.
+  projection_example: >-
+    Boost the soundtrack's bass for outdoor speakers that lack low end in a large square.
+  controls:
+    - { name: Bass, type: number, animatable: true }
+    - { name: Treble, type: number, animatable: true }
+  animation: >-
+    Both keyframable and expression-linkable; automation is sample-accurate.
+  dependencies: [audio.track, anim.keyframe.core, fx.audio.parametric-eq]
+  implementation: >-
+    Two BiquadFilterNodes (lowshelf and highshelf, fixed corner frequencies documented) for preview. The same node graph renders in an OfflineAudioContext for export, and keyframes are converted to AudioParam ramps scheduled at sample times derived from flicks.
+  io: >-
+    none
+  limitations: >-
+    Adobe does not document the shelf frequencies, so ours are fixed and documented values; the result will not match AE exactly.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "More bass" / "Less boom" and "Brighter" / "Duller" sliders in the simple sound inspector.
+    defaults: >-
+      0 dB; slider range ±12 dB.
+    automation: >-
+      none
+    usability_check: >-
+      A first-time user audibly increases the bass of the supplied track in one action and under 10 s.
+  acceptance: >-
+    Mini scene "eq-basic": offline and preview renders are sample-identical; measured shelf gain within 0.5 dB of setting.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.compressor
+  name: Compressor
+  sources:
+    - ref: S35
+      item: Compressor effect
+      category: Audio
+      checked: true
+    - ref: S02
+      item: Compressor
+      category: Audio
+      checked: false
+  artist_can: >-
+    Even out loud and quiet moments so music and narration sit at a consistent, punchy level.
+  projection_example: >-
+    Keep narration audible over music and traffic noise in a public square.
+  controls:
+    - { name: Threshold (dB), type: number, animatable: true }
+    - { name: Ratio, type: number, animatable: true }
+    - { name: Knee (dB), type: number, animatable: true }
+    - { name: Attack (ms), type: number, animatable: true }
+    - { name: Release (ms), type: number, animatable: true }
+    - { name: Auto Release, type: bool, animatable: false }
+    - { name: Makeup Gain (dB), type: number, animatable: true }
+    - { name: Output Limit (dB), type: number, animatable: true }
+  animation: >-
+    All numeric values keyframable.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    An AudioWorklet runs a shared deterministic DSP kernel (feed-forward RMS/peak detector, soft knee, auto-release program-dependent timing, makeup gain, output limiter). DynamicsCompressorNode lacks makeup gain, auto-release and limiting, so it is not used. The same worklet module runs inside the OfflineAudioContext for export, giving sample-identical results.
+  io: >-
+    none
+  limitations: >-
+    Listed in S35 but absent from the S02 matrix as of 2026-10-01, so Adobe's MFR status is unknown. Defaults follow S35 (threshold -16 dB, ratio 3:1, knee 15 dB, attack 6 ms, release 440 ms).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Even out the volume" switch on a sound layer, with an "Amount" slider; full controls under More controls.
+    defaults: >-
+      S35 defaults, Auto Release on.
+    automation: >-
+      Sets makeup gain from measured loudness so the perceived level stays the same when toggled.
+    usability_check: >-
+      A first-time user reduces the loudness range of the supplied narration in one action and under 10 s.
+  acceptance: >-
+    Mini scene "narration-level": measured loudness range reduced; export sample-matches the offline preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.de-esser
+  name: De-esser
+  sources:
+    - ref: S35
+      item: De-esser effect (After Effects beta)
+      category: Audio
+      checked: true
+    - ref: S02
+      item: De-esser
+      category: Audio
+      checked: false
+  artist_can: >-
+    Soften harsh "s", "sh" and "t" sounds in a voice without dulling the rest of it.
+  projection_example: >-
+    Tame a recorded narrator's sibilance before it is blasted through bright PA horns at the venue.
+  controls:
+    - { name: Threshold, type: number, animatable: true }
+    - { name: Frequency, type: number, animatable: true }
+    - { name: Bandwidth, type: number, animatable: true }
+    - { name: Attack, type: number, animatable: true }
+    - { name: Release, type: number, animatable: true }
+    - { name: Sibilance Only (listen), type: bool, animatable: false }
+  animation: >-
+    All numeric values keyframable.
+  dependencies: [audio.track, fx.audio.compressor]
+  implementation: >-
+    An AudioWorklet split-band detector: a band-pass at Frequency/Bandwidth feeds an envelope follower that drives gain reduction on that band only. The DSP kernel is shared with the compressor and runs identically offline.
+  io: >-
+    none
+  limitations: >-
+    Adobe ships it only in the After Effects beta (S35), so the final Adobe form may change.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: D
+  beginner:
+    action: >-
+      "Soften harsh S sounds" on a voice layer, with presets matching S35 voice types (narration, deeper voice, brighter voice, subtle).
+    defaults: >-
+      -20 dB threshold, 7 kHz, 3 kHz bandwidth, 1 ms attack, 50 ms release.
+    automation: >-
+      Suggests a frequency from detected sibilant energy peaks in the clip.
+    usability_check: >-
+      A first-time user applies and audibly tunes the effect on the supplied voice clip in under 30 s using a preset.
+  acceptance: >-
+    Mini scene "voice-cleanup": sibilant-band peak energy reduced; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.delay
+  name: Delay
+  sources:
+    - ref: S02
+      item: Delay
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Delay effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Repeat a sound after a set time with fading echoes.
+  projection_example: >-
+    Echo a drum hit while a light trace repeats around the windows on the same rhythm.
+  controls:
+    - { name: Delay Time (ms), type: number, animatable: true }
+    - { name: Delay Amount, type: number, animatable: true }
+    - { name: Feedback, type: number, animatable: true }
+    - { name: Dry Out / Wet Out, type: number, animatable: true }
+  animation: >-
+    All keyframable; Delay Time can be expression-linked to the show BPM so echoes land on beats.
+  dependencies: [audio.track, audio.analysis, anim.keyframe.core, expr.engine]
+  implementation: >-
+    DelayNode with a feedback GainNode loop and dry/wet GainNodes for preview, with the same graph in OfflineAudioContext for export. Delay-time automation uses AudioParam ramps.
+  io: >-
+    Echo tails extend past the layer out-point; the mixdown keeps the tail (bounds expansion in time).
+  limitations: >-
+    Feedback ≥ 100% is clamped to avoid runaway.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Echo the music" / "Add an echo" with "Echo spacing" (snaps to beats) and "Echo amount".
+    defaults: >-
+      Spacing of one beat at the detected BPM, 40% amount, 30% feedback.
+    automation: >-
+      Reads BPM from audio.analysis and snaps the delay time to a note value.
+    usability_check: >-
+      A first-time user adds a beat-synced echo to the supplied track in two actions or fewer and under 20 s.
+  acceptance: >-
+    Mini scene "beat-echo": echo onsets fall within 1 ms of beat grid; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.distortion
+  name: Distortion
+  sources:
+    - ref: S35
+      item: Distortion effect
+      category: Audio
+      checked: true
+    - ref: S02
+      item: Distortion
+      category: Audio
+      checked: false
+  artist_can: >-
+    Add warmth, grit or full destruction to a sound, including a lo-fi bit-crushed character.
+  projection_example: >-
+    Make a voice sound like an old radio while the facade turns into a vintage storefront.
+  controls:
+    - { name: Type (Soft Clip / Hard Clip / Saturation 1 / Saturation 2 / Tube / Fuzz), type: enum, animatable: true }
+    - { name: Drive, type: number, animatable: true }
+    - { name: Gain, type: number, animatable: true }
+    - { name: Mix, type: number, animatable: true }
+    - { name: Volume, type: number, animatable: true }
+    - { name: Resolution (bit), type: number, animatable: true }
+    - { name: Downsample (x), type: number, animatable: true }
+  animation: >-
+    All values keyframable, for example ramping drive into a drop.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    A WaveShaperNode with generated curves per type (oversample 4x) handles drive, plus an AudioWorklet bit-crusher/downsampler and dry/wet GainNodes. The same graph renders offline; curves are regenerated deterministically from parameters.
+  io: >-
+    none
+  limitations: >-
+    Absent from the S02 matrix as of 2026-10-01. Our curve shapes are our own designs, not copies of Adobe's.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: D
+  beginner:
+    action: >-
+      "Make it gritty", with presets "Old radio", "Warm" and "Destroyed".
+    defaults: >-
+      Soft Clip, drive 25%, mix 100% (S35 defaults).
+    automation: >-
+      none
+    usability_check: >-
+      A first-time user gives the supplied voice an "old radio" sound in two actions or fewer and under 15 s.
+  acceptance: >-
+    Mini scene "radio-voice": export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.flange-chorus
+  name: Flange & Chorus
+  sources:
+    - ref: S02
+      item: Flange & Chorus
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Flange & Chorus effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Make a sound swirl (flange) or sound like several voices or instruments at once (chorus).
+  projection_example: >-
+    Add a swirling texture to the music while the wall appears to melt.
+  controls:
+    - { name: Voice Separation Time (ms), type: number, animatable: true }
+    - { name: Voices, type: integer, animatable: true }
+    - { name: Modulation Rate (Hz), type: number, animatable: true }
+    - { name: Modulation Depth, type: number, animatable: true }
+    - { name: Voice Phase Change, type: number, animatable: true }
+    - { name: Invert Phase, type: bool, animatable: false }
+    - { name: Stereo Voices, type: bool, animatable: false }
+    - { name: Dry Out / Wet Out, type: number, animatable: true }
+  animation: >-
+    Numeric values keyframable.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    Per voice, a DelayNode whose delayTime is modulated by an OscillatorNode LFO through a GainNode, with per-voice phase offsets. Voices alternate between left and right via ChannelMerger for stereo voices, and inversion uses a -1 gain. LFOs start at a deterministic phase so offline render equals preview.
+  io: >-
+    none
+  limitations: >-
+    Oscillator start phase must be locked to timeline time, not wall-clock, or scrubbing changes the sound.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: D
+  beginner:
+    action: >-
+      "Make it swirl" (flange) or "Make it sound fuller" (chorus) presets.
+    defaults: >-
+      Flange defaults; the chorus preset uses S35's suggested values (40 ms, 4 voices, 0.1 Hz, 50%, 90°, stereo).
+    automation: >-
+      none
+    usability_check: >-
+      A first-time user applies the chorus preset and hears the change in one action and under 10 s.
+  acceptance: >-
+    Mini scene "swirl": export sample-matches preview including after random seeks.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.gate
+  name: Gate
+  sources:
+    - ref: S35
+      item: Gate effect
+      category: Audio
+      checked: true
+    - ref: S02
+      item: Gate
+      category: Audio
+      checked: false
+  artist_can: >-
+    Silence a sound whenever it falls below a level, to remove hiss between phrases or create hard rhythmic cuts.
+  projection_example: >-
+    Remove generator hum between narrated lines recorded on site at the venue.
+  controls:
+    - { name: Threshold (dB), type: number, animatable: true }
+    - { name: Attack (ms), type: number, animatable: true }
+    - { name: Hold (ms), type: number, animatable: true }
+    - { name: Release (ms), type: number, animatable: true }
+  animation: >-
+    All values keyframable.
+  dependencies: [audio.track, fx.audio.compressor]
+  implementation: >-
+    An AudioWorklet gate (envelope follower plus attack/hold/release state machine) shares a DSP module with the compressor and renders identically in OfflineAudioContext.
+  io: >-
+    none
+  limitations: >-
+    Absent from the S02 matrix as of 2026-10-01. A gate is not noise reduction, so steady hiss under speech remains.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: D
+  beginner:
+    action: >-
+      "Remove background noise between sounds" with one "Sensitivity" slider.
+    defaults: >-
+      S35 defaults (-60 dB, 10 ms, 40 ms, 220 ms), with the threshold auto-raised to just above measured noise floor.
+    automation: >-
+      Measures the noise floor from the quietest 5% of the clip.
+    usability_check: >-
+      A first-time user removes audible hum between phrases of the supplied clip in one action and under 15 s.
+  acceptance: >-
+    Mini scene "gate-hum": inter-phrase level below threshold; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.high-low-pass
+  name: High-Low Pass
+  sources:
+    - ref: S02
+      item: High-Low Pass
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: High-Low Pass effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Remove frequencies below or above a cutoff, for example to muffle a sound or thin it out, and sweep it over time.
+  projection_example: >-
+    Muffle the music as if heard through the wall, then sweep it open as the wall appears to break apart.
+  controls:
+    - { name: Filter Options (High Pass / Low Pass), type: enum, animatable: false }
+    - { name: Cutoff Frequency, type: number, animatable: true }
+    - { name: Dry Out / Wet Out, type: number, animatable: true }
+  animation: >-
+    Cutoff keyframable with sample-accurate sweeps, and linkable to visual properties (fx.audio.automation-link).
+  dependencies: [audio.track, anim.keyframe.core, fx.audio.automation-link]
+  implementation: >-
+    A BiquadFilterNode (highpass or lowpass) with dry/wet GainNodes. Cutoff keyframes are mapped to exponential AudioParam ramps, and the same schedule renders offline.
+  io: >-
+    none
+  limitations: >-
+    A single biquad has a 12 dB/oct slope; a steeper option would cascade nodes.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Muffle the sound" / "Thin the sound" with an amount slider; the "Through-the-wall reveal" recipe animates it.
+    defaults: >-
+      Low pass at 800 Hz for "muffle"; high pass at 300 Hz for "thin"; wet 100%, dry 0%.
+    automation: >-
+      The recipe keys a sweep that ends on the selected marker.
+    usability_check: >-
+      A first-time user creates a muffled-to-open sweep ending on a marker in three actions or fewer and under 30 s.
+  acceptance: >-
+    Mini scene "wall-break-sweep": sweep ends on the marker frame; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.modulator
+  name: Modulator
+  sources:
+    - ref: S02
+      item: Modulator
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Modulator effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Add vibrato (pitch wobble) and tremolo (volume wobble) to a sound.
+  projection_example: >-
+    Add a wobbling hum while the building appears to vibrate.
+  controls:
+    - { name: Modulation Type (Sine / Triangle), type: enum, animatable: false }
+    - { name: Modulation Rate (Hz), type: number, animatable: true }
+    - { name: Modulation Depth, type: number, animatable: true }
+    - { name: Amplitude Modulation, type: number, animatable: true }
+  animation: >-
+    Rate and depths keyframable; rate can be linked to BPM.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    An OscillatorNode LFO (sine or triangle) drives a short DelayNode's delayTime for vibrato and a GainNode's gain for tremolo. The phase is locked to timeline time, and the graph renders identically offline.
+  io: >-
+    none
+  limitations: >-
+    Delay-based vibrato adds a few milliseconds of latency, which is compensated in the mix.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: D
+  beginner:
+    action: >-
+      "Wobble the sound" with Speed and Amount sliders.
+    defaults: >-
+      Sine, 5 Hz, light depth.
+    automation: >-
+      Optional "match the visual wobble" link to a wave or turbulence effect's speed.
+    usability_check: >-
+      A first-time user adds an audible wobble in one action and under 10 s.
+  acceptance: >-
+    Mini scene "wobble": export sample-matches preview after random seeks.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.parametric-eq
+  name: Parametric EQ
+  sources:
+    - ref: S02
+      item: Parametric EQ
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Parametric EQ effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Boost or cut up to three chosen frequency bands, shown on a response graph, to shape a sound or remove a specific unwanted tone.
+  projection_example: >-
+    Cut the boomy resonance a stone courtyard adds at one frequency.
+  controls:
+    - { name: Band 1-3 Enabled, type: bool, animatable: false }
+    - { name: Band 1-3 Frequency, type: number, animatable: true }
+    - { name: Band 1-3 Bandwidth, type: number, animatable: true }
+    - { name: Band 1-3 Boost/Cut, type: number, animatable: true }
+    - { name: Frequency response graph (drag handles), type: widget, animatable: false }
+  animation: >-
+    All band values keyframable.
+  dependencies: [audio.track, anim.keyframe.core, fx.generate.audio-spectrum]
+  implementation: >-
+    Three peaking BiquadFilterNodes in series (Q derived from bandwidth). The response graph comes from getFrequencyResponse(), and the same chain renders in OfflineAudioContext.
+  io: >-
+    none
+  limitations: >-
+    Three bands only, matching AE; more bands would be a product extension.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Fix a problem frequency": play, then click "Find the boom"/"Find the whistle" to sweep and pick; graph handles are in More controls.
+    defaults: >-
+      All bands flat; band colours red, green and blue as in AE.
+    automation: >-
+      Suggests problem frequencies from long-term spectrum peaks (audio.analysis).
+    usability_check: >-
+      A first-time user reduces a planted 250 Hz hum in the supplied clip in under 45 s using the suggestion.
+  acceptance: >-
+    Mini scene "eq-notch": target band attenuated within 1 dB of setting; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.reverb
+  name: Reverb
+  sources:
+    - ref: S02
+      item: Reverb
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Reverb effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Make a sound feel like it is in a room, hall or large space.
+  projection_example: >-
+    Make a small studio recording sound like it fills the cathedral square in front of the projection.
+  controls:
+    - { name: Reverb Time (ms), type: number, animatable: true }
+    - { name: Diffusion, type: number, animatable: true }
+    - { name: Decay, type: number, animatable: true }
+    - { name: Brightness, type: number, animatable: true }
+    - { name: Dry Out / Wet Out, type: number, animatable: true }
+  animation: >-
+    Dry/wet keyframable smoothly; changes to time, diffusion, decay or brightness switch between cached impulse responses with a short crossfade.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    A ConvolverNode whose impulse response is synthesised deterministically (seeded noise shaped by pre-delay, diffusion density, exponential decay and brightness low-pass) and cached by parameter hash. Dry/wet GainNodes are added, and the identical IR and graph render offline.
+  io: >-
+    Reverb tails extend beyond the layer out-point and are kept in the mixdown.
+  limitations: >-
+    An algorithmic IR approximates rather than reproduces AE's reverb. Continuous animation of IR parameters is stepped.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Make it sound like a big space" with Room size presets (room, hall, cathedral) and an Amount slider.
+    defaults: >-
+      Hall preset, 30% wet.
+    automation: >-
+      none
+    usability_check: >-
+      A first-time user applies a hall reverb and adjusts its amount in two actions or fewer and under 15 s.
+  acceptance: >-
+    Mini scene "big-space": export sample-matches preview; tail preserved after the out-point.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.stereo-mixer
+  name: Stereo Mixer
+  sources:
+    - ref: S02
+      item: Stereo Mixer
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Stereo Mixer effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Set left and right levels and pan a sound from one side to the other, with phase inversion.
+  projection_example: >-
+    Pan a sound from the left wing of the building to the right wing as a light sweeps across.
+  controls:
+    - { name: Left Level / Right Level, type: number, animatable: true }
+    - { name: Left Pan / Right Pan, type: number, animatable: true }
+    - { name: Invert Phase, type: bool, animatable: false }
+  animation: >-
+    Levels and pans keyframable and expression-linkable, for example pan following a layer's x position.
+  dependencies: [audio.track, anim.keyframe.core, expr.engine]
+  implementation: >-
+    A ChannelSplitter feeds per-channel GainNodes and per-channel StereoPannerNodes, then a ChannelMerger. Inversion uses a -1 gain, and the same graph renders offline.
+  io: >-
+    Stereo only; multichannel venue speaker layouts are an open question for audio.track.
+  limitations: >-
+    Pan law follows Web Audio's equal-power panner, which may differ slightly from AE.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Pan" and "Balance" sliders in the simple sound inspector; "Follow this layer" makes the sound follow a moving visual left to right.
+    defaults: >-
+      Centred, 100% levels.
+    automation: >-
+      "Follow this layer" writes the pan expression automatically.
+    usability_check: >-
+      A first-time user makes a sound move left to right with a moving light in two actions or fewer and under 20 s.
+  acceptance: >-
+    Mini scene "pan-follow": channel energy ratio tracks the layer's x position; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.tone
+  name: Tone
+  sources:
+    - ref: S02
+      item: Tone
+      category: Audio
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S35
+      item: Tone effect
+      category: Audio
+      checked: true
+  artist_can: >-
+    Synthesise up to five simple tones (sine, triangle, saw, square, white noise) to make beeps, hums, sirens or test tones, even on a layer with no audio.
+  projection_example: >-
+    Generate a test tone to check every venue speaker before the show, or a rising hum under a build-up.
+  controls:
+    - { name: Waveform Options (Sine / Triangle / Saw / Square / White Noise), type: enum, animatable: false }
+    - { name: Frequency 1-5, type: number, animatable: true }
+    - { name: Level, type: number, animatable: true }
+  animation: >-
+    Frequencies and level keyframable; level ramps avoid clicks as S35 advises.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    Up to five OscillatorNodes, or an AudioBufferSourceNode of seeded white noise, summed into a level GainNode. The source's own audio is ignored as in AE. Oscillators start at phase 0 at the layer in-point, so offline render equals preview.
+  io: >-
+    none
+  limitations: >-
+    Simple tones only; not a synthesiser.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: D
+  beginner:
+    action: >-
+      "Add a tone" (beep, hum, siren presets) and "Speaker test tone" in the output check tools.
+    defaults: >-
+      One sine at 440 Hz; level capped at 100% divided by the number of active tones (S35 anti-clipping guidance).
+    automation: >-
+      Adds 1-frame level ramps at in and out points to prevent clicks.
+    usability_check: >-
+      A first-time user creates a two-second beep without a click at the end in under 20 s.
+  acceptance: >-
+    Mini scene "tone": no discontinuity at layer ends; export sample-matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.audio.automation-link
+  name: Sound effects drive visuals (audio-effect automation link)
+  sources:
+    - ref: brief
+      item: §0.1 "Move with the beat", §13 audio-to-animation and identical preview/export analysis
+      category: product requirement
+      checked: true
+    - ref: S35
+      item: Animating audio effect properties (e.g. Cutoff Frequency)
+      category: Audio
+      checked: true
+  artist_can: >-
+    Make visuals react to the processed sound, such as only the filtered bass or the echo, and share one curve between an audio effect and a visual property so a filter sweep and a light sweep rise together.
+  projection_example: >-
+    During a build-up, one curve opens the music's low-pass filter while brightening the facade and speeding up the particles; windows flash only on the echoed drum hits.
+  controls:
+    - { name: Analyse signal (before effects / after effects / after a chosen effect), type: enum, animatable: false }
+    - { name: Linked property pairs (audio parameter ↔ visual property with range mapping), type: link-list, animatable: true }
+    - { name: Response smoothing (attack / release), type: number, animatable: true }
+  animation: >-
+    Links are expressions and shared curves; generated keyframes (audio.to-keyframes) remain editable.
+  dependencies: [audio.analysis, audio.to-keyframes, audio.track, expr.engine, anim.keyframe.core, ux.recipe-engine]
+  implementation: >-
+    Audio effect parameters are ordinary core properties evaluated at flicks. They are scheduled to AudioParams at sample times for both the realtime and offline contexts, so any visual property can read or drive them through expr.engine. For post-effect analysis, the analysis worker renders the layer's effect chain in an OfflineAudioContext and caches FFT, onsets and bands keyed by chain hash, so preview and export read identical data.
+  io: >-
+    Analysis caches are collected with the project; live audio inputs must be recorded and baked before deterministic export (brief §13).
+  limitations: >-
+    Re-analysis is needed when an upstream effect changes; the app shows a progress badge on affected layers.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effects are After Effects parity. Stereo mixing, levels, pan, fades, analysis and export (audio.*) cover music-synced shows. Revisit if a show needs in-app sound design."
+  milestone: C
+  beginner:
+    action: >-
+      "Move with the beat" recipe → "Listen to: whole track / bass / drums / echo"; "Build-up" recipe links a filter sweep to brightness.
+    defaults: >-
+      Analyse after effects; bass band for "Move with the beat".
+    automation: >-
+      Creates the analysis tap, links and smoothing; shows a live meter next to the controlled property.
+    usability_check: >-
+      A first-time user makes the supplied windows pulse only with the kick drum in three actions or fewer and under 60 s, and the export shows the same pulses as preview.
+  acceptance: >-
+    AS-1 (timed to audio) and mini scene "build-up-link": visual and filter curves identical frame by frame in preview and export.
+  status: not-started
+  evidence: []

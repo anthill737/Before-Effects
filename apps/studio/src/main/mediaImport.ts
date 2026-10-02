@@ -1,0 +1,82 @@
+/**
+ * Import media: copy into the project's media folder (originals untouched), inspect with ffprobe,
+ * and prepare what the editor needs: dimensions, frame rate, frame count, duration and audio.
+ * Videos with sound get a WAV copy of their audio so preview and export mix exactly the same samples.
+ */
+import { execFile } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { basename, extname, join } from "node:path";
+import { promisify } from "node:util";
+import { ipcMain } from "electron";
+import { findFfmpeg } from "@be/media";
+import type { ImportedMedia } from "../shared/api.ts";
+import { paths } from "./files.ts";
+import { log } from "./log.ts";
+
+const execFileP = promisify(execFile);
+
+const IMAGE_CODECS = new Set(["png", "mjpeg", "jpegls", "webp", "bmp", "tiff", "gif", "jpeg2000", "exr"]);
+const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".exr"]);
+
+const uniqueTarget = (dir: string, name: string): string => {
+  let target = join(dir, name);
+  let n = 1;
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  while (existsSync(target)) target = join(dir, `${stem} (${++n})${ext}`);
+  return target;
+};
+
+const parseRate = (r: string | undefined): { num: number; den: number } | undefined => {
+  if (!r) return undefined;
+  const [n, d] = r.split("/").map(Number);
+  if (!n || !d) return undefined;
+  return { num: n, den: d };
+};
+
+export const importMedia = async (src: string, projectId: string): Promise<ImportedMedia> => {
+  const { ffmpeg, ffprobe } = await findFfmpeg();
+  const dir = join(paths().media, projectId.replace(/[^\w.-]+/g, "_"));
+  mkdirSync(dir, { recursive: true });
+  const target = uniqueTarget(dir, basename(src));
+  copyFileSync(src, target);
+  const { stdout } = await execFileP(ffprobe, ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", target], { maxBuffer: 16 << 20 });
+  const j = JSON.parse(stdout) as { streams: Array<Record<string, string | number | undefined>>; format: Record<string, string | number | undefined> };
+  const video = j.streams.find((s) => s.codec_type === "video");
+  const audio = j.streams.find((s) => s.codec_type === "audio");
+  const duration = Number(j.format.duration ?? video?.duration ?? audio?.duration ?? 0);
+  const isImage = !!video && (IMAGE_EXT.has(extname(target).toLowerCase()) || (IMAGE_CODECS.has(String(video.codec_name)) && !(duration > 0.2)));
+  let kind: ImportedMedia["kind"] = isImage ? "image" : video ? "video" : audio ? "audio" : "unknown";
+  if (kind === "unknown") throw new Error(`“${basename(src)}” isn't an image, video or sound file Before Effects can read.`);
+  const rate = video ? (parseRate(String(video.avg_frame_rate)) ?? parseRate(String(video.r_frame_rate))) : undefined;
+  const fps = rate ? rate.num / rate.den : 0;
+  let audioPath: string | undefined;
+  if (audio && kind !== "image") {
+    // Decode the sound once to a WAV next to the media, for identical preview and export mixing.
+    audioPath = kind === "audio" && extname(target).toLowerCase() === ".wav" ? target : uniqueTarget(dir, `${basename(target, extname(target))}.audio.wav`);
+    if (audioPath !== target) await execFileP(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", target, "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", audioPath], { maxBuffer: 1 << 20 });
+  }
+  if (kind === "video" && fps <= 0) kind = "image";
+  const out: ImportedMedia = {
+    kind,
+    path: target,
+    originalPath: src,
+    name: basename(src),
+    width: video ? Number(video.width) : undefined,
+    height: video ? Number(video.height) : undefined,
+    frameRate: kind === "video" ? rate : undefined,
+    frameCount: kind === "video" && fps > 0 ? Math.max(1, Math.round(duration * fps)) : undefined,
+    durationSeconds: duration || undefined,
+    hasAlpha: video ? /a|rgba|bgra|argb|yuva/.test(String(video.pix_fmt)) && /yuva|rgba|bgra|argb|ya|gbrap/.test(String(video.pix_fmt)) : false,
+    audioPath,
+    sampleRate: audio ? Number(audio.sample_rate) : undefined,
+    audioChannels: audio ? Number(audio.channels) : undefined,
+    codec: String(video?.codec_name ?? audio?.codec_name ?? ""),
+  };
+  log(`imported ${kind} ${src} → ${target}${audioPath ? ` (+ audio ${audioPath})` : ""}`);
+  return out;
+};
+
+export const registerMediaImportIpc = () => {
+  ipcMain.handle("media:import", (_e, src: string, projectId: string) => importMedia(src, projectId));
+};

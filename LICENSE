@@ -1,0 +1,27 @@
+Before Effects
+
+Copyright (c) 2026 Hillside Ventures LLC. All rights reserved.
+
+This software, including its source code, data files, artwork, prompts, and
+documentation (the "Software"), is the property of Hillside Ventures LLC and is
+protected by copyright law.
+
+No part of the Software may be used, copied, reproduced, modified, merged,
+published, distributed, sublicensed, sold, or otherwise made available, in
+whole or in part, in any form or by any means, without the prior written
+permission of Hillside Ventures LLC.
+
+Viewing the source code in this repository does not grant any license or right
+to use it.
+
+Third-party components included in this repository (such as the test fixtures
+in packages/aep/test/fixtures, see LICENSE-py_aep.txt there) remain under their
+own licenses. Dependencies installed from package registries are not part of
+this repository and are governed by their own licenses.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+HILLSIDE VENTURES LLC BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.

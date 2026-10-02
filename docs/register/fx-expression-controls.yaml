@@ -1,0 +1,434 @@
+# Expression Controls — Before Effects capability register
+# Sources: S02 effect list + support matrix (Expression Control table, checked live 2026-10-01); S01 user guide → Using expression controls page (checked live 2026-10-01); brief §0.4, §5. Shared rule: every control is a typed, render-free control effect whose value the expression engine (expr.engine) reads; recipes and rigs surface these controls as their simple, named creative controls.
+
+- id: fx.expression-controls.3d-point-control
+  name: 3D Point Control
+  sources:
+    - ref: S02
+      item: 3D Point Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: 3D Point Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Place one draggable point in 3D space that many other properties (positions, orientations, 3D effects) can follow or aim at.
+  projection_example: >-
+    A 3D "focus point" that the camera aims at and that fog and depth of field both use, moved with one handle.
+  controls:
+    - { name: 3D Point (x / y / z), type: point3d, animatable: true }
+  animation: >-
+    Keyframable with spatial interpolation and motion path; expression-readable as a 3-vector.
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core, anim.motion-path, 3d.scene]
+  implementation: >-
+    Render-free control effect holding a typed point3d property in world units. An on-canvas 3D gizmo is shown when selected. Exposed to expr.engine as effect("Name")("3D Point") and to the recipe engine as a named control.
+  io: >-
+    Saved in the project. Adobe .aep expression-control import is not promised.
+  limitations: >-
+    Coordinate space is documented as world space; AE's is layer-relative, so translated AE expressions may need adjustment.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Less common After Effects expression-control effect. Slider, checkbox, colour, point and angle controls and the control-set rig panel stay required for reusable rigs and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a draggable "target" handle when a recipe exposes a 3D point (for example "Look at this"); add manually via More controls → "Add a control".
+    defaults: >-
+      Starts at the selected object's centre or the scene origin.
+    automation: >-
+      Recipes create, name and link the control automatically.
+    usability_check: >-
+      A first-time user re-aims a recipe's camera by dragging its target handle in under 15 s without seeing an expression.
+  acceptance: >-
+    Mini scene "focus-rig": moving the point updates every linked property identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.angle-control
+  name: Angle Control
+  sources:
+    - ref: S02
+      item: Angle Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Angle Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Drive rotation, direction or orientation of many things from one dial.
+  projection_example: >-
+    One dial rotates all sunburst rays across the gable in sync, or sets the direction of a light sweep.
+  controls:
+    - { name: Angle (revolutions + degrees), type: angle, animatable: true }
+  animation: >-
+    Keyframable (values beyond 360° keep their revolution count); expression-readable in degrees.
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    Render-free control effect with a typed angle property (float degrees). The inspector shows a dial widget and the canvas a direction handle. Read by expr.engine in degrees.
+  io: >-
+    Saved in the project.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a "Direction" or "Rotation" dial in recipe controls; add manually via More controls → "Add a control".
+    defaults: >-
+      0°.
+    automation: >-
+      Recipes create and link it.
+    usability_check: >-
+      A first-time user changes a recipe's sweep direction by turning one dial in under 10 s.
+  acceptance: >-
+    Mini scene "ray-dial": all linked layers rotate identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.checkbox-control
+  name: Checkbox Control
+  sources:
+    - ref: S02
+      item: Checkbox Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Checkbox Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Switch something on or off for many layers at once, such as a visibility, a mode or an animation state.
+  projection_example: >-
+    A "Show sparks" switch turns every particle layer in the show on or off.
+  controls:
+    - { name: Checkbox, type: bool, animatable: true }
+  animation: >-
+    Keyframable with hold interpolation only; expressions read true/false (1/0).
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    Render-free control effect with a typed bool property. Keyframes are forced to hold. Read by expr.engine as a boolean that coerces to 0/1 in arithmetic.
+  io: >-
+    Saved in the project.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Appears as an on/off switch in recipe controls (for example "Sparks", "Outline only").
+    defaults: >-
+      Recipe-defined.
+    automation: >-
+      Recipes create and link it.
+    usability_check: >-
+      A first-time user turns a recipe feature off and back on, then undoes it, in under 10 s.
+  acceptance: >-
+    Mini scene "switch": toggle keyframes switch exactly on the keyed frame in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.color-control
+  name: Color Control
+  sources:
+    - ref: S02
+      item: Color Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Color Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Pick one colour that drives the colours of text, glows, strokes and effects across the show.
+  projection_example: >-
+    One "Theme colour" changes every glow, stroke and title colour in a scene for a client's brand.
+  controls:
+    - { name: Color, type: color, animatable: true }
+  animation: >-
+    Keyframable with colour interpolation; expression-readable as [r, g, b, a].
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core, color.management]
+  implementation: >-
+    Render-free control effect storing RGBA as float in the project working space (scene-linear), so values above 1 are allowed for HDR glows. The picker displays through the view transform. Expressions receive working-space values, and the colour space is stated in the expression docs.
+  io: >-
+    Saved in the project with its colour space tag.
+  limitations: >-
+    AE's colour controls are working-space values that are often display-referred, so translated AE expressions may need a conversion.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a colour swatch in recipe controls (for example "Glow colour"); "Theme colours" in the show panel collects them.
+    defaults: >-
+      Recipe-defined.
+    automation: >-
+      Recipes create and link it; "Use the same colour everywhere" merges duplicates into one control.
+    usability_check: >-
+      A first-time user recolours every element of a three-recipe scene by changing one theme swatch in under 20 s.
+  acceptance: >-
+    Mini scene "theme-colour": linked colours update identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.dropdown-menu-control
+  name: Dropdown Menu Control
+  sources:
+    - ref: S02
+      item: Dropdown Menu Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Dropdown Menu Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Choose between named options from a menu that switches looks, behaviours or variants through expressions.
+  projection_example: >-
+    A "Season" menu switches a scene between autumn, winter and spring palettes and particle types.
+  controls:
+    - { name: Menu (editable item labels / selected index), type: enum, animatable: true }
+  animation: >-
+    Keyframable with hold interpolation; expressions read the 1-based index as in AE.
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    Render-free control effect with an enum property whose item labels are user-editable. Items have stable internal IDs so renaming or reordering does not break keyframes. Expressions read the index, with a label accessor as a product extension.
+  io: >-
+    Saved in the project.
+  limitations: >-
+    Deleting a menu item that keyframes use triggers an explicit remap prompt instead of silent re-indexing.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Less common After Effects expression-control effect. Slider, checkbox, colour, point and angle controls and the control-set rig panel stay required for reusable rigs and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a "Style" or "Variant" menu in recipe controls.
+    defaults: >-
+      First item.
+    automation: >-
+      Recipes create menus for their variants.
+    usability_check: >-
+      A first-time user switches a recipe between three styles from one menu in under 10 s.
+  acceptance: >-
+    Mini scene "season-menu": switching index changes only the intended properties; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.layer-control
+  name: Layer Control
+  sources:
+    - ref: S02
+      item: Layer Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Layer Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Choose which layer an expression rig reads from, such as which shape, region or null it should follow.
+  projection_example: >-
+    Choose which window or roofline region a light-trace rig follows, without editing code.
+  controls:
+    - { name: Layer (or None), type: layer-ref, animatable: true }
+  animation: >-
+    Keyframable with hold interpolation; expressions receive the layer object.
+  dependencies: [expr.engine, proj.effect-stack, proj.layer, map.region]
+  implementation: >-
+    Render-free control effect storing a stable layer ID (not a stacking index), so reordering layers keeps the link. expr.engine resolves it to a layer handle, and a missing layer yields a clear expression error on the affected property.
+  io: >-
+    When a show is rebound to another venue, layer references that point to region roles resolve through the venue bindings.
+  limitations: >-
+    Referencing a layer creates a dependency edge, so cycles are detected and reported.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Less common After Effects expression-control effect. Slider, checkbox, colour, point and angle controls and the control-set rig panel stay required for reusable rigs and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a "Follow" or "Target" picker in recipe controls; click a region or layer on the canvas to choose it.
+    defaults: >-
+      The current selection when the recipe is applied.
+    automation: >-
+      Recipes create and link it; venue rebinding updates it.
+    usability_check: >-
+      A first-time user retargets a light trace from one window to another by clicking it in under 15 s.
+  acceptance: >-
+    AS-7 rebinding and mini scene "retarget": the rig follows the new region after rebinding; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.point-control
+  name: Point Control
+  sources:
+    - ref: S02
+      item: Point Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Point Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Place one draggable 2D point that positions, anchors or effect centres can follow or react to.
+  projection_example: >-
+    A draggable "light source" point that all rays and shadows on the facade aim away from.
+  controls:
+    - { name: Point (x / y), type: point2d, animatable: true }
+  animation: >-
+    Keyframable with spatial interpolation and motion path; attachable to tracker data.
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core, anim.motion-path]
+  implementation: >-
+    Render-free control effect with a typed point2d property and an on-canvas handle. The coordinate space is the composition, with an explicit toComp/fromComp in expressions. Read by expr.engine as a 2-vector.
+  io: >-
+    Saved in the project.
+  limitations: >-
+    AE's Point Control is layer-relative, so translated AE expressions may need space conversion.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a draggable handle on the canvas when a recipe exposes a point (for example "Light source").
+    defaults: >-
+      Recipe-defined, often the selection centre.
+    automation: >-
+      Recipes create and link it; it can snap to region corners and centres.
+    usability_check: >-
+      A first-time user moves a recipe's light source by dragging its handle in under 10 s.
+  acceptance: >-
+    Mini scene "light-source": all linked properties update consistently in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.slider-control
+  name: Slider Control
+  sources:
+    - ref: S02
+      item: Slider Control
+      category: Expression Controls
+      adobe_support:
+        gpu: false
+        bpc: []
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Slider Control
+      category: Expression Controls
+      checked: true
+  artist_can: >-
+    Control a number used by many properties at once, such as delay, speed, intensity or count, from one slider.
+  projection_example: >-
+    One "Delay" slider sets the stagger of 100 window light-ups driven by each window's index (brief §5).
+  controls:
+    - { name: Slider (value with editable slider range), type: number, animatable: true }
+  animation: >-
+    Keyframable with full temporal interpolation and graph editing; expression-readable.
+  dependencies: [expr.engine, proj.effect-stack, anim.keyframe.core, anim.graph-editor, expr.rigs]
+  implementation: >-
+    Render-free control effect with a float property. The UI slider range is editable (the AE "Edit Value" equivalent) and separate from optional hard limits. Read by expr.engine; recipes map their simple controls onto sliders.
+  io: >-
+    Saved in the project.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Appears as a named slider in recipe controls (for example "Delay", "Speed", "Intensity").
+    defaults: >-
+      Recipe-defined value and range.
+    automation: >-
+      Recipes create, name, range and link sliders.
+    usability_check: >-
+      A first-time user changes the stagger of the supplied 100-window rig by dragging one "Delay" slider in under 20 s without seeing an expression.
+  acceptance: >-
+    Mini scene "window-rig": 100 windows re-time identically in preview and export after reopening.
+  status: not-started
+  evidence: []
+
+- id: fx.expression-controls.control-set
+  name: Custom control set (rig control panel)
+  sources:
+    - ref: S01
+      item: Animated Shape Control (custom expression control effect in animation presets)
+      category: Expression Controls
+      checked: true
+    - ref: brief
+      item: §5 reusable rigs with exposed parameters; §0.4 progressive disclosure
+      category: product requirement
+      checked: true
+  artist_can: >-
+    Bundle several named controls (sliders, colours, switches, menus, points) into one panel that belongs to a rig or recipe. The panel can be copied, saved as a preset and reused.
+  projection_example: >-
+    A "Window light-up" rig exposes Delay, Order, Colour and Glow in one panel that can be applied to any building.
+  controls:
+    - { name: Control definitions (name / type / default / range / group), type: schema, animatable: false }
+    - { name: Exposed values, type: mixed, animatable: true }
+  animation: >-
+    Each contained control animates like its standalone type.
+  dependencies: [expr.engine, expr.rigs, ux.recipe-engine, proj.effect-stack, fx.expression-controls.slider-control, fx.expression-controls.color-control, fx.expression-controls.checkbox-control, fx.expression-controls.point-control]
+  implementation: >-
+    A project-level control-set schema (JSON: typed parameters with defaults, ranges and groups) is instantiated as one render-free effect. Recipes and rigs generate their simple controls as a control set, and saving it as a preset stores the schema plus linked expressions.
+  io: >-
+    Control-set presets are saved and shared as files with the rig.
+  limitations: >-
+    Changing a control set's schema after use requires an explicit migration of existing instances.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Every recipe's simple control panel is a control set; "Save as my style" stores it; "Add a control" in More controls extends it.
+    defaults: >-
+      Three to five controls per recipe (brief §0.4).
+    automation: >-
+      Generated by the recipe engine with names and ranges.
+    usability_check: >-
+      A first-time user saves a tweaked recipe as a style and applies it to another region in under 45 s.
+  acceptance: >-
+    Mini scene "rig-reuse": a saved control set applied to a second venue reproduces the same animation for the same values.
+  status: not-started
+  evidence: []

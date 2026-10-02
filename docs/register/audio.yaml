@@ -1,0 +1,922 @@
+# Sound and music — Before Effects capability register
+# Sources: S24 (Convert Audio To Keyframes; checked 2026-10-01), S35 (Audio effects list; checked 2026-10-01), S01 (audio layers, waveform, audio preview), S13 (audio spectrum/waveform generators, covered by fx.generate.*), brief §13 (sound and music-driven animation) and architecture (Web Audio, worker analysis, deterministic mixdown). Audio effects themselves are fx.audio.* entries.
+
+- id: audio.track
+  name: Audio tracks and audio layers
+  sources:
+    - ref: S01
+      item: Audio layers; project audio sample rate; audio switch
+      category: Work with layers / Project settings
+      checked: false
+    - ref: brief
+      item: §13 audio tracks
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Add music and sound files to the timeline as audio layers, mute or solo them, move and trim them, and hear them in
+    sync with the picture.
+  projection_example: >-
+    Drop the show's soundtrack under a three-scene facade show and line scenes up to it.
+  controls:
+    - { name: Audio switch (mute), type: bool, animatable: false }
+    - { name: Solo, type: bool, animatable: false }
+    - { name: Source in/out, type: time, animatable: false }
+    - { name: Project sample rate, type: enum(44100|48000|96000), animatable: false }
+  animation: >-
+    Layer timing and levels follow normal keyframe/expression rules.
+  dependencies: [proj.layer, proj.composition, audio.preview-sync]
+  implementation: >-
+    FFmpeg probes and decodes WAV, AIFF, FLAC, MP3, AAC, Opus and video soundtracks to 32-bit float PCM at the project
+    rate (soxr resampling), cached as a decoded file keyed by source hash; Web Audio plays the cache during preview.
+  io: >-
+    Decoded caches are rebuildable; sources referenced for relink/collect.
+  limitations: >-
+    Lossy sources keep their encoder delay; the app compensates using container metadata where present.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Add music" button, or drag a song onto the timeline.
+    defaults: >-
+      Starts at 0; composition extended to the song length if the user agrees.
+    automation: >-
+      Converts sample rate and runs analysis (audio.analysis) automatically on import.
+    usability_check: >-
+      A novice adds a song and hears it with the preview in under 30 s.
+  acceptance: >-
+    AS-1 timed to audio; AS-6 audio timing measured in export.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.waveform
+  name: Waveform display
+  sources:
+    - ref: S01
+      item: Waveform property display in the Timeline panel
+      category: Work with layers
+      checked: false
+  artist_can: >-
+    See the waveform of each audio layer in the timeline at any zoom, to place cuts and keyframes on the music by eye.
+  projection_example: >-
+    Spot the big drum hit in the waveform and line up the wall-crack moment with it.
+  controls:
+    - { name: Show waveform, type: bool, animatable: false }
+    - { name: Display, type: enum(stereo|mono-sum|spectrogram), animatable: false }
+    - { name: Vertical zoom, type: float, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [audio.track, audio.analysis]
+  implementation: >-
+    Multi-resolution min/max/RMS peak pyramid computed in a worker during analysis and drawn with WebGPU; spectrogram
+    from the cached STFT.
+  io: >-
+    Peak files cached with analysis data.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Waveform shows automatically under every music layer.
+    defaults: >-
+      Mono sum, beat markers overlaid.
+    automation: >-
+      n/a
+    usability_check: >-
+      Users locate a named musical hit in the waveform within 15 s.
+  acceptance: >-
+    Waveform drawing stays under 4 ms per timeline repaint for a 10-minute track.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.trim-fade
+  name: Audio trims, splits and fades
+  sources:
+    - ref: S01
+      item: Trimming and splitting layers; fades via Audio Levels keyframes
+      category: Work with layers
+      checked: false
+    - ref: brief
+      item: §13 trims, fades
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Trim, split and slip audio, and add fade-ins, fade-outs and crossfades with selectable curve shapes.
+  projection_example: >-
+    Fade the ambient intro into the main track as the facade lights up.
+  controls:
+    - { name: Fade in / out duration, type: time, animatable: false }
+    - { name: Fade curve, type: enum(linear|equal-power|exponential|s-curve), animatable: false }
+    - { name: Crossfade on overlap, type: bool, animatable: false }
+  animation: >-
+    Fades are generated Audio Levels keyframes (editable) or clip-level fade parameters.
+  dependencies: [audio.track, audio.levels]
+  implementation: >-
+    Fades stored as clip parameters applied in the deterministic mix graph; also expressible as level keyframes.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drag the fade handle at the top corner of an audio clip.
+    defaults: >-
+      Equal-power, 1 s.
+    automation: >-
+      Overlapping clips get a crossfade automatically.
+    usability_check: >-
+      A novice adds a 2 s fade-out in under 10 s.
+  acceptance: >-
+    Exported audio fade matches the curve within 0.1 dB at sampled points.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.levels
+  name: Level automation and loudness
+  sources:
+    - ref: S24
+      item: Keyframes for audio volume (Audio Levels)
+      category: Animation keyframes
+      checked: true
+    - ref: S01
+      item: Audio Levels property (dB)
+      category: Work with layers
+      checked: false
+  artist_can: >-
+    Set and automate the volume of each audio layer in dB, and normalise or limit the final mix loudness.
+  projection_example: >-
+    Duck the music under a recorded voice-over introducing the show.
+  controls:
+    - { name: Audio levels (dB), type: float, animatable: true }
+    - { name: Normalise to (LUFS), type: float, animatable: false }
+    - { name: Peak limit (dBTP), type: float, animatable: false }
+  animation: >-
+    Levels keyframable with rubber-band editing on the waveform; expression-linkable.
+  dependencies: [audio.track, anim.keyframe.core]
+  implementation: >-
+    Gain automation sampled per audio frame in the mix graph (Web Audio GainNode for preview; same curve math in the
+    offline render); loudness measured with ITU-R BS.1770 integrated LUFS in the analysis worker.
+  io: >-
+    Normalisation applied at export (render.audio).
+  limitations: >-
+    Real venue loudness depends on the PA; LUFS targets are for file consistency.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Volume slider on the clip; drag points on the waveform's level line.
+    defaults: >-
+      0 dB; export normalised to −14 LUFS with −1 dBTP limit (editable).
+    automation: >-
+      "Duck music under voice" automatically writes level keyframes.
+    usability_check: >-
+      A user lowers music under a voice clip in one action.
+  acceptance: >-
+    Mini scene "duck-voice": exported loudness within ±0.5 LU of target.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.pan-mix
+  name: Panning, mixing and meters
+  sources:
+    - ref: S35
+      item: Stereo Mixer effect (Left/Right level, pan, invert phase)
+      category: Audio
+      checked: true
+    - ref: brief
+      item: §13 panning/mixing
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Pan sounds left and right, balance several layers into one mix, and watch peak and loudness meters with clip warnings.
+  projection_example: >-
+    A whoosh pans left to right as light races across the facade.
+  controls:
+    - { name: Pan, type: float, animatable: true }
+    - { name: Master level, type: float, animatable: true }
+    - { name: Meters (peak/RMS/LUFS), type: display, animatable: false }
+    - { name: Output channel layout, type: enum(stereo|mono), animatable: false }
+  animation: >-
+    Pan keyframable and linkable to a layer's x position by expression (as in the S20 example).
+  dependencies: [audio.levels, fx.audio.stereo-mixer, expr.engine]
+  implementation: >-
+    Mix graph defined in core: per-layer gain/pan (equal-power) → audio effect chain → master; Web Audio
+    StereoPannerNode for preview with identical pan law in the offline renderer.
+  io: >-
+    Stereo mix exported; multichannel is audio.channel-layout.
+  limitations: >-
+    No surround panning yet (see audio.channel-layout).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Follow the motion" pan option on a sound linked to a moving layer.
+    defaults: >-
+      Centre pan.
+    automation: >-
+      Clip warnings show which layer is too loud.
+    usability_check: >-
+      A user makes a sound follow a moving object's position in two actions.
+  acceptance: >-
+    Mini scene "whoosh-pan": pan law identical between preview capture and export (±0.1 dB).
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.preview-sync
+  name: Audio playback and scrubbing in sync with preview
+  sources:
+    - ref: S01
+      item: Preview audio; audio scrubbing; RAM preview with audio
+      category: View and preview
+      checked: false
+  artist_can: >-
+    Hear audio during playback and while scrubbing, staying in sync with the picture even when frames drop.
+  projection_example: >-
+    Scrub across the drop to feel where the crack should land.
+  controls:
+    - { name: Audio during preview, type: bool, animatable: false }
+    - { name: Scrub audio, type: bool, animatable: false }
+    - { name: A/V offset (ms), type: float, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [audio.track, preview.playback, preview.dropped-frames]
+  implementation: >-
+    The audio clock is the master during playback: Web Audio AudioContext currentTime (with outputLatency compensation)
+    selects the video frame; scrubbing plays short windowed grains from the decoded cache.
+  io: >-
+    none
+  limitations: >-
+    Bluetooth and some drivers add latency; the offset control and a flash/beep calibration tool compensate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Press Space; audio just plays in sync.
+    defaults: >-
+      Audio on, scrub on.
+    automation: >-
+      Measures device output latency and compensates automatically.
+    usability_check: >-
+      Users judge picture/audio sync as correct on a beat-flash test in 9 of 10 trials.
+  acceptance: >-
+    Measured A/V offset in preview under 20 ms on the target machine.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.effect-render
+  name: Audio effect processing (deterministic)
+  sources:
+    - ref: S35
+      item: Audio effects — Backwards, Bass & Treble, Compressor, De-esser, Delay, Distortion, Flange & Chorus, Gate, High-Low Pass, Modulator, Parametric EQ, Reverb, Stereo Mixer, Tone
+      category: Audio
+      checked: true
+    - ref: brief
+      item: §13 useful filtering/EQ/delay/reverb controls
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Put EQ, filters, delay, reverb, compression and other audio effects on audio layers and hear the same result in
+    preview and in the exported file.
+  projection_example: >-
+    Add a big reverb tail to the final chord as the facade fades to black.
+  controls:
+    - { name: Audio effect stack, type: effect-list, animatable: true }
+  animation: >-
+    Effect parameters keyframable; automation sampled per audio block.
+  dependencies: [proj.effect-stack, fx.audio.parametric-eq, fx.audio.high-low-pass, fx.audio.delay, fx.audio.reverb, fx.audio.compressor, fx.audio.bass-treble]
+  implementation: >-
+    Effects implemented as AudioWorklet DSP (own code, not browser-specific nodes) so the same processing runs in the
+    AudioContext and in OfflineAudioContext; the export mix is rendered offline once and cached as WAV keyed by mix-graph hash.
+  io: >-
+    Cached rendered mix reused by render.audio.
+  limitations: >-
+    Live preview may use larger blocks under load; export is always the full-quality offline render.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effect processing and live audio input are not needed for music-synced shows now. Tracks, analysis, beats, cueing and export stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Sound" tab on an audio clip: Warmer / Brighter / Bigger room / Telephone presets.
+    defaults: >-
+      Presets map to editable effect stacks.
+    automation: >-
+      n/a
+    usability_check: >-
+      A user adds reverb to the final chord in under 30 s.
+  acceptance: >-
+    Offline mix bit-identical across two exports; preview vs export difference below −60 dBFS.
+  status: not-started
+  evidence: []
+
+- id: audio.to-keyframes
+  name: Convert audio to keyframes
+  sources:
+    - ref: S24
+      item: Convert Audio To Keyframes (analyses amplitude in the work area and creates keyframes)
+      category: Animation keyframes
+      checked: true
+  artist_can: >-
+    Turn the loudness of the soundtrack into keyframes on a control layer (both, left and right channels) that any
+    property can follow.
+  projection_example: >-
+    Window brightness follows the song's loudness frame by frame.
+  controls:
+    - { name: Range, type: enum(work-area|whole-layer), animatable: false }
+    - { name: Channels, type: enum(both|left|right|all), animatable: false }
+    - { name: Smoothing, type: float, animatable: false }
+    - { name: Live link vs bake, type: enum(link|bake), animatable: false }
+  animation: >-
+    Creates an "Audio Amplitude" control layer with Slider keyframes per frame (bake) or a live analysis link.
+  dependencies: [audio.analysis, fx.expression-controls.slider-control, anim.keyframe.core, audio.envelope]
+  implementation: >-
+    Reads the cached per-frame RMS/peak series from audio.analysis at composition frame times (flicks) and writes
+    slider keyframes as one undoable op; link mode avoids thousands of keyframes by reading the series directly.
+  io: >-
+    none
+  limitations: >-
+    Amplitude alone ignores pitch and rhythm; beat and band signals give more musical results.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Move with the music" recipe → More controls → "Make keyframes".
+    defaults: >-
+      Linked (not baked), both channels, light smoothing.
+    automation: >-
+      Creates and names the control layer and wires the selected property.
+    usability_check: >-
+      A user makes an object pulse with loudness in 3 actions.
+  acceptance: >-
+    AS-1: keyframe values equal the analysis series at each frame; preview and export identical.
+  status: not-started
+  evidence: []
+
+- id: audio.analysis
+  name: Deterministic audio pre-analysis
+  sources:
+    - ref: brief
+      item: §13 pre-analysed audio must drive the same frames during export as during preview
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Rely on music-driven animation looking exactly the same in preview, after reopening, and in every export.
+  projection_example: >-
+    The bass-driven pulses in a two-minute facade show land on identical frames in the preview and the master render.
+  controls:
+    - { name: Analysis status, type: display, animatable: false }
+    - { name: Re-analyse with settings, type: action, animatable: false }
+    - { name: Hop size, type: enum(256|512|1024), animatable: false }
+  animation: >-
+    Provides signals (amplitude, bands, onsets, beats) sampled at any flick time.
+  dependencies: [audio.track, proj.project-model]
+  implementation: >-
+    Worker computes STFT (fixed window/hop at the project rate), RMS, spectral flux onsets, tempogram + dynamic-programming
+    beat tracker, and band energies once per audio asset; results stored as float32 arrays keyed by source hash +
+    analysis-version + parameters. Preview and export both sample these arrays by flick time; nothing is computed live.
+  io: >-
+    Analysis caches saved with the project (small: ≈ 1–5 MB per song) and collected with it.
+  limitations: >-
+    Changing analysis code requires a version bump; old caches remain valid for old projects.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic when music is added; "Analysing music…" progress chip.
+    defaults: >-
+      512-sample hop at 48 kHz.
+    automation: >-
+      Runs in the background on import; nothing to configure.
+    usability_check: >-
+      Users never need to trigger analysis manually in the guided path.
+  acceptance: >-
+    AS-1/AS-6: per-frame driven values identical (bit-exact) between preview capture, reopened project and export.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.beat-markers
+  name: Beat and bar markers
+  sources:
+    - ref: brief
+      item: §13 beat markers
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get automatic beat, downbeat and bar markers on the music that can be moved, added or deleted.
+  projection_example: >-
+    Each window lights on a beat marker; the user shifts two markers where the drummer plays ahead.
+  controls:
+    - { name: Show beats / downbeats / bars, type: flags, animatable: false }
+    - { name: Edit marker, type: tool, animatable: false }
+    - { name: Sensitivity, type: percent, animatable: false }
+  animation: >-
+    Markers are timeline markers usable by recipes, snapping and expressions (marker.nearestKey style).
+  dependencies: [audio.analysis, audio.bpm-grid]
+  implementation: >-
+    Beat positions from the DP beat tracker refined to nearest onset; downbeats from beat-synchronous chroma/energy
+    periodicity; user edits stored as overrides so re-analysis keeps them.
+  io: >-
+    Export/import markers as CSV/JSON.
+  limitations: >-
+    Rubato, live recordings and tempo-free ambient music give unreliable beats; manual tapping is the fallback.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Beat ticks appear on the music clip; "Tap along" to fix them.
+    defaults: >-
+      Beats and bars shown.
+    automation: >-
+      Detects beats on import; tap-tempo correction re-fits the grid.
+    usability_check: >-
+      A user corrects a wrong downbeat in under 30 s.
+  acceptance: >-
+    Beat F-measure ≥ 0.9 on a supplied pop/electronic test set; user overrides survive re-analysis.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.bpm-grid
+  name: BPM grid and musical snapping
+  sources:
+    - ref: brief
+      item: §13 BPM grid
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Set or detect tempo, time signature and downbeat offset, show a bar/beat grid in the timeline, and snap keyframes,
+    layers and markers to beats or subdivisions.
+  projection_example: >-
+    Snap the start of every scene to the first beat of a bar.
+  controls:
+    - { name: BPM, type: float, animatable: false }
+    - { name: Time signature, type: enum(2/4|3/4|4/4|6/8|7/8), animatable: false }
+    - { name: Downbeat offset, type: time, animatable: false }
+    - { name: Tempo changes, type: tempo-map, animatable: false }
+    - { name: Snap to, type: enum(off|bar|beat|half|quarter|triplet), animatable: false }
+  animation: >-
+    Grid positions available to expressions (beat index, bar phase).
+  dependencies: [audio.analysis, ux.operation-system]
+  implementation: >-
+    Tempo map in core (piecewise constant BPM segments) converts musical time ↔ flicks exactly; detected tempo seeds
+    it; snapping uses the tempo map, not the frame grid.
+  io: >-
+    Tempo map importable from MIDI files (audio.midi-import).
+  limitations: >-
+    Gradual tempo drift in live recordings needs many tempo segments or beat-marker snapping instead.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Snap to beat" toggle in the timeline.
+    defaults: >-
+      Detected BPM, 4/4, snap to beat.
+    automation: >-
+      Detects BPM and offset; tap tempo to correct.
+    usability_check: >-
+      A user snaps three scene starts to bars in under 60 s.
+  acceptance: >-
+    Snapped keyframes fall within 1 ms of tempo-map beat times.
+  status: not-started
+  evidence: []
+
+- id: audio.onsets
+  name: Editable onset detection
+  sources:
+    - ref: brief
+      item: §13 editable onset detection
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Find the moments where notes or hits start (kicks, snares, plucks), per frequency band, and add, remove or move them.
+  projection_example: >-
+    Every snare hit cracks a different brick; the user deletes ghost notes they do not want.
+  controls:
+    - { name: Band, type: enum(full|low|mid|high|custom), animatable: false }
+    - { name: Sensitivity / threshold, type: percent, animatable: false }
+    - { name: Minimum gap, type: time, animatable: false }
+    - { name: Edit onsets, type: tool, animatable: false }
+  animation: >-
+    Onsets act as triggers for recipes and expressions (time since last onset, onset index).
+  dependencies: [audio.analysis, audio.bands]
+  implementation: >-
+    Spectral-flux onset detection per band with adaptive median threshold and peak picking; edits stored as overrides
+    over the detected list.
+  io: >-
+    CSV/JSON export.
+  limitations: >-
+    Dense mixes blur onsets between instruments; band choice matters.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Hits" lane under the music: Kick / Snare / Hi-hat presets.
+    defaults: >-
+      Kick (low band), medium sensitivity, 80 ms minimum gap.
+    automation: >-
+      Suggests band presets by analysing where energy peaks.
+    usability_check: >-
+      A user triggers an effect on each kick and removes two unwanted hits in under 2 minutes.
+  acceptance: >-
+    Onset F-measure ≥ 0.85 on supplied drum stems; overrides persist.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"
+
+- id: audio.bands
+  name: Frequency-band control signals
+  sources:
+    - ref: brief
+      item: §13 frequency-band control signals
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get continuous control signals for bass, mids, highs or custom frequency ranges to drive any property.
+  projection_example: >-
+    Bass energy pushes the wall outward while high-hats sparkle particles along the roofline.
+  controls:
+    - { name: Band preset, type: enum(sub|bass|low-mid|mid|high|custom), animatable: false }
+    - { name: Low / high frequency (Hz), type: float, animatable: false }
+    - { name: Scale, type: enum(linear|db), animatable: false }
+    - { name: Normalise, type: enum(off|per-song|per-section), animatable: false }
+  animation: >-
+    Signals readable by expressions and recipes at any time.
+  dependencies: [audio.analysis, audio.envelope]
+  implementation: >-
+    Band energies summed from cached STFT bins (Hann window, fixed hop), stored as float arrays; custom bands computed on
+    demand and cached.
+  io: >-
+    none
+  limitations: >-
+    Overlapping instruments share bands; stems give cleaner control.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      In "Move with the beat": "React to" Bass / Voice / Highs.
+    defaults: >-
+      Bass, normalised per song.
+    automation: >-
+      Normalises signal to 0–1 so strength sliders behave predictably.
+    usability_check: >-
+      A user makes something react only to bass in 3 actions.
+  acceptance: >-
+    Mini scene "bass-push": signal identical across preview and export.
+  status: not-started
+  evidence: []
+
+- id: audio.envelope
+  name: Signal shaping (smoothing, attack, release)
+  sources:
+    - ref: brief
+      item: §13 smoothing/attack/release
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Shape any audio signal with smoothing, attack, release, threshold, hold, range mapping and curves so motion feels
+    musical rather than jittery.
+  projection_example: >-
+    Windows flash instantly on each kick and fade out slowly over half a beat.
+  controls:
+    - { name: Attack, type: time, animatable: false }
+    - { name: Release, type: time, animatable: false }
+    - { name: Smoothing, type: float, animatable: false }
+    - { name: Threshold, type: float, animatable: true }
+    - { name: Output range (min/max), type: float, animatable: true }
+    - { name: Response curve, type: curve, animatable: false }
+  animation: >-
+    Shaping applies to any signal used by drivers; range and threshold keyframable.
+  dependencies: [audio.analysis, anim.graph-editor]
+  implementation: >-
+    Deterministic one-pole attack/release follower computed over the whole cached series (from t=0), so the value at
+    any frame is independent of where playback started; results memoised per parameter set.
+  io: >-
+    none
+  limitations: >-
+    Look-ahead (anticipating a hit) is offered as a negative offset, which is non-causal and only valid for recorded audio.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Snappy ↔ Smooth" slider in the "Move with the beat" recipe.
+    defaults: >-
+      Attack 10 ms, release 250 ms.
+    automation: >-
+      Picks release from tempo (≈ half a beat).
+    usability_check: >-
+      Users change the feel from jittery to smooth with one slider in under 10 s.
+  acceptance: >-
+    Value at frame N identical whether playback started at 0 or at N.
+  status: not-started
+  evidence: []
+
+- id: audio.drive
+  name: Move with the beat (audio-driven properties)
+  sources:
+    - ref: brief
+      item: §0.1 "Add music, choose Move with the beat"; §13 audio-amplitude-to-animation
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Pick elements, choose what drives them (beat, hits, bass, loudness) and how strongly, and they move, glow or change
+    with the music — editable afterwards.
+  projection_example: >-
+    Select 40 windows, choose "Pulse with the bass", set strength 70% and colour blue.
+  controls:
+    - { name: Driver, type: enum(beat|bar|onsets|band|loudness|section), animatable: false }
+    - { name: Target property, type: property-ref, animatable: false }
+    - { name: Strength, type: percent, animatable: true }
+    - { name: Offset per element, type: time, animatable: false }
+    - { name: Feel (attack/release), type: preset, animatable: false }
+  animation: >-
+    Creates expression links or baked keyframes on targets; per-element offsets via index.
+  dependencies: [audio.analysis, audio.envelope, audio.bands, audio.onsets, ux.recipe-engine, expr.rigs, tool.sequence-light-up]
+  implementation: >-
+    Recipe generates a driver control layer plus expressions reading analysis signals; manual edits are tracked as
+    overrides; AI and UI use the same ops.
+  io: >-
+    none
+  limitations: >-
+    Driving many properties per element is costly in preview; heavy rigs can be baked.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select elements → "Move with the music" → React to / Strength / Style.
+    defaults: >-
+      Beat driver, brightness target, 60% strength, snappy feel.
+    automation: >-
+      Builds control layer, expressions and per-element offsets automatically.
+    usability_check: >-
+      Within the §0.10 20-minute task, users add music-reactive windows in ≤ 3 deliberate actions.
+  acceptance: >-
+    AS-1 timed to audio; regenerate with new strength keeps manual overrides.
+  status: not-started
+  evidence: []
+
+- id: audio.cueing
+  name: Musical cueing (quantise and trigger)
+  sources:
+    - ref: brief
+      item: §13 common musical cueing
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Quantise keyframes, layer starts and markers to beats, trigger an animation every N beats or bars, and cut scenes on bar lines.
+  projection_example: >-
+    A crack spreads one segment every bar; the scene changes on the downbeat of bar 33.
+  controls:
+    - { name: Quantise selection to, type: enum(bar|beat|half|quarter|onset), animatable: false }
+    - { name: Trigger every, type: int, animatable: false }
+    - { name: Trigger unit, type: enum(beat|bar|onset|marker), animatable: false }
+    - { name: Swing, type: percent, animatable: false }
+  animation: >-
+    Generates keyframes or time-remap triggers; edits remain ordinary keyframes.
+  dependencies: [audio.bpm-grid, audio.beat-markers, audio.onsets, anim.keyframe.core, anim.time-remap]
+  implementation: >-
+    Quantise is an op on selected keys/layers using the tempo map; triggers are recipe-generated time-remap or keyframe
+    sequences retimed when the tempo map changes.
+  io: >-
+    none
+  limitations: >-
+    Retiming after a tempo change only moves generated items; hand-placed keys are left alone and flagged.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Put on the beat" on selected keyframes/layers; "Repeat every bar" on an animation.
+    defaults: >-
+      Nearest beat.
+    automation: >-
+      Shows a preview of where items will move before committing.
+    usability_check: >-
+      A user quantises 8 keyframes to beats in one action.
+  acceptance: >-
+    Mini scene "crack-per-bar": every trigger within one frame of its bar line.
+  status: not-started
+  evidence: []
+
+- id: audio.sections
+  name: Song sections
+  sources:
+    - ref: brief
+      item: §13 common musical cueing; §0.6 automatically propose beat timing
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Get suggested section markers (intro, verse, chorus, drop, outro) that can be renamed and moved and used to switch scenes.
+  projection_example: >-
+    The facade switches from water to fire at the first chorus without manual searching.
+  controls:
+    - { name: Detected sections, type: marker-list, animatable: false }
+    - { name: Granularity, type: enum(coarse|fine), animatable: false }
+  animation: >-
+    Section markers usable by recipes and expressions.
+  dependencies: [audio.analysis, audio.beat-markers]
+  implementation: >-
+    Python sidecar: librosa (ISC) beat-synchronous chroma/MFCC self-similarity with Laplacian segmentation, boundaries
+    snapped to downbeats; labels are suggestions only. Cached with analysis.
+  io: >-
+    none
+  limitations: >-
+    Section labels are guesses; boundaries are more reliable than names.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Section bands across the music clip; "Change scene here".
+    defaults: >-
+      Coarse sections.
+    automation: >-
+      Runs with analysis; scene starts can snap to section boundaries.
+    usability_check: >-
+      A user places three scenes on suggested sections in under 2 minutes.
+  acceptance: >-
+    Boundary hit rate ≥ 70% within one bar on a supplied pop test set.
+  status: not-started
+  evidence: []
+
+- id: audio.midi-import
+  name: MIDI file as a cue source
+  sources:
+    - ref: brief
+      item: §13 common musical cueing; beat markers and BPM grid
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Import a MIDI file from the music project to get an exact tempo map and per-instrument note triggers.
+  projection_example: >-
+    The composer's MIDI drum track drives brick hits with sample-accurate timing instead of detected onsets.
+  controls:
+    - { name: MIDI file, type: file, animatable: false }
+    - { name: Track / channel / note filter, type: filter, animatable: false }
+    - { name: Velocity as strength, type: bool, animatable: false }
+    - { name: Alignment offset, type: time, animatable: false }
+  animation: >-
+    Notes become onset-style triggers with velocity values.
+  dependencies: [audio.bpm-grid, audio.onsets]
+  implementation: >-
+    Standard MIDI File parser in TypeScript core (tempo meta events → tempo map; note on/off → triggers).
+  io: >-
+    .mid import.
+  limitations: >-
+    Only useful when the music's MIDI exists and aligns with the audio render.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drag a .mid file onto the music clip.
+    defaults: >-
+      Tempo map adopted; drum notes offered as hit lanes.
+    automation: >-
+      Aligns MIDI to audio by cross-correlating onsets and suggests the offset.
+    usability_check: >-
+      A user drives an effect from a MIDI drum lane in under 2 minutes.
+  acceptance: >-
+    Trigger times equal MIDI note times within 1 ms after alignment.
+  status: not-started
+  evidence: []
+
+- id: audio.live-input
+  name: Live audio input with record/bake path
+  sources:
+    - ref: brief
+      item: §13 live inputs need a recording/baking path for reproducible exports
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Drive visuals from a live microphone or line input during rehearsal or a show, and record that input so the same
+    performance can be exported reproducibly.
+  projection_example: >-
+    A live drummer drives facade pulses during a rehearsal; the take is recorded and baked for the final video export.
+  controls:
+    - { name: Input device / channels, type: enum(dynamic), animatable: false }
+    - { name: Monitor, type: bool, animatable: false }
+    - { name: Record take, type: action, animatable: false }
+    - { name: Bake take to audio layer, type: action, animatable: false }
+  animation: >-
+    Live signals feed the same driver API as pre-analysed audio; baked takes become ordinary audio layers with analysis.
+  dependencies: [audio.analysis, audio.drive, show.cue-list]
+  implementation: >-
+    getUserMedia + AudioWorklet capture; live analysis uses the same DSP code in streaming mode; takes written to WAV
+    with timestamps relative to show time, then analysed offline like any import.
+  io: >-
+    WAV takes stored in the project.
+  limitations: >-
+    Live mode is non-deterministic by nature; exports always use a recorded take. Live show operation itself is out of this area.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Audio effect processing and live audio input are not needed for music-synced shows now. Tracks, analysis, beats, cueing and export stay required."
+  milestone: E
+  beginner:
+    action: >-
+      "Use live sound" toggle; "Record this take" button.
+    defaults: >-
+      Default input, monitoring off.
+    automation: >-
+      Recorded takes are analysed and offered as the export source automatically.
+    usability_check: >-
+      A user records a live take and exports a video driven by it without re-routing anything.
+  acceptance: >-
+    Mini scene "live-take": exported motion matches the recorded take bit-exact on re-export.
+  status: not-started
+  evidence: []
+
+- id: audio.channel-layout
+  name: Multichannel and venue audio layouts
+  sources:
+    - ref: brief
+      item: §13 panning/mixing; §18 audio routing (live)
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Mix to more than two channels (e.g. 5.1 or a venue's speaker zones) and export multichannel files.
+  projection_example: >-
+    Sounds follow light around a courtyard with speakers on three sides.
+  controls:
+    - { name: Channel layout, type: enum(stereo|5.1|7.1|custom), animatable: false }
+    - { name: Object panner, type: point2d, animatable: true }
+  animation: >-
+    Panner keyframable.
+  dependencies: [audio.pan-mix]
+  implementation: >-
+    Candidate: VBAP panning in the mix graph; FFmpeg multichannel PCM in MOV/WAV.
+  io: >-
+    Multichannel WAV/MOV.
+  limitations: >-
+    User 2026-10-02: STEREO SOUND is required now (tracks, waveforms, trims, fades, volume, pan, mix, export, beat-driven animation). The mixer uses a bus and channel-layout model so multichannel output and advanced routing can be added later without migration.
+
+    Open question: will any venue need more than stereo from this app, or does the venue's audio system handle spatialisation?
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Speaker layout" picker in export (if adopted).
+    defaults: >-
+      Stereo.
+    automation: >-
+      n/a
+    usability_check: >-
+      A user exports a 5.1 file that verifies with 6 channels.
+  acceptance: >-
+    Decision recorded.
+  status: implemented
+  evidence:
+    - "journey: import-media (picture, video, music copied into project media; beat found 119.9 BPM), video-in-windows (frame-accurate FFmpeg decode, proxy sizes for preview), music-on-timeline (waveform), move-with-beat, audio-preview-sync (picture follows sound clock, 0 ms), export-with-sound (Sound: yes), av-timing-measured (59/59 clicks paired, mean 1 ms, worst 1 frame @30 fps)"
+    - "unit: packages/core/test/audio.test.ts (tempo 90/120/128/140 BPM within 2 BPM, beats within 30 ms, downbeat phase, deterministic)"

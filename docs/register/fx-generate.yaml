@@ -1,0 +1,1679 @@
+# Generate effects — Before Effects capability register
+# Sources: S02 effect list + support matrix (Generate rows), S13 Generate effects (incl. bundled Cycore list), Cycore plugins page (S01 navigation), brief §0, §2, §11B, §13, §19. Live pages checked 2026-10-01 in a browser (Adobe CDN blocks non-browser fetches).
+
+- id: fx.generate.4-color-gradient
+  name: 4-Color Gradient
+  sources:
+    - ref: S02
+      item: 4-Color Gradient
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S13
+      item: 4-Color Gradient
+      category: Generate
+      checked: true
+  artist_can: >-
+    Fill a layer with a soft blend of four colors, each anchored at a movable point, with jitter that hides banding.
+  projection_example: >-
+    A slowly drifting sunset wash covers the whole facade behind traced window outlines.
+  controls:
+    - { name: "Points 1-4", type: "point2d x4", animatable: true }
+    - { name: "Colors 1-4", type: "color x4", animatable: true }
+    - { name: "Blend", type: "float", animatable: true }
+    - { name: "Jitter (anti-banding)", type: "float", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blending mode", type: "enum", animatable: false }
+  animation: >-
+    Points and colors keyframable and expression-linkable; points can bind to region corners or tracked points; colors can be driven by audio bands.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, mask.blend-modes, color.management, fx.generate.region-space-mapping, fx.generate.audio-reactive-controls]
+  implementation: >-
+    One WGSL pass: inverse-distance-weighted blend of four colors (Blend = falloff exponent) in scene-linear, optional OKLab interpolation, output rgba16float. Jitter = seeded blue-noise dither. Bounds = layer, no temporal deps.
+  io: >-
+    none
+  limitations: >-
+    Adobe's exact falloff curve is matched visually, not numerically. 8-bit projector feeds can still band unless export dithering (render.encode) is on.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Color wash" in Add content → Color; drag the four color dots on the canvas.
+    defaults: >-
+      Four harmonious colors from the show palette, points at the selected region's corners, Jitter on.
+    automation: >-
+      Points snap to region corners; colors come from the show palette; "Slow drift" is one toggle that creates the point animation.
+    usability_check: >-
+      A first-time user fills a selected wall with a four-color wash and changes one color in under 45 s without opening More controls.
+  acceptance: >-
+    Mini scene "color-wash": an 8-bit export with dithering shows no visible banding; preview and export match within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.advanced-lightning
+  name: Advanced Lightning
+  sources:
+    - ref: S02
+      item: Advanced Lightning
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Advanced Lightning
+      category: Generate
+      checked: true
+  artist_can: >-
+    Generate branching electric bolts from an origin toward a direction point or radius, styled with core and glow settings. Bolts can wrap around a layer's opaque areas or stay inside them (Alpha Obstacle).
+  projection_example: >-
+    Lightning crackles out of the doorway and wraps around the columns, using the column regions as the obstacle matte.
+  controls:
+    - { name: "Lightning type (Direction, Strike, Breaking, Bouncy, Omni, Anywhere, Vertical, Two-Way Strike)", type: "enum", animatable: false }
+    - { name: "Origin", type: "point2d", animatable: true }
+    - { name: "Direction / Outer radius", type: "point2d", animatable: true }
+    - { name: "Conductivity state", type: "float", animatable: true }
+    - { name: "Core settings (radius, opacity, color)", type: "group", animatable: true }
+    - { name: "Glow settings (radius, opacity, color)", type: "group", animatable: true }
+    - { name: "Alpha obstacle", type: "float", animatable: true }
+    - { name: "Turbulence", type: "float", animatable: true }
+    - { name: "Forking", type: "percent", animatable: true }
+    - { name: "Decay and Decay main core", type: "float + bool", animatable: true }
+    - { name: "Composite on original", type: "bool", animatable: false }
+    - { name: "Expert (complexity, min fork distance, termination threshold, main-core collision only, fractal type, core drain, fork strength, fork variation)", type: "group", animatable: true }
+    - { name: "Seed (product addition)", type: "seed", animatable: false }
+  animation: >-
+    The bolt does not animate by itself: animate Conductivity State, or link it to time or audio onsets, to make it crackle. Origin and Direction accept tracked points and region anchors.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, fx.noise-grain.seed-control, fx.generate.audio-reactive-controls, fx.stylize.glow, map.region]
+  implementation: >-
+    A WGSL compute pass generates bolt segments: a seeded fractal random walk with branching, where conductivity is the noise phase. Alpha obstacles steer it by sampling a fixed-resolution distance field of the layer alpha. Segments are drawn as analytic capsule SDFs, then a separable Gaussian glow pass runs in rgba16float. Bounds = bolt bbox + glow radius (can exceed the layer); stateless per frame.
+  io: >-
+    none
+  limitations: >-
+    Branch shapes will not match Adobe's for the same settings. Adobe warns that obstacles change with preview resolution; we use a fixed-resolution obstacle field so draft and full resolution agree, which loses some fine detail. The obsolete self-animating "Lightning" maps here via an auto-crackle option.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Electric arcs" recipe: click two points on the building (or pick an edge) and choose intensity and color.
+    defaults: >-
+      Strike type, blue-white core with glow, auto-crackle at a lively rate, Composite on original on.
+    automation: >-
+      The recipe animates conductivity with a seeded expression, builds alpha obstacles from the selected regions, and offers "Flash on beat" from audio onsets.
+    usability_check: >-
+      A first-time user makes lightning jump between two windows in 3 or fewer deliberate actions, and syncs the flashes to music in under 2 minutes.
+  acceptance: >-
+    AS-3 and mini scene "arc-columns": lightning wraps the column regions; frames are identical after reopening and random-access seeking.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.audio-spectrum
+  name: Audio Spectrum
+  sources:
+    - ref: S02
+      item: Audio Spectrum
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: Audio Spectrum
+      category: Generate
+      checked: true
+  artist_can: >-
+    Draw an audio layer's frequency spectrum as bars, lines or dots. They can sit on a straight line, a mask, shape or region path, or a radial path. Controls cover frequency range, band count, height, colors and hue cycling.
+  projection_example: >-
+    Equalizer bars rise from the roofline in time with the music, colored by frequency.
+  controls:
+    - { name: "Audio layer", type: "layer", animatable: false }
+    - { name: "Start point / End point", type: "point2d", animatable: true }
+    - { name: "Path (mask, shape or region edge)", type: "path", animatable: false }
+    - { name: "Use polar path", type: "bool", animatable: false }
+    - { name: "Start / End frequency (Hz)", type: "float", animatable: true }
+    - { name: "Frequency bands", type: "int", animatable: true }
+    - { name: "Maximum height", type: "float", animatable: true }
+    - { name: "Audio duration / Audio offset (ms)", type: "float", animatable: true }
+    - { name: "Thickness / Softness", type: "float", animatable: true }
+    - { name: "Inside / Outside color", type: "color", animatable: true }
+    - { name: "Hue interpolation, Dynamic hue phase, Color symmetry, Blend overlapping colors", type: "group", animatable: true }
+    - { name: "Display options (Digital, Analog lines, Analog dots)", type: "enum", animatable: false }
+    - { name: "Side options (A, B, A and B)", type: "enum", animatable: false }
+    - { name: "Duration averaging", type: "bool", animatable: false }
+    - { name: "Composite on original", type: "bool", animatable: false }
+    - { name: "Response smoothing (attack / release; product addition)", type: "group", animatable: true }
+  animation: >-
+    Bar heights come from cached audio analysis at each frame time; all style controls are keyframable. The path can be a region edge, so bars follow the architecture.
+  dependencies: [proj.effect-stack, audio.track, audio.analysis, mask.bezier, shape.path, map.region, anim.keyframe.core, fx.generate.region-edge-stroke]
+  implementation: >-
+    FFT magnitudes come from the audio analysis cache: a worker computes a window of Audio Duration at Audio Offset for each frame. They are grouped into log-spaced bands and drawn as instanced SDF quads, placed by arc-length sampling of the path (CanvasKit path measure). The only temporal input is the audio window. Preview and export read the same cache, so output is deterministic.
+  io: >-
+    Reads project audio; the analysis cache is stored with project caches and can be rebuilt.
+  limitations: >-
+    Adobe reads raw source audio and ignores time-remap and effects. We offer a "source" mode that matches Adobe and an "as heard" (post-mix) mode, which is the default. Band levels will not numerically match Adobe's FFT windowing.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Music bars" in Add content → Sound visuals; pick an edge or region and the song.
+    defaults: >-
+      The show's music track, 20 Hz–8 kHz, 32 bands, bars on side A, show-palette colors, smoothing on.
+    automation: >-
+      Picks the show's music track, lays the bars along the selected roofline or region path, and scales maximum height to the region.
+    usability_check: >-
+      A first-time user places music-reactive bars along a selected roofline in 3 or fewer deliberate actions and under 60 s.
+  acceptance: >-
+    AS-1 and mini scene "eq-roofline": exported bar heights match preview frames at the same times exactly.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.audio-waveform
+  name: Audio Waveform
+  sources:
+    - ref: S02
+      item: Audio Waveform
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: Audio Waveform
+      category: Generate
+      checked: true
+  artist_can: >-
+    Draw an audio layer's waveform as an oscilloscope-style line or dots, on a straight line or along an open or closed path.
+  projection_example: >-
+    An oscilloscope line runs along the cornice and wiggles with the narrator's voice.
+  controls:
+    - { name: "Audio layer", type: "layer", animatable: false }
+    - { name: "Start point / End point", type: "point2d", animatable: true }
+    - { name: "Path (mask, shape or region edge)", type: "path", animatable: false }
+    - { name: "Displayed samples", type: "int", animatable: true }
+    - { name: "Maximum height", type: "float", animatable: true }
+    - { name: "Audio duration / Audio offset (ms)", type: "float", animatable: true }
+    - { name: "Thickness / Softness", type: "float", animatable: true }
+    - { name: "Inside / Outside color", type: "color", animatable: true }
+    - { name: "Waveform options (Mono, Left, Right)", type: "enum", animatable: false }
+    - { name: "Display options (Digital, Analog lines, Analog dots)", type: "enum", animatable: false }
+    - { name: "Composite on original", type: "bool", animatable: false }
+  animation: >-
+    Driven by cached time-domain audio at each frame; all style controls are keyframable.
+  dependencies: [proj.effect-stack, audio.track, audio.analysis, mask.bezier, shape.path, map.region, anim.keyframe.core]
+  implementation: >-
+    Per-frame min/max sample envelopes come from the audio analysis cache, laid out along the path by arc length. They are drawn as SDF polylines or dots in WGSL. The temporal input is the audio window only, and output is deterministic.
+  io: >-
+    Reads project audio; uses the shared analysis cache.
+  limitations: >-
+    Same source vs "as heard" choice as Audio Spectrum. Very high sample counts on long paths are capped in draft preview, and the preview flags this.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Sound wave line" in Add content → Sound visuals; pick an edge and the audio.
+    defaults: >-
+      Show music or voice track, mono, analog lines, 2 px line, show-palette color.
+    automation: >-
+      Selects the audio track, fits the line to the chosen edge, and scales height to the region.
+    usability_check: >-
+      A first-time user adds a waveform along a selected edge and previews it moving with the audio in under 60 s.
+  acceptance: >-
+    Mini scene "scope-cornice": waveform frames are identical in preview and export at the same times.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.beam
+  name: Beam
+  sources:
+    - ref: S02
+      item: Beam
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: Beam
+      category: Generate
+      checked: true
+  artist_can: >-
+    Draw a tapered laser-like beam between two points, with inner and outer colors, a visible length and travel time, and optional 3D perspective. Looks best with motion blur.
+  projection_example: >-
+    Laser beams shoot from window to window across the facade at the drop.
+  controls:
+    - { name: "Starting point / Ending point", type: "point2d", animatable: true }
+    - { name: "Length", type: "percent", animatable: true }
+    - { name: "Time", type: "percent", animatable: true }
+    - { name: "Starting / Ending thickness", type: "float", animatable: true }
+    - { name: "Softness", type: "percent", animatable: true }
+    - { name: "Inside / Outside color", type: "color", animatable: true }
+    - { name: "3D perspective", type: "bool", animatable: false }
+    - { name: "Composite on original", type: "bool", animatable: false }
+  animation: >-
+    Animate Time to fire the beam; endpoints accept region anchors and tracked points; Time can be triggered by beats.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, map.region, fx.stylize.glow, fx.generate.audio-reactive-controls]
+  implementation: >-
+    Analytic tapered-capsule SDF in WGSL with an inner/outer color falloff, output HDR in rgba16float. Length and Time set the visible segment along start→end. Motion blur uses the shared comp-shutter sub-frame sampler. Bounds = beam bbox + softness; stateless.
+  io: >-
+    none
+  limitations: >-
+    Most of the control list comes from product knowledge; the S13 page describes only Length, Time and 3D Perspective in detail.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Laser beams" recipe: click a start and an end point; More controls for thickness and colors.
+    defaults: >-
+      Red core, white-hot center, 0.5 s travel, motion blur on, glow on.
+    automation: >-
+      Endpoints snap to region centers; recipe adds glow and motion blur and can fire a beam on each beat.
+    usability_check: >-
+      A first-time user fires a beam between two windows on a beat in under 60 s.
+  acceptance: >-
+    Mini scene "laser-windows": beams with motion blur match between preview (full quality) and export.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.cc-glue-gun
+  name: CC Glue Gun
+  sources:
+    - ref: S02
+      item: CC Glue Gun
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: CC Glue Gun
+      category: Generate (bundled Cycore)
+      checked: true
+  artist_can: >-
+    Paint a glossy, shaded, blobby trail, like hot glue or liquid metal, that follows an animated brush position over a time span. The trail is lit by a built-in light or the comp lights.
+  projection_example: >-
+    A molten gold line oozes along the window frames just before the facade turns to metal.
+  controls:
+    - { name: "Brush position", type: "point2d", animatable: true }
+    - { name: "Stroke width", type: "float", animatable: true }
+    - { name: "Density", type: "float", animatable: true }
+    - { name: "Time span (sec)", type: "float", animatable: true }
+    - { name: "Reflection (map layer) / Strength", type: "layer + float", animatable: true }
+    - { name: "Style", type: "enum", animatable: false }
+    - { name: "Light (source, intensity, color, type, height, direction)", type: "group", animatable: true }
+    - { name: "Shading (ambient, diffuse, specular, roughness, metal)", type: "group", animatable: true }
+  animation: >-
+    Brush position is keyframed, follows a path, or is generated from a region edge; the trail is the brush history over Time Span.
+  dependencies: [proj.effect-stack, anim.keyframe.core, anim.motion-path, 3d.light, shape.path, fx.generate.region-edge-stroke]
+  implementation: >-
+    Stateless trail: the brush-position property is sampled at sub-frame steps over [t − Time Span, t] and the stamps are splatted into a height field in compute. Normals come from the height gradient, with GGX shading from the effect light or comp lights. The only temporal dependency is pure property evaluation, so it is MFR-safe.
+  io: >-
+    none
+  limitations: >-
+    Adobe's page only names the effect, so the control list comes from Cycore knowledge. Cycore's exact shading model is not reproduced.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Trace with light" → Style: "Liquid trail"; More controls for shading.
+    defaults: >-
+      Gold metal shading, 1.5 s trail, brush following the chosen edge at constant speed.
+    automation: >-
+      Brush position is generated from the selected edge path, and light direction defaults to the scene key light.
+    usability_check: >-
+      A first-time user turns an existing edge trace into a glossy liquid trail by changing one style option, in under 30 s.
+  acceptance: >-
+    Mini scene "liquid-trace": trail renders identically when seeking backward and in parallel export.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.cc-light-burst-2-5
+  name: CC Light Burst 2.5
+  sources:
+    - ref: S02
+      item: CC Light Burst 2.5
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: CC Light Burst 2.5
+      category: Generate (bundled Cycore)
+      checked: true
+  artist_can: >-
+    Streak the bright parts of a layer outward from a center point into a burst of rays, with ray length, intensity, burst style and optional color.
+  projection_example: >-
+    Light bursts out of a window as if a door opened onto the sun; a title bursts on the downbeat.
+  controls:
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Intensity", type: "float", animatable: true }
+    - { name: "Ray length", type: "float", animatable: true }
+    - { name: "Burst (Straight, Fade, Center)", type: "enum", animatable: false }
+    - { name: "Halo alpha", type: "bool", animatable: false }
+    - { name: "Set color / Color", type: "bool + color", animatable: true }
+  animation: >-
+    Intensity and Ray length are keyframable and audio-drivable; Center accepts region centroids and tracked points.
+  dependencies: [proj.effect-stack, anim.keyframe.core, map.region, fx.generate.audio-reactive-controls]
+  implementation: >-
+    Multi-pass radial streak in WGSL: log-step accumulation along rays from Center, 3–5 passes of doubling stride, HDR-safe in rgba16float. Bounds expand by ray length (declared); stateless.
+  io: >-
+    none
+  limitations: >-
+    Control list comes from Cycore knowledge (Adobe's Cycore page gives a one-line description). Streak falloff is matched visually.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Light burst": select a region (or click a point) and pick intensity and color.
+    defaults: >-
+      Center at region centroid, Fade burst, warm white, medium ray length.
+    automation: >-
+      Centers on the selected region and offers "Pulse on beat", which drives intensity from audio onsets.
+    usability_check: >-
+      A first-time user makes light burst out of a chosen window in 3 or fewer deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "window-burst": rays extend beyond the layer without clipping; preview and export match.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.cc-light-rays
+  name: CC Light Rays
+  sources:
+    - ref: S02
+      item: CC Light Rays
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: CC Light Rays
+      category: Generate (bundled Cycore)
+      checked: true
+  artist_can: >-
+    Cast volumetric-looking rays (god rays) from a light point through the layer's image, colored by the source or a chosen color.
+  projection_example: >-
+    God rays stream through the rose window and fan out across the church facade.
+  controls:
+    - { name: "Intensity", type: "float", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Radius", type: "float", animatable: true }
+    - { name: "Warp softness", type: "float", animatable: true }
+    - { name: "Shape (Round, Square)", type: "enum", animatable: false }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Color from source / Allow brightening", type: "bool", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Transfer mode", type: "enum", animatable: false }
+  animation: >-
+    Center and Intensity are keyframable or expression-linked; Center can follow a tracked light or a region centroid.
+  dependencies: [proj.effect-stack, anim.keyframe.core, map.region, fx.generate.audio-reactive-controls]
+  implementation: >-
+    WGSL radial accumulation from Center, limited to a light-source mask of radius Radius with shape warp. Multi-pass doubling-stride sampling; HDR in rgba16float. Bounds expand by the ray reach (declared); stateless.
+  io: >-
+    none
+  limitations: >-
+    Control list comes from Cycore knowledge. True volumetric light in 3D scenes belongs to 3d.light; this is a 2D image effect.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Light rays": select a window or opening; choose intensity and color.
+    defaults: >-
+      Center on the region, round shape, color from source, medium intensity.
+    automation: >-
+      Places the light center on the region, masks the source to the opening, and adds a slow intensity breathe.
+    usability_check: >-
+      A first-time user creates rays streaming from a selected window in under 30 s without opening More controls.
+  acceptance: >-
+    Mini scene "rose-window": rays render beyond layer bounds and match between preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.cc-light-sweep
+  name: CC Light Sweep
+  sources:
+    - ref: S02
+      item: CC Light Sweep
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: CC Light Sweep
+      category: Generate (bundled Cycore)
+      checked: true
+  artist_can: >-
+    Sweep a shimmering band of light across a layer, brightening its body and its edges as the band passes.
+  projection_example: >-
+    A gleam sweeps across the venue's logo, then across each window in turn.
+  controls:
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Shape (Linear, Smooth, Sharp)", type: "enum", animatable: false }
+    - { name: "Width", type: "float", animatable: true }
+    - { name: "Sweep intensity", type: "float", animatable: true }
+    - { name: "Edge intensity / Edge thickness", type: "float", animatable: true }
+    - { name: "Light color", type: "color", animatable: true }
+    - { name: "Light reception (Add, Composite, Cutout)", type: "enum", animatable: false }
+  animation: >-
+    The sweep moves by animating Center; recipes generate the keyframes from a direction and speed.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.generate.region-light-sweep, fx.generate.region-space-mapping]
+  implementation: >-
+    One WGSL pass with an edge pre-pass. The band profile is evaluated from the signed distance to the line through Center. The body term is multiplied by alpha, and the edge term comes from an alpha-gradient (Sobel) mask scaled by Edge Thickness. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Control list comes from Cycore knowledge. Edge highlight quality depends on clean alpha edges.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Light sweep": select regions, pick a direction arrow and speed.
+    defaults: >-
+      45° direction, smooth shape, warm white, 1 s per sweep, edges highlighted.
+    automation: >-
+      Generates Center keyframes from the direction and region extents, so the band fully enters and leaves.
+    usability_check: >-
+      A first-time user sweeps light across a selected logo in 3 or fewer deliberate actions and under 30 s.
+  acceptance: >-
+    Mini scene "logo-gleam": sweep enters and exits fully; preview and export match.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.cc-threads
+  name: CC Threads
+  sources:
+    - ref: S02
+      item: CC Threads
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: CC Threads
+      category: Generate (bundled Cycore)
+      checked: true
+  artist_can: >-
+    Turn a layer into a woven-thread pattern. Thread width, height, overlaps, direction, coverage and shadowing are adjustable, and the source image colors the threads.
+  projection_example: >-
+    The brick wall appears to turn into woven fabric that tightens as the music builds.
+  controls:
+    - { name: "Width / Height", type: "float", animatable: true }
+    - { name: "Overlaps", type: "int", animatable: true }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Coverage", type: "percent", animatable: true }
+    - { name: "Shadowing", type: "percent", animatable: true }
+    - { name: "Texture", type: "percent", animatable: true }
+  animation: >-
+    All numeric controls keyframable; Coverage is a natural reveal control.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.generate.region-space-mapping]
+  implementation: >-
+    WGSL procedural weave: two orthogonal stripe sets in a rotated lattice, with over/under ordering from overlap parity. Shadowing uses an analytic occlusion term, and the source is sampled per thread cell. Stateless; no bounds expansion.
+  io: >-
+    none
+  limitations: >-
+    Control list comes from Cycore knowledge; weave look matched visually.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Turn into fabric" material recipe → More controls.
+    defaults: >-
+      Thread size scaled to the region (about 40 threads across), 45° direction, medium shadowing.
+    automation: >-
+      Sizes threads relative to region width and animates Coverage for the reveal.
+    usability_check: >-
+      A first-time user turns a selected wall into a woven pattern and changes thread size in under 45 s.
+  acceptance: >-
+    Mini scene "fabric-wall": pattern is stable (no shimmer) at export resolution.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.cell-pattern
+  name: Cell Pattern
+  sources:
+    - ref: S02
+      item: Cell Pattern
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Cell Pattern
+      category: Generate
+      checked: true
+  artist_can: >-
+    Generate animated cellular patterns: bubbles, crystals, plates, pillows, tubes and mixed crystals. They work as textures, mattes, transition maps or displacement sources, with evolution, looping and tiling.
+  projection_example: >-
+    The facade dissolves into glowing organic cells, and the same pattern drives a displacement for a "living stone" look.
+  controls:
+    - { name: "Cell pattern (Bubbles, Crystals, Plates, Static plates, Crystallize, Pillow, Tubular, HQ variants, Mixed crystals)", type: "enum", animatable: false }
+    - { name: "Invert", type: "bool", animatable: false }
+    - { name: "Contrast / Sharpness", type: "float", animatable: true }
+    - { name: "Overflow (Clip, Soft clamp, Wrap back)", type: "enum", animatable: false }
+    - { name: "Disperse", type: "float", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Offset", type: "point2d", animatable: true }
+    - { name: "Tiling (enable, cells horizontal / vertical)", type: "group", animatable: false }
+    - { name: "Evolution", type: "angle", animatable: true }
+    - { name: "Evolution options (cycle evolution, cycle revolutions, random seed)", type: "group", animatable: true }
+  animation: >-
+    Animate Evolution for smooth change. Cycle Evolution and the shared loop control give exact loops. Animating Random Seed flashes between patterns, as in Adobe.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.seed-control, fx.noise-grain.seamless-loop, fx.generate.region-space-mapping, fx.distort.displacement-map, mask.track-matte]
+  implementation: >-
+    WGSL Worley/cellular noise. Feature points are PCG-hashed from the seed, and each pattern type combines F1/F2/F2−F1. Evolution moves each feature point around its own circle, so Cycle Evolution is periodic and exact. Tiling uses lattice modulo. Output is rgba16float; stateless.
+  io: >-
+    none
+  limitations: >-
+    Adobe works in 8 bpc only; we generate at 16f, so results are smoother but not pixel-identical. Disperse above 1 needs supersampling, which preview flags as a quality setting.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Cells / bubbles pattern" in Patterns; choose a style thumbnail, size and speed.
+    defaults: >-
+      Bubbles HQ, size scaled to the region, slow evolution, seamless loop on.
+    automation: >-
+      Scales cells to the region, loops evolution over the scene length, and offers "Use as reveal" (matte) or "Use as warp" (displacement).
+    usability_check: >-
+      A first-time user applies a looping cell pattern to a region and uses it as a reveal in under 60 s.
+  acceptance: >-
+    Mini scene "living-stone": cycle loop is exact (frame 0 equals frame L); displacement driven by the pattern matches in export.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.checkerboard
+  name: Checkerboard
+  sources:
+    - ref: S02
+      item: Checkerboard
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Checkerboard
+      category: Generate
+      checked: true
+  artist_can: >-
+    Create a checkerboard of colored and transparent rectangles with adjustable origin, size, feather, color and blending.
+  projection_example: >-
+    A checker pattern slides across the wall as a retro transition matte between two scenes.
+  controls:
+    - { name: "Anchor", type: "point2d", animatable: true }
+    - { name: "Size from (Corner point, Width slider, Width and height sliders)", type: "enum", animatable: false }
+    - { name: "Corner", type: "point2d", animatable: true }
+    - { name: "Width / Height", type: "float", animatable: true }
+    - { name: "Feather (width / height)", type: "float", animatable: true }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blending mode", type: "enum", animatable: false }
+  animation: >-
+    Anchor animation scrolls the pattern; size and feather keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, mask.blend-modes, fx.generate.region-space-mapping]
+  implementation: >-
+    Analytic per-pixel checker parity in WGSL with derivative-based AA coverage and feather. Stateless; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Creative pattern only. Projector alignment and test patterns are separate output tools (map.calibration, out.projector-output) and must not be confused with this.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Checkerboard" in Patterns; drag on canvas to set square size.
+    defaults: >-
+      Squares sized to fit a whole number across the region, white on transparent.
+    automation: >-
+      Fits square count to the region and offers "Slide" animation in one click.
+    usability_check: >-
+      A first-time user creates a sliding checker reveal on a region in under 45 s.
+  acceptance: >-
+    Mini scene "checker-wipe": edges are crisp without moiré at export resolution.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.circle
+  name: Circle
+  sources:
+    - ref: S02
+      item: Circle
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Circle
+      category: Generate
+      checked: true
+  artist_can: >-
+    Draw a solid disk or ring with several edge modes, feather, invert (as a matte), color and blending.
+  projection_example: >-
+    A glowing ring pulses around the round clock face.
+  controls:
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Radius", type: "float", animatable: true }
+    - { name: "Edge (None, Edge radius, Thickness, Thickness*Radius, Thickness and Feather*Radius)", type: "enum", animatable: false }
+    - { name: "Edge radius / Thickness", type: "float", animatable: true }
+    - { name: "Feather (outer / inner edge)", type: "float", animatable: true }
+    - { name: "Invert circle", type: "bool", animatable: false }
+    - { name: "Color / Opacity", type: "color + percent", animatable: true }
+    - { name: "Blending mode", type: "enum", animatable: false }
+  animation: >-
+    All geometric and color controls keyframable; radius audio-drivable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, mask.blend-modes, shape.layer]
+  implementation: >-
+    Analytic SDF disk/ring in WGSL with AA coverage and inner/outer feather. Stateless; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Overlaps with shape-layer ellipses (shape.layer). Kept as an effect for matte and effect-stack use.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Ring pulse" (Shapes) → More controls; most users get a shape-layer circle instead.
+    defaults: >-
+      Ring centered on the selected region, thickness 5% of radius, soft outer feather.
+    automation: >-
+      Centers and sizes the ring to a selected round region.
+    usability_check: >-
+      A first-time user adds a pulsing ring around a round window in under 45 s.
+  acceptance: >-
+    Mini scene "clock-ring": ring edge is smooth and matches preview at export.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.ellipse
+  name: Ellipse
+  sources:
+    - ref: S02
+      item: Ellipse
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: Ellipse
+      category: Generate
+      checked: true
+  artist_can: >-
+    Draw an elliptical ring with width, height, thickness, softness and inside/outside colors, in HDR if needed.
+  projection_example: >-
+    A soft oval halo glows around the arched entrance.
+  controls:
+    - { name: "Center", type: "point2d", animatable: true }
+    - { name: "Width / Height", type: "float", animatable: true }
+    - { name: "Thickness", type: "float", animatable: true }
+    - { name: "Softness", type: "percent", animatable: true }
+    - { name: "Inside / Outside color", type: "color", animatable: true }
+    - { name: "Composite on original", type: "bool", animatable: false }
+  animation: >-
+    All controls keyframable; size audio-drivable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, shape.layer]
+  implementation: >-
+    WGSL ellipse-ring SDF (iterative closest-point distance for accurate thickness) with inside/outside color falloff. HDR in rgba16float; stateless.
+  io: >-
+    none
+  limitations: >-
+    S13 documents no individual controls; the list comes from product knowledge. Overlaps with shape-layer ellipses.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Halo ring" (Shapes) → More controls.
+    defaults: >-
+      Fitted to the selected region's bounding ellipse, warm glow colors.
+    automation: >-
+      Fits width/height to the region bounds.
+    usability_check: >-
+      A first-time user puts a halo around an arch and changes its color in under 45 s.
+  acceptance: >-
+    Mini scene "arch-halo": 32-bit HDR halo exports without clipping artifacts in EXR.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.eyedropper-fill
+  name: Eyedropper Fill
+  sources:
+    - ref: S02
+      item: Eyedropper Fill
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Eyedropper Fill
+      category: Generate
+      checked: true
+  artist_can: >-
+    Fill a layer with the average color sampled from a point and radius, with options for transparent pixels, premultiplication and keeping the original alpha.
+  projection_example: >-
+    Sample the real wall color from the venue reference photo to make a base fill that blends with the building.
+  controls:
+    - { name: "Sample point", type: "point2d", animatable: true }
+    - { name: "Sample radius", type: "float", animatable: true }
+    - { name: "Average pixel color (Skip empty, All, All premultiplied, Including alpha)", type: "enum", animatable: false }
+    - { name: "Maintain original alpha", type: "bool", animatable: false }
+    - { name: "Blend with original", type: "percent", animatable: true }
+  animation: >-
+    Sample point keyframable or tracked, so the fill color can follow moving footage.
+  dependencies: [proj.effect-stack, anim.keyframe.core, track.point, map.venue]
+  implementation: >-
+    WGSL two-stage parallel reduction averages pixels inside the disc, with premultiplication options. A second pass fills the layer. Stateless; the reduction reads only the current frame.
+  io: >-
+    none
+  limitations: >-
+    Matches the photo's color, not the projected appearance. A real surface's color under projector light needs physical checking.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Match a color from the picture": click the reference photo or footage.
+    defaults: >-
+      Radius 10 px, skip empty pixels, keep original alpha.
+    automation: >-
+      Offers the sampled color as a swatch in the show palette.
+    usability_check: >-
+      A first-time user samples the wall color from the venue photo into a fill in under 20 s.
+  acceptance: >-
+    Mini scene "match-wall": sampled color equals the mean of the sampled region within 1/1000.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.fill
+  name: Fill
+  sources:
+    - ref: S02
+      item: Fill
+      category: Generate
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: Fill
+      category: Generate
+      checked: true
+  artist_can: >-
+    Fill one or all masks, shapes or regions on a layer with a solid color, with feather, invert and opacity.
+  projection_example: >-
+    Each window region is filled with flat color as the base of a "light up one after another" sequence.
+  controls:
+    - { name: "Fill mask / All masks (or selected regions)", type: "path-ref", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Invert", type: "bool", animatable: false }
+    - { name: "Horizontal / Vertical feather", type: "float", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+  animation: >-
+    Color and opacity keyframable and audio-drivable; per-region timing offsets come from recipes.
+  dependencies: [proj.effect-stack, mask.bezier, shape.path, map.region, anim.keyframe.core, tool.sequence-light-up]
+  implementation: >-
+    Paths (masks, shapes or region polygons) are flattened with CanvasKit and drawn with analytic AA into a coverage mask. Feather is a separable blur of the coverage, then a premultiplied color fill composites in rgba16float (HDR colors allowed, matching Adobe's 32-bpc support). Bounds = layer plus feather; stateless.
+  io: >-
+    none
+  limitations: >-
+    S13 documents no individual controls; the list comes from product knowledge. Stroke/fill order matters as in Adobe: stroke after fill shows full stroke width.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Part of "Trace with light" and "Light up windows": select regions → "Fill with color".
+    defaults: >-
+      Show-palette color, no feather, full opacity.
+    automation: >-
+      Uses the selected regions directly; no manual masks needed.
+    usability_check: >-
+      A first-time user fills three selected windows with a color in 3 or fewer deliberate actions and under 20 s.
+  acceptance: >-
+    AS-1 and mini scene "fill-windows": fill matches region outlines exactly; saved and reopened project renders identically.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.fractal
+  name: Fractal
+  sources:
+    - ref: S02
+      item: Fractal
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S13
+      item: Fractal
+      category: Generate
+      checked: true
+  artist_can: >-
+    Render Mandelbrot and Julia sets (and their inverses and overlays) as colorful textures with palettes, hue cycling, edge highlights and oversampling. Navigate them with zoom and pan tools on the canvas.
+  projection_example: >-
+    A psychedelic infinite zoom into a Mandelbrot set fills the tunnel opening during the trance section.
+  controls:
+    - { name: "Set choice (Mandelbrot, Mandelbrot inverse, Julia, Julia inverse, Mandelbrot over Julia, Mandelbrot inverse over Julia)", type: "enum", animatable: false }
+    - { name: "Mandelbrot / Julia (X real, Y imaginary, magnification, escape limit)", type: "group", animatable: true }
+    - { name: "Post-invert / Overlay / Transparency", type: "group", animatable: false }
+    - { name: "Palette (Lightness gradient, Hue wheel, Black and white, Solid color)", type: "enum", animatable: false }
+    - { name: "Hue, Cycle steps, Cycle offset", type: "group", animatable: true }
+    - { name: "Edge highlight", type: "bool", animatable: false }
+    - { name: "High quality (oversample method, oversample factor)", type: "group", animatable: false }
+  animation: >-
+    Magnification, center and hue cycle keyframable; zooms should use exponential interpolation (graph editor) for constant-feel speed.
+  dependencies: [proj.effect-stack, anim.keyframe.core, anim.graph-editor]
+  implementation: >-
+    WGSL escape-time iteration with smooth (continuous) iteration counts, so palettes are banding-free. Oversampling is a supersample loop, and canvas zoom and pan are on-canvas manipulators. f32 limits zoom depth (about 1e5×); deeper zooms use a double-float (df64) path. Stateless.
+  io: >-
+    none
+  limitations: >-
+    Deep zooms past f32 precision need the slower df64 path. Adobe's Alt-click orbit-tracing visualization is low priority.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Infinite fractal zoom" recipe in Patterns → More controls.
+    defaults: >-
+      Classic Mandelbrot at a scenic coordinate, hue-wheel palette, 4× oversampling for export.
+    automation: >-
+      Recipe picks a visually rich target point and creates an exponential zoom over the scene length.
+    usability_check: >-
+      A first-time user creates a 10 s fractal zoom inside a region in under 60 s.
+  acceptance: >-
+    Mini scene "fractal-tunnel": zoom renders without banding or precision blockiness to the recipe's default depth.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.gradient-ramp
+  name: Gradient Ramp
+  sources:
+    - ref: S02
+      item: Gradient Ramp
+      category: Generate
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S13
+      item: Gradient Ramp
+      category: Generate
+      checked: true
+  artist_can: >-
+    Create a linear or radial two-color gradient with animatable start and end points and colors, plus ramp scatter that dithers away banding.
+  projection_example: >-
+    A dark-to-gold gradient rises up the facade as a dawn effect, and the same ramp drives a bottom-to-top reveal.
+  controls:
+    - { name: "Start of ramp / End of ramp", type: "point2d", animatable: true }
+    - { name: "Start color / End color", type: "color", animatable: true }
+    - { name: "Ramp shape (Linear, Radial)", type: "enum", animatable: false }
+    - { name: "Ramp scatter (dither)", type: "float", animatable: true }
+    - { name: "Blend with original", type: "percent", animatable: true }
+    - { name: "Interpolation space (linear light, perceptual; product addition)", type: "enum", animatable: false }
+  animation: >-
+    Points and colors keyframable, expression-linkable and audio-drivable; points snap to region bounds.
+  dependencies: [proj.effect-stack, anim.keyframe.core, color.management, render.encode, map.region, fx.generate.region-space-mapping]
+  implementation: >-
+    WGSL linear/radial ramp evaluated in scene-linear (optionally OKLab), written to rgba16float. Ramp scatter is a seeded blue-noise dither scaled to the target output bit depth. Gradients carry high banding risk, so precision must survive the whole pipeline to encode. Stateless; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Dithering here does not replace export dithering for 8-bit encodes; both are coordinated so dither is not applied twice.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Gradient" in Add content → Color; drag the start/end handles on the canvas.
+    defaults: >-
+      Fit to the selected region bottom→top, two show-palette colors, scatter on.
+    automation: >-
+      Handles snap to the region's edges, and "Use as reveal" turns it into a wipe matte.
+    usability_check: >-
+      A first-time user adds a two-color gradient to a region and reverses its direction by dragging, in under 30 s.
+  acceptance: >-
+    Mini scene "ramp-banding": 8-bit and 10-bit exports show no visible banding with scatter on; AS-1 background layer.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.grid
+  name: Grid
+  sources:
+    - ref: S02
+      item: Grid
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Grid
+      category: Generate
+      checked: true
+  artist_can: >-
+    Draw a customizable grid of lines in color, or as a matte in the alpha channel, with spacing, border thickness, feather and invert.
+  projection_example: >-
+    A glowing blueprint grid fades onto the building and lines up with the window rhythm before the facade "rebuilds".
+  controls:
+    - { name: "Anchor", type: "point2d", animatable: true }
+    - { name: "Size from (Corner point, Width slider, Width and height sliders)", type: "enum", animatable: false }
+    - { name: "Corner / Width / Height", type: "point2d + float", animatable: true }
+    - { name: "Border", type: "float", animatable: true }
+    - { name: "Feather (width / height)", type: "float", animatable: true }
+    - { name: "Invert grid", type: "bool", animatable: false }
+    - { name: "Color / Opacity", type: "color + percent", animatable: true }
+    - { name: "Blending mode", type: "enum", animatable: false }
+  animation: >-
+    Anchor, spacing and border keyframable; border audio-drivable for pulsing lines.
+  dependencies: [proj.effect-stack, anim.keyframe.core, map.region, fx.generate.region-space-mapping, fx.stylize.glow]
+  implementation: >-
+    Analytic grid-line distance in WGSL with derivative-based AA, so thin lines stay stable without shimmer. Stateless; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Creative grid only; projector test grids are output tools (out.projector-output, map.calibration).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Blueprint grid" in Patterns; choose spacing and line width.
+    defaults: >-
+      Spacing matched to detected window spacing, thin cyan lines with glow.
+    automation: >-
+      Derives column/row spacing from repeated-region groups and aligns the grid anchor to the first window.
+    usability_check: >-
+      A first-time user lays a grid aligned to the window rhythm in 3 or fewer deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "blueprint": grid lines align to region edges within 1 px at export resolution and do not shimmer when moving.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.lens-flare
+  name: Lens Flare
+  sources:
+    - ref: S02
+      item: Lens Flare
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Lens Flare
+      category: Generate
+      checked: true
+  artist_can: >-
+    Simulate a bright light shining into a camera lens: a flare with glow, rings and ghosts, placed by a draggable center, with brightness and three lens types.
+  projection_example: >-
+    A flare streaks across the roofline as a rising "sun" crests the building.
+  controls:
+    - { name: "Flare center", type: "point2d", animatable: true }
+    - { name: "Flare brightness", type: "percent", animatable: true }
+    - { name: "Lens type (50-300mm zoom, 35mm prime, 105mm prime)", type: "enum", animatable: false }
+    - { name: "Blend with original", type: "percent", animatable: true }
+  animation: >-
+    Center and brightness keyframable; center can follow a 3D light or tracked point.
+  dependencies: [proj.effect-stack, anim.keyframe.core, 3d.light, track.point]
+  implementation: >-
+    Element-table procedural flare in WGSL. Glow, ring, streak and ghost elements sit along the line from flare center through frame center, and each lens type is its own element table. Additive HDR in rgba16float; stateless; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    It is a camera artifact, so on a building it reads as a graphic, not optics. Only Adobe's three lens types are in scope. S13 does not list individual controls; the list comes from product knowledge.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Sunrise flare" recipe in Light → More controls.
+    defaults: >-
+      50-300mm zoom type, brightness 100%, center following the recipe's sun path.
+    automation: >-
+      Animates center along an arc over the roofline and fades brightness in and out.
+    usability_check: >-
+      A first-time user adds a moving flare over the roofline in under 45 s.
+  acceptance: >-
+    Mini scene "sunrise": flare elements stay aligned through center as it moves; preview and export match.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.paint-bucket
+  name: Paint Bucket
+  sources:
+    - ref: S02
+      item: Paint Bucket
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Paint Bucket
+      category: Generate
+      checked: true
+  artist_can: >-
+    Flood-fill the area around a fill point with color, like Photoshop's Paint Bucket, non-destructively. Controls cover tolerance, channel selection and edge treatment (antialias, feather, spread, choke, stroke).
+  projection_example: >-
+    Hand-drawn line-art animation projected on the wall is colored in frame by frame without repainting.
+  controls:
+    - { name: "Fill point", type: "point2d", animatable: true }
+    - { name: "Fill selector (Color and alpha, Straight color, Transparency, Opacity, Alpha channel)", type: "enum", animatable: false }
+    - { name: "Tolerance", type: "float", animatable: true }
+    - { name: "View threshold", type: "bool", animatable: false }
+    - { name: "Stroke (Antialias, Feather, Spread, Choke, Stroke) + softness / radius / width", type: "group", animatable: true }
+    - { name: "Invert fill", type: "bool", animatable: false }
+    - { name: "Color / Opacity", type: "color + percent", animatable: true }
+    - { name: "Blending mode (incl. Fill only)", type: "enum", animatable: false }
+  animation: >-
+    Fill point can be tracked; color and opacity keyframable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, track.point]
+  implementation: >-
+    GPU flood fill seeded at the fill point. Compute ping-pong propagates over a tolerance mask using connected-component labeling with pointer jumping, with bounded iterations. Spread, choke and stroke use a jump-flood distance transform. Stateless; cost scales with area.
+  io: >-
+    none
+  limitations: >-
+    Leaks through small gaps, as in Adobe; View Threshold helps diagnose. Region fills on the venue should use regions (fx.generate.fill), not flood fill on a photo.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Color in a drawing" in Paint & draw: click inside an outlined area.
+    defaults: >-
+      Tolerance 10, antialias edges, show-palette color.
+    automation: >-
+      Shows the matched area live while hovering before committing.
+    usability_check: >-
+      A first-time user colors in three closed shapes of a line drawing in under 45 s.
+  acceptance: >-
+    Mini scene "cel-color": fill stays inside outlines across a 5 s line-art clip with the fill point tracked.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.radio-waves
+  name: Radio Waves
+  sources:
+    - ref: S02
+      item: Radio Waves
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Radio Waves
+      category: Generate
+      checked: true
+  artist_can: >-
+    Emit expanding waves from a point at a set frequency. Wave shapes can be polygons or stars, a mask, or the contours of another layer. Each wave has a lifespan, fades, width ramp, spin and optional reflection off the layer edges.
+  projection_example: >-
+    Rings ripple outward from the clock face on every beat, with wave outlines shaped like the arch.
+  controls:
+    - { name: "Producer point", type: "point2d", animatable: true }
+    - { name: "Parameters are set at (Birth, Each frame)", type: "enum", animatable: false }
+    - { name: "Render quality", type: "int", animatable: false }
+    - { name: "Wave type (Polygon, Image contours, Mask)", type: "enum", animatable: false }
+    - { name: "Polygon (sides, curve size, curvyness, star, star depth)", type: "group", animatable: true }
+    - { name: "Mask", type: "path-ref", animatable: false }
+    - { name: "Image contour (source layer, source center, value channel, invert, threshold, pre-blur, tolerance, contour)", type: "group", animatable: true }
+    - { name: "Wave motion (frequency, expansion, orientation, direction, velocity, spin, lifespan, reflection)", type: "group", animatable: true }
+    - { name: "Stroke (profile, color, opacity, fade-in / fade-out time, start / end width)", type: "group", animatable: true }
+  animation: >-
+    With "Birth", each wave keeps the parameter values from its birth time, giving twisting tunnels. Emission can be tied to beats (product addition).
+  dependencies: [proj.effect-stack, anim.keyframe.core, mask.bezier, map.region, fx.generate.audio-reactive-controls, fx.distort.displacement-map, fx.simulation.caustics]
+  implementation: >-
+    Stateless emitter: wave k is born at t_k = k / frequency, and each frame draws every wave with t − t_k < lifespan. "Birth" parameters are evaluated at t_k by pure property evaluation, so random access and MFR are safe. Polygons and stars are SDFs. Mask and image contours (marching squares plus simplification, cached per frame) are drawn as offset-curve SDF strokes. Supersampled AA; reflection mirrors centers across the bounds.
+  io: >-
+    none
+  limitations: >-
+    Image-contour waves depend on a clean high-contrast source. Very high frequency × long lifespan raises per-frame cost linearly, so the number of live waves is capped with a warning.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Expanding rings / ripples": click the source point or pick a region for the ring shape.
+    defaults: >-
+      Circle waves, 1 wave per second (or per beat when music exists), 2 s lifespan, fades on.
+    automation: >-
+      Uses the selected region outline as the wave shape (mask mode) and emits on detected beats.
+    usability_check: >-
+      A first-time user makes arch-shaped ripples emit on each beat in 3 or fewer deliberate actions and under 60 s.
+  acceptance: >-
+    Mini scene "beat-ripples": random-access frame render equals sequential render; waves born on beat markers.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.scribble
+  name: Scribble
+  sources:
+    - ref: S02
+      item: Scribble
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Scribble
+      category: Generate
+      checked: true
+  artist_can: >-
+    Fill or edge a closed path with a single hand-drawn zigzag stroke, like marker fill, crosshatching or textile. Controls cover angle, spacing, curviness, overlap variation, start/end draw-on and wiggle animation.
+  projection_example: >-
+    Each window is scribbled in with marker strokes, one after another, before it lights up.
+  controls:
+    - { name: "Scribble (Single mask, All masks, All masks using modes)", type: "enum", animatable: false }
+    - { name: "Mask / region", type: "path-ref", animatable: false }
+    - { name: "Fill type (Inside, Centered edge, Inside edge, Outside edge, Left edge, Right edge)", type: "enum", animatable: false }
+    - { name: "Edge options (edge width, end cap, join, miter limit)", type: "group", animatable: true }
+    - { name: "Color / Opacity", type: "color + percent", animatable: true }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Stroke width", type: "float", animatable: true }
+    - { name: "Stroke options (curviness, curviness variation, spacing, spacing variation, path overlap, path overlap variation)", type: "group", animatable: true }
+    - { name: "Start / End", type: "percent", animatable: true }
+    - { name: "Start/End apply to (Scribble result, Mask path); Fill paths sequentially", type: "group", animatable: false }
+    - { name: "Wiggle type (Static, Jumpy, Smooth) / Wiggles per second", type: "enum + float", animatable: true }
+    - { name: "Random seed", type: "seed", animatable: false }
+    - { name: "Composite (On transparent, On original image, Reveal original image)", type: "enum", animatable: false }
+  animation: >-
+    Start/End draw the scribble on; wiggle animates the strokes; seeds keep the scribble identical on re-render.
+  dependencies: [proj.effect-stack, anim.keyframe.core, mask.bezier, shape.path, map.region, fx.noise-grain.seed-control, tool.sequence-light-up]
+  implementation: >-
+    Geometry is generated in the TS core. A hatch polyline crosses the region at Angle with seeded spacing and curviness variation, is clipped with CanvasKit path ops (complex shapes split into simpler pieces), and is smoothed to Béziers. Start/End trims by arc length. Wiggle is seeded noise in time: Jumpy reseeds per interval, Smooth interpolates. Drawn by CanvasKit stroke → GPU AA; geometry cached per parameter set and wiggle step.
+  io: >-
+    none
+  limitations: >-
+    Scribbles will not match Adobe stroke-for-stroke. Very dense fills on large regions are geometry-heavy, so caching is required.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Hand-scribbled fill" in Paint & draw: select regions and choose marker or crosshatch style.
+    defaults: >-
+      Marker style, 45° angle, spacing scaled to region, smooth wiggle at 2 per second, draw-on over 1.5 s.
+    automation: >-
+      Uses selected regions as paths and staggers draw-on across regions.
+    usability_check: >-
+      A first-time user scribbles in four windows in sequence in under 60 s.
+  acceptance: >-
+    Mini scene "marker-windows": scribble geometry identical after reopen and seek.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.stroke
+  name: Stroke
+  sources:
+    - ref: S02
+      item: Stroke
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Stroke
+      category: Generate
+      checked: true
+  artist_can: >-
+    Stroke the paths of one or more masks, shapes or regions with a brush-like line. Controls cover color, size, hardness, opacity, spacing, start/end draw-on, and painting over the image, on transparency or as a reveal.
+  projection_example: >-
+    The core "Trace with light" line: window frames are outlined and then traced by a moving light.
+  controls:
+    - { name: "Path / All masks (or selected regions)", type: "path-ref", animatable: false }
+    - { name: "Stroke sequentially", type: "bool", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Brush size", type: "float", animatable: true }
+    - { name: "Brush hardness", type: "percent", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Start / End", type: "percent", animatable: true }
+    - { name: "Spacing", type: "percent", animatable: true }
+    - { name: "Paint style (On original image, On transparent, Reveal original image)", type: "enum", animatable: false }
+  animation: >-
+    Start/End keyframes draw the line on at constant speed (arc-length based); speed is editable in the graph editor.
+  dependencies: [proj.effect-stack, mask.bezier, shape.path, map.region, anim.keyframe.core, anim.graph-editor, fx.stylize.glow, tool.edge-trace, fx.generate.region-edge-stroke]
+  implementation: >-
+    Solid strokes use CanvasKit path measure plus stroke-to-path with GPU analytic AA. Hardness and spacing render as instanced soft dabs along arc length in WGSL. Start/End trims by arc length. Stateless; bounds = path bbox + brush radius.
+  io: >-
+    Paths pasted from Illustrator/SVG import via shape.path.
+  limitations: >-
+    S13 details only brush hardness, spacing and paint style; the rest come from product knowledge.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Trace with light": click a roofline or window, then choose color and speed.
+    defaults: >-
+      4 px warm-white line with glow, 2 s draw-on, sequential across selected regions.
+    automation: >-
+      Builds the path from the region, sets Start/End keyframes, and adds glow; no manual masks.
+    usability_check: >-
+      A first-time user traces a roofline with an animated light line and previews it in 3 or fewer deliberate actions and under 60 s.
+  acceptance: >-
+    AS-1: traced windows and roofline timed to audio; constant speed verified via arc-length sampling; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.vegas
+  name: Vegas
+  sources:
+    - ref: S02
+      item: Vegas
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Vegas
+      category: Generate
+      checked: true
+  artist_can: >-
+    Run chasing lights or pulses around image contours or masks. Controls set segment count, length, distribution, rotation, random phase, color, width, hardness and opacity ramps.
+  projection_example: >-
+    Marquee lights chase around every window and the doorway like a theatre sign.
+  controls:
+    - { name: "Stroke (Image contours, Mask/path)", type: "enum", animatable: false }
+    - { name: "Image contours (input layer, invert, if layer sizes differ, channel, threshold, pre-blur, tolerance, render, selected contour, shorter contours have)", type: "group", animatable: true }
+    - { name: "Mask / path / region", type: "path-ref", animatable: false }
+    - { name: "Segments", type: "int", animatable: true }
+    - { name: "Length", type: "float", animatable: true }
+    - { name: "Segment distribution (Bunched, Even)", type: "enum", animatable: false }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Random phase / seed", type: "bool + seed", animatable: false }
+    - { name: "Blend mode (Transparent, Over, Under, Stencil)", type: "enum", animatable: false }
+    - { name: "Color / Width / Hardness", type: "group", animatable: true }
+    - { name: "Start / Mid-point / End opacity, Mid-point position", type: "group", animatable: true }
+  animation: >-
+    Animate Rotation for chasing; speed can be an expression (revolutions per second) or beat-locked.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, mask.bezier, map.region, fx.noise-grain.seed-control, fx.generate.audio-reactive-controls, fx.stylize.glow]
+  implementation: >-
+    Contours come from masks, region paths or image contours (marching squares on the threshold, cached per frame) and are parameterized by arc length. Segments sit at (i / N + rotation) along each contour with a start/mid/end opacity ramp. They are drawn as SDF strokes with hardness falloff in WGSL. Stateless.
+  io: >-
+    none
+  limitations: >-
+    Contour numbering differs from Adobe's for image contours; region paths are the recommended input.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Chasing lights": select regions, pick color and speed.
+    defaults: >-
+      Segment count from each region's perimeter (one light per ~20 px), 50% length, Even distribution, 0.5 rev/s.
+    automation: >-
+      Uses region outlines, writes the rotation-speed expression, and offsets phase per region so neighbors don't sync unless asked.
+    usability_check: >-
+      A first-time user puts chasing lights around all windows in 3 or fewer deliberate actions and under 45 s.
+  acceptance: >-
+    AS-1 variant "marquee": chase speed constant and identical in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.write-on
+  name: Write-on
+  sources:
+    - ref: S02
+      item: Write-on
+      category: Generate
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S13
+      item: Write-on
+      category: Generate
+      checked: true
+  artist_can: >-
+    Paint a stroke that follows an animated brush position over time, simulating handwriting or signatures. Brush size, hardness, opacity, stroke length and spacing are adjustable, and paint or brush properties can change over time.
+  projection_example: >-
+    The venue's name is hand-written across the wall as if by a giant pen of light.
+  controls:
+    - { name: "Brush position", type: "point2d", animatable: true }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Brush size / Brush hardness / Brush opacity", type: "group", animatable: true }
+    - { name: "Stroke length (secs)", type: "float", animatable: true }
+    - { name: "Brush spacing (secs)", type: "float", animatable: true }
+    - { name: "Paint time properties (None, Opacity, Color)", type: "enum", animatable: false }
+    - { name: "Brush time properties (None, Size, Hardness, Size and hardness)", type: "enum", animatable: false }
+    - { name: "Paint style (On original image, On transparent, Reveal original image)", type: "enum", animatable: false }
+  animation: >-
+    Brush Position is keyframed, motion-sketched, or generated from a path; Adobe suggests linking it with an expression to a sketched layer.
+  dependencies: [proj.effect-stack, anim.keyframe.core, anim.motion-path, expr.engine, shape.path, fx.generate.region-edge-stroke, preview.cache]
+  implementation: >-
+    The stroke is rebuilt from the Brush Position property, sampled every Brush Spacing seconds from the layer in-point to t. Evaluation is pure, and the sample list is cached per property revision. Dabs are instanced on the GPU, and Stroke Length limits the window. Temporal dependency: the property history up to t; deterministic and MFR-safe, with cost growing with time.
+  io: >-
+    none
+  limitations: >-
+    For clean vector draw-ons, trim paths (shape.path) or Stroke are better; Write-on is for brushy, hand-painted motion.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Generator for After Effects parity or a decorative look that projection recipes do not need now. Gradients, fill, stroke, music visualisers, lightning, radio waves, Vegas and the region-aware generators stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Draw it on": draw a line on the canvas, or pick a path or handwriting text, then set the duration.
+    defaults: >-
+      Brush follows the path at constant speed over 3 s, soft 8 px brush, stroke persists.
+    automation: >-
+      Generates Brush Position keyframes or an expression from the drawn or traced path at constant speed.
+    usability_check: >-
+      A first-time user draws a freehand line on the facade and makes it draw on over 3 s in under 45 s.
+  acceptance: >-
+    Mini scene "signature": frame at t rendered cold equals the frame reached by playback; export matches preview.
+  status: not-started
+  evidence: []
+
+# ---------------------------------------------------------------------------
+# Projection-specific generator capabilities (brief §0, §11B, §13, §19)
+# ---------------------------------------------------------------------------
+
+- id: fx.generate.region-edge-stroke
+  name: Edge light trace (stroke along architecture)
+  sources:
+    - ref: "brief §19"
+      item: Select a building edge and create an editable tracing animation
+      category: Projection-specific creative tools
+      checked: true
+    - ref: "brief §11B"
+      item: Path strokes, write-on effects
+      category: Generators and light effects
+      checked: true
+  artist_can: >-
+    Stroke and draw on along the edges of selected venue regions (rooflines, window frames, columns) at constant speed, without first copying the edges into masks.
+  projection_example: >-
+    Light traces every window frame, then runs along the roofline, all as one editable layer that re-targets to another venue.
+  controls:
+    - { name: "Regions / edges (selection)", type: "region-ref list", animatable: false }
+    - { name: "Edge set (outline, inner edges, chosen segments)", type: "enum", animatable: false }
+    - { name: "Start corner / direction", type: "enum", animatable: false }
+    - { name: "Progress or speed", type: "percent / float", animatable: true }
+    - { name: "Order and delay across regions", type: "group", animatable: true }
+    - { name: "Color / width / taper", type: "group", animatable: true }
+    - { name: "Glow amount", type: "float", animatable: true }
+    - { name: "Corner handling (continuous, restart per segment)", type: "enum", animatable: false }
+  animation: >-
+    Progress keyframable at constant arc-length speed. Per-region delays come from index or order, and progress or brightness can follow the music.
+  dependencies: [map.region, shape.path, tool.edge-trace, fx.generate.stroke, fx.stylize.glow, ux.recipe-engine, expr.rigs, anim.graph-editor, fx.generate.audio-reactive-controls]
+  implementation: >-
+    Region outlines are converted to CanvasKit paths in role space, each with an arc-length LUT for constant-speed trimming, and drawn by the Stroke pass. Recipe-generated expressions set per-region offsets. Bound by region role, so another venue's matching regions re-target the same animation.
+  io: >-
+    Stored as region-role references, not copied coordinates; survives venue rebinding.
+  limitations: >-
+    Edges are only as accurate as the region outlines. 3D model edges need projecting into content space (map.model-3d).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Trace with light": click a roofline or window, then choose color and speed.
+    defaults: >-
+      Warm-white 4 px line with glow, 2 s per region, clockwise from top-left, 0.2 s stagger.
+    automation: >-
+      Builds paths from regions, orders them left→right and top→bottom, creates the keyframes and glow, and binds to roles.
+    usability_check: >-
+      A first-time user traces all windows of the sample facade, changes speed and previews in under 2 minutes, with 3 or fewer deliberate actions for the trace itself.
+  acceptance: >-
+    AS-1 (architectural trace) and AS-7 (bind the same show to another venue and the trace follows the new regions).
+  status: not-started
+  evidence: []
+
+- id: fx.generate.region-light-sweep
+  name: Light sweep across regions
+  sources:
+    - ref: "brief §19"
+      item: Generate material changes, light sweeps, and apparent surface deformation
+      category: Projection-specific creative tools
+      checked: true
+    - ref: "brief §11B"
+      item: Light rays/sweeps/bursts
+      category: Generators and light effects
+      checked: true
+  artist_can: >-
+    Sweep a band of light across selected regions, clipped to them. It can run as one sweep across the whole facade or one per region in sequence.
+  projection_example: >-
+    A gleam crosses each window left to right, one after another, then a single wide sweep crosses the whole facade on the chorus.
+  controls:
+    - { name: "Regions", type: "region-ref list", animatable: false }
+    - { name: "Mode (one sweep across all, per region in sequence)", type: "enum", animatable: false }
+    - { name: "Direction", type: "angle", animatable: true }
+    - { name: "Width / softness", type: "float", animatable: true }
+    - { name: "Intensity / edge highlight", type: "float", animatable: true }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Duration / delay / repeat", type: "group", animatable: true }
+  animation: >-
+    Timing is generated as editable keyframes and expressions. It can be beat-locked and looped.
+  dependencies: [fx.generate.cc-light-sweep, map.region, tool.sequence-light-up, fx.generate.region-space-mapping, ux.recipe-engine, mask.track-matte, fx.noise-grain.seamless-loop, fx.generate.audio-reactive-controls]
+  implementation: >-
+    The CC Light Sweep pass is evaluated in a region-local or facade-global frame (region-space mapping), with region mattes clipping. Per-region offsets come from recipe-generated expressions. Stateless.
+  io: >-
+    Region-role references; rebinds per venue.
+  limitations: >-
+    Irregular regions use their oriented bounding box for the sweep frame, so very concave shapes can show a sweep that seems to skip.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Light sweep": select regions, choose "together" or "one after another", then direction and speed.
+    defaults: >-
+      One after another, left→right order, 45° band, 0.8 s per region, 0.15 s delay.
+    automation: >-
+      Orders regions spatially, sizes the band to region width, and writes the offsets.
+    usability_check: >-
+      A first-time user makes light sweep across 10 windows in sequence in 3 or fewer deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "window-gleam": sweep timing per region equals the configured delay; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.edge-lightning
+  name: Electric arcs along edges
+  sources:
+    - ref: "brief §11B"
+      item: Electrical arcs
+      category: Generators and light effects
+      checked: true
+    - ref: "brief §19"
+      item: Effects that follow architectural contours
+      category: Projection-specific creative tools
+      checked: true
+  artist_can: >-
+    Make lightning crawl along a traced edge or jump between two named points on the building. It stays near the path, with adjustable wander, branching and crackle rate.
+  projection_example: >-
+    Electricity races along the roofline and down the corner columns at the climax.
+  controls:
+    - { name: "Edge path or two anchor points", type: "region-ref / point2d", animatable: true }
+    - { name: "Wander (max deviation)", type: "float", animatable: true }
+    - { name: "Branching", type: "percent", animatable: true }
+    - { name: "Crackle rate", type: "float", animatable: true }
+    - { name: "Travel progress", type: "percent", animatable: true }
+    - { name: "Core / glow color and size", type: "group", animatable: true }
+    - { name: "Seed", type: "seed", animatable: false }
+    - { name: "Flash on beat", type: "bool", animatable: false }
+  animation: >-
+    Travel progress and crackle keyframable; flashes can follow audio onsets.
+  dependencies: [fx.generate.advanced-lightning, fx.generate.region-edge-stroke, map.region, fx.noise-grain.seed-control, fx.generate.audio-reactive-controls, fx.stylize.glow]
+  implementation: >-
+    The Advanced Lightning compute pass with path-guided random walk. Targets advance along arc-length points of the CanvasKit path, and deviation is clamped by Wander. Seeded and stateless; capsule SDF plus glow. Bounds = path bbox + wander + glow.
+  io: >-
+    Region-role references.
+  limitations: >-
+    Very long paths need many segments, so cost scales with path length; draft preview reduces segment density and flags it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Electric edges": click an edge (or two points), choose color and intensity.
+    defaults: >-
+      Blue-white core, wander 2% of path length, crackle 12 per second, travels over 1.5 s.
+    automation: >-
+      Builds the path from the region edge, sets glow, and offers beat flashes.
+    usability_check: >-
+      A first-time user sends electricity along a roofline in 3 or fewer deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "roof-arcs": arcs stay within the wander limit; identical frames after reopen and seek.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.region-space-mapping
+  name: Fit generators to regions
+  sources:
+    - ref: "brief §0.5"
+      item: Automatically adapt scale and timing to the target region and show
+      category: User experience
+      checked: true
+    - ref: "brief §15"
+      item: Keep editable UV/content coordinates and projector coordinates distinct
+      category: Projection design, surfaces, and calibration
+      checked: true
+  artist_can: >-
+    Choose where a generator's coordinates live: composition, layer, a region's own box, or a surface's UV. Generators can also be instanced per region, so each window gets its own fitted copy with an index-based offset.
+  projection_example: >-
+    A cell pattern fills each of 24 windows separately, sized to each window, with each window's evolution slightly offset.
+  controls:
+    - { name: "Space (Composition, Layer, Region box, Region oriented box, Surface UV)", type: "enum", animatable: false }
+    - { name: "Fit (Fit, Fill, Stretch, Real-world units)", type: "enum", animatable: false }
+    - { name: "Each region separately", type: "bool", animatable: false }
+    - { name: "Index offset (time, seed, phase)", type: "group", animatable: true }
+    - { name: "Regions", type: "region-ref list", animatable: false }
+  animation: >-
+    Index offsets are expression-driven and editable as a rig.
+  dependencies: [map.region, map.surface-2d, map.model-3d, expr.rigs, fx.noise-grain.seed-control, proj.effect-stack]
+  implementation: >-
+    Every generator pass takes a uniform transform from pixel to generator space (2D affine, or a 3D/UV lookup). Per-region instancing renders one instance per region through region-ID mattes (pass.object-id for 3D), with index-driven parameter offsets. Surface UV comes from the venue model.
+  io: >-
+    Region-role references; instancing follows rebinding.
+  limitations: >-
+    Real-world units need a measured venue scale. UV space inherits the model's UV layout quality, and seams appear where UVs split.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic: a generator applied to a region fits it. An "Each window separately" toggle appears in the inspector.
+    defaults: >-
+      Region box fit for single regions; one shared space across a multi-region selection unless toggled.
+    automation: >-
+      Chooses the space from the selection type and derives index order spatially.
+    usability_check: >-
+      A first-time user applies a pattern to 12 windows and toggles "each separately", getting distinct but stable patterns, in under 30 s.
+  acceptance: >-
+    Mini scene "per-window-cells": per-region instances are stable after reopen; rebinding to a venue with 8 windows keeps the look.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.audio-reactive-controls
+  name: Move with the beat (audio-driven generator controls)
+  sources:
+    - ref: "brief §13"
+      item: Frequency-band control signals, smoothing/attack/release
+      category: Sound and music-driven animation
+      checked: true
+    - ref: "brief §0.1"
+      item: Add music, choose "Move with the beat"
+      category: User experience
+      checked: true
+  artist_can: >-
+    Link any generator or noise control to the music: intensity, evolution speed, color, size or position. The source can be a frequency band level, beat or onset pulses, or overall loudness, with smoothing, attack/release and a range map.
+  projection_example: >-
+    Light-sweep intensity pulses with the kick drum while cloud evolution speeds up with the high-hat energy.
+  controls:
+    - { name: "Target control", type: "property-ref", animatable: false }
+    - { name: "Source (band, onsets, beats, loudness)", type: "enum", animatable: false }
+    - { name: "Band range (Hz)", type: "float range", animatable: false }
+    - { name: "Amount / output range", type: "float range", animatable: true }
+    - { name: "Attack / Release", type: "time", animatable: false }
+    - { name: "Threshold", type: "float", animatable: true }
+    - { name: "Per-region offset", type: "time", animatable: false }
+  animation: >-
+    The binding is an editable expression modifier and can be baked to keyframes.
+  dependencies: [audio.analysis, audio.to-keyframes, expr.engine, expr.rigs, ux.recipe-engine, anim.keyframe.core]
+  implementation: >-
+    An expression-backed modifier reads the audio analysis cache, so preview and export see identical data. It is evaluated in the TS core with no GPU work. When speed controls (such as evolution speed) are driven, the driven rate is integrated over time with a prefix-sum cache, so random access stays exact.
+  io: >-
+    Uses the shared analysis cache; optional keyframe bake.
+  limitations: >-
+    Live audio inputs need recording or baking for reproducible exports (audio domain). Onset detection errors need the editable onset track.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Move with the beat": select an element, choose what responds (brightness, size, speed, color) and how strongly.
+    defaults: >-
+      Kick band (40–120 Hz) to brightness, attack 10 ms, release 200 ms, amount 60%.
+    automation: >-
+      Picks the show music, suggests the band from the target (bass for pulses, highs for sparkle), and writes the modifier.
+    usability_check: >-
+      A first-time user makes a light sweep pulse with the kick drum in 3 or fewer deliberate actions and under 60 s.
+  acceptance: >-
+    AS-1 timing and mini scene "pulse-kick": driven values are identical in preview and export at sampled frames.
+  status: not-started
+  evidence: []
+
+- id: fx.generate.editable-looks
+  name: Editable generator looks (no stock clips)
+  sources:
+    - ref: "brief §11B"
+      item: Use editable generator parameters rather than fixed stock videos
+      category: Generators and light effects
+      checked: true
+    - ref: "brief §0.5"
+      item: Visual library of editable outcomes
+      category: User experience
+      checked: true
+  artist_can: >-
+    Pick ready-made looks such as clouds, lava, electric arcs, light sweep, marquee lights, tech grid and ripples. Each look is saved generator settings rather than a video clip, so color, scale, speed and loop length stay editable at any resolution.
+  projection_example: >-
+    Search "lava", apply it to the lower wall, recolor it blue, and it becomes glowing water: same generator, different settings.
+  controls:
+    - { name: "Look", type: "preset", animatable: false }
+    - { name: "Hero controls (3-5 per look)", type: "group", animatable: true }
+    - { name: "Variation (shuffle seed)", type: "action", animatable: false }
+    - { name: "Save as my look", type: "action", animatable: false }
+  animation: >-
+    Looks include their own animation (evolution, loop) and expose it through hero controls.
+  dependencies: [ux.effect-library, ux.recipe-engine, fx.noise-grain.seamless-loop, fx.noise-grain.seed-control, fx.generate.region-space-mapping, preview.cache]
+  implementation: >-
+    Looks are serialized effect and recipe parameter sets applied through the operation system. Library thumbnails are animated renders of the real generators, cached and optionally shown on the selected surface.
+  io: >-
+    Looks import and export as small JSON preset files with no media.
+  limitations: >-
+    Looks are limited by the generators that exist; photoreal footage looks still need footage or simulation.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Effect library → search an everyday word ("clouds", "lava", "electric") → click to apply.
+    defaults: >-
+      Looks scale to the selected region and loop over the scene length.
+    automation: >-
+      Search maps everyday words to looks, and thumbnails preview on the selected surface.
+    usability_check: >-
+      A first-time user searches "clouds", applies an editable cloud look to the wall and changes its color in under 30 s.
+  acceptance: >-
+    Mini scene "look-swap": a look renders at 4K and at preview size from the same settings; saved look reloads identically.
+  status: not-started
+  evidence: []

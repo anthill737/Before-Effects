@@ -1,0 +1,1695 @@
+# Vector shapes, paths and paint — Before Effects capability register
+# Sources: S08 (shape attributes, paint operations, path operations), S01 (user guide: paint tools, Create Shapes from Vector Layer, Auto-trace, Create Nulls from Paths), brief §7. Adobe helpx pages returned HTTP 403 on 2026-10-01; Adobe items authored from knowledge (checked: false).
+
+- id: shape.path
+  name: Bezier paths and pen editing
+  sources:
+    - ref: S08
+      item: "Paths (Bezier path, vertices, direction handles)"
+      category: "Drawing, painting and paths"
+      checked: false
+    - ref: S01
+      item: "Pen tool, Add Vertex, Delete Vertex, Convert Vertex tools"
+      category: "Drawing, painting and paths"
+      checked: false
+    - ref: "brief §7"
+      item: "editable primitive and Bezier paths"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Draw and reshape smooth or sharp outlines point by point, then keep editing them at any time.
+    The same path can drive a shape, a mask, a motion path or text on a path.
+  projection_example: >-
+    Click around the arch of a doorway to draw its outline, then nudge points so the curve hugs the stonework.
+  controls:
+    - { name: "Path", type: "path", animatable: true }
+    - { name: "Closed", type: "bool", animatable: false }
+    - { name: "Vertex position", type: "point2d", animatable: true }
+    - { name: "In/out tangents", type: "point2d", animatable: true }
+    - { name: "Vertex type", type: "enum(corner|smooth|split)", animatable: false }
+    - { name: "First vertex", type: "int", animatable: false }
+  animation: >-
+    The whole path is one keyframable property (vertices and tangents interpolate together) and is readable and
+    writable from expressions (points(), createPath()).
+  dependencies: [ux.operation-system, anim.keyframe.core]
+  implementation: >-
+    A single native path model in core TypeScript (vertices with relative in/out tangents, closed flag, multiple
+    contours) shared by masks, shapes, motion paths and text-on-path. Vertex edits are typed ops with Immer patches;
+    evaluated paths convert to CanvasKit SkPath for path ops and GPU rasterization.
+  io: >-
+    Path data serializes in the project file as plain arrays; SVG path data and mask/shape clipboard formats map onto it.
+  limitations: >-
+    Cubic Beziers only; quadratic curves and SVG arcs are converted to cubics on import.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Draw an outline" — click points on the canvas (drag for curves), or click a region edge to start from its shape.
+    defaults: >-
+      Paths close automatically when the first point is clicked again; new points snap to region corners and edges.
+    automation: >-
+      Converts selected region outlines into editable paths and smooths hand-drawn clicks into clean curves on request.
+    usability_check: >-
+      A first-time user outlines a window with at least one curved edge in under 60 s and moves a point afterwards
+      without opening the inspector.
+  acceptance: >-
+    AS-1 and mini scene "arch-outline": a curved arch path saves, reopens and renders identically at 1x and 4x resolution.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: shape.layer
+  name: Shape layers and contents stack
+  sources:
+    - ref: S08
+      item: "Shape layers, shape groups, Contents (path, paint and path-operation attributes)"
+      category: "Shapes and shape attributes"
+      checked: false
+    - ref: "brief §7"
+      item: "groups with independent transforms; fills; strokes"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Build vector artwork as a stack of shapes, fills, strokes and modifiers inside one layer, and reorder or toggle any
+    of them non-destructively.
+  projection_example: >-
+    One shape layer holds every window outline on a facade with a shared neon stroke and a trim-path draw-on.
+  controls:
+    - { name: "Contents stack (groups, paths, paint, operators)", type: "string", animatable: false }
+    - { name: "Add content", type: "enum(group|rectangle|ellipse|polystar|path|fill|stroke|gradient-fill|gradient-stroke|merge|offset|pucker-bloat|repeater|round-corners|trim|twist|wiggle-paths|wiggle-transform|zig-zag)", animatable: false }
+    - { name: "Item enabled", type: "bool", animatable: false }
+    - { name: "Group blend mode", type: "enum(normal|add|screen|multiply|overlay|...)", animatable: false }
+  animation: >-
+    Every numeric property in the contents stack is keyframable and expression-linkable; items can be enabled or
+    reordered without losing keyframes.
+  dependencies: [shape.path, proj.layer]
+  implementation: >-
+    Contents are evaluated per group in After Effects order: path generators collect paths, path operators modify all
+    paths above them in the same group, paint operations render the paths above. Evaluation produces SkPaths in core;
+    the compositor rasterizes them on the GPU at render resolution and caches by evaluated-geometry hash.
+  io: >-
+    Created from drawing, primitives, SVG/AI/PDF import (shape.vector-import), text outlines or mask conversion;
+    extrusion goes through 3d.extrude.
+  limitations: >-
+    Very large contents stacks with per-frame boolean operators can be expensive; the profiler should name the
+    responsible operator.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Draw a shape" or any outline recipe ("Trace with light") creates a shape layer; "More controls" shows the stack.
+    defaults: >-
+      New shape layers get one group with a fill or stroke chosen by the recipe, sized to the selected region.
+    automation: >-
+      Recipes insert and order fills, strokes and operators correctly so users never assemble the stack by hand.
+    usability_check: >-
+      A first-time user adds a glowing outline to a region and toggles its stroke off and on in under 45 s without
+      expanding the contents tree.
+  acceptance: >-
+    AS-1 and mini scene "stack-order": reordering an operator above or below a paint item changes the render as
+    documented and survives save/reopen.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: shape.primitives
+  name: Parametric primitives (rectangle, ellipse, polygon, star)
+  sources:
+    - ref: S08
+      item: "Rectangle, Rounded Rectangle, Ellipse, Polygon, Star (Polystar) path properties"
+      category: "Shapes and shape attributes"
+      checked: false
+    - ref: "brief §7"
+      item: "editable primitive and Bezier paths"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Draw rectangles, ellipses, polygons and stars whose size, roundness and point count stay adjustable and animatable,
+    and convert them to free Bezier paths when needed.
+  projection_example: >-
+    Fill each rectangular window with a rounded rectangle that grows from its centre, then switch to a star burst on the beat.
+  controls:
+    - { name: "Size", type: "size2d", animatable: true }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Roundness", type: "float", animatable: true }
+    - { name: "Type (polygon/star)", type: "enum(polygon|star)", animatable: false }
+    - { name: "Points", type: "float", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Inner/outer radius", type: "float", animatable: true }
+    - { name: "Inner/outer roundness", type: "percent", animatable: true }
+    - { name: "Path direction", type: "enum(clockwise|counter-clockwise)", animatable: false }
+    - { name: "Convert to Bezier path", type: "action", animatable: false }
+  animation: >-
+    All parameters keyframable and expression-linkable; fractional point counts animate smoothly as in After Effects.
+  dependencies: [shape.layer, shape.path]
+  implementation: >-
+    Generators in core TypeScript emit cubic Bezier contours per frame from their parameters (ellipse with four kappa
+    segments, polystar with roundness tangents); conversion to Bezier is an op that replaces the generator with its
+    evaluated path at the current time.
+  io: >-
+    none
+  limitations: >-
+    Converting to a Bezier path freezes parameter animation into path keyframes only at the current time unless the
+    user chooses to bake every keyframe.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Draw a shape" — choose rectangle, circle, polygon or star and drag on the canvas or click a region to fit it.
+    defaults: >-
+      Shapes fit the selected region's bounds with a centred anchor; star defaults to five points.
+    automation: >-
+      Fitting to a region computes size, position and rotation from the region outline.
+    usability_check: >-
+      A first-time user places a circle exactly inside a round window in under 20 s using fit-to-region.
+  acceptance: >-
+    Mini scene "primitive-burst": a polygon animates from 3 to 8 points and from rounded to sharp, matching preview and export.
+  status: not-started
+  evidence: []
+
+- id: shape.group-transform
+  name: Shape groups with independent transforms
+  sources:
+    - ref: S08
+      item: "Group (Transform: Anchor Point, Position, Scale, Skew, Skew Axis, Rotation, Opacity)"
+      category: "Shapes and shape attributes"
+      checked: false
+    - ref: "brief §7"
+      item: "groups with independent transforms"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Group parts of a drawing and move, scale, skew, rotate or fade each group independently inside one layer, with
+    groups nested to any depth.
+  projection_example: >-
+    Each shutter panel on a facade is a group that swings open around its own hinge while the frame stays still.
+  controls:
+    - { name: "Anchor point", type: "point2d", animatable: true }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Scale", type: "size2d", animatable: true }
+    - { name: "Skew", type: "float", animatable: true }
+    - { name: "Skew axis", type: "angle", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blend mode", type: "enum(normal|add|screen|multiply|overlay|...)", animatable: false }
+  animation: >-
+    Every transform property keyframable and expression-linkable; group transforms concatenate with the layer transform.
+  dependencies: [shape.layer, anim.keyframe.core]
+  implementation: >-
+    Groups hold a 2D affine matrix composed in core (anchor, scale, skew, rotation, position) that is applied to child
+    paths before paint; opacity multiplies into child paint. Group blend modes render the group to an intermediate
+    rgba16float buffer only when the mode is not Normal.
+  io: >-
+    SVG and AI groups import as shape groups with their transforms preserved.
+  limitations: >-
+    Per-group blend modes force an extra render target per group and should be flagged by the profiler on large repeats.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Move this part" — select a piece of a drawing on the canvas and drag, rotate or scale it with handles.
+    defaults: >-
+      Group anchor is placed at the group's bounding-box centre; snapping to region corners lets users set a hinge.
+    automation: >-
+      Selecting several shapes and choosing "Group" creates the group and recentres its anchor automatically.
+    usability_check: >-
+      A first-time user groups two shapes and rotates the group about a chosen corner in under 40 s.
+  acceptance: >-
+    Mini scene "shutters": six nested groups swing open with independent timing; reopen and seek produce identical frames.
+  status: not-started
+  evidence: []
+
+- id: shape.fill
+  name: Fill
+  sources:
+    - ref: S08
+      item: "Fill (Color, Opacity, Fill Rule, Composite, Blend Mode)"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "fills"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Fill closed or open shapes with a solid colour and opacity, choose how overlapping contours make holes, and pick
+    whether the fill sits above or below earlier paint in the group.
+  projection_example: >-
+    Flood every window with warm amber light that fades up at dusk, leaving the mullions dark through even-odd holes.
+  controls:
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Fill rule", type: "enum(non-zero|even-odd)", animatable: false }
+    - { name: "Composite", type: "enum(below-previous|above-previous)", animatable: false }
+    - { name: "Blend mode", type: "enum(normal|add|screen|multiply|overlay|...)", animatable: false }
+  animation: >-
+    Color and opacity keyframable and expression-linkable (e.g. index-driven colours in expr.index-rig).
+  dependencies: [shape.layer]
+  implementation: >-
+    GPU coverage rasterization of the group's SkPaths (analytic AA or MSAA) with the chosen fill rule, shaded with a
+    premultiplied scene-linear colour in WGSL; colours entered in the UI are converted from the display space via
+    color.management.
+  io: >-
+    SVG/AI fills import with fill rule; CMYK fills convert on import.
+  limitations: >-
+    none
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Fill with color" — pick a colour swatch for the selected shape or region.
+    defaults: >-
+      Fill colour comes from the show palette; opacity 100%; non-zero rule.
+    automation: >-
+      Recipes add and colour fills automatically; the palette keeps colours consistent across many regions.
+    usability_check: >-
+      A first-time user changes the fill colour of twenty selected windows at once in under 15 s.
+  acceptance: >-
+    Mini scene "lit-windows": twenty filled windows with even-odd holes match preview and export with no edge fringes.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: shape.stroke
+  name: Stroke (width, caps, joins)
+  sources:
+    - ref: S08
+      item: "Stroke (Color, Opacity, Stroke Width, Line Cap, Line Join, Miter Limit, Composite, Blend Mode)"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "strokes with caps, joins"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Outline any path with a line of chosen colour and width, with butt, round or projecting caps and miter, round or
+    bevel joins.
+  projection_example: >-
+    A 6 px cyan line runs along every cornice; round caps keep the ends soft where the line meets a column.
+  controls:
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Stroke width", type: "float", animatable: true }
+    - { name: "Line cap", type: "enum(butt|round|projecting)", animatable: false }
+    - { name: "Line join", type: "enum(miter|round|bevel)", animatable: false }
+    - { name: "Miter limit", type: "float", animatable: true }
+    - { name: "Composite", type: "enum(below-previous|above-previous)", animatable: false }
+    - { name: "Blend mode", type: "enum(normal|add|screen|multiply|overlay|...)", animatable: false }
+  animation: >-
+    Colour, opacity, width and miter limit keyframable and expression-linkable; width can be audio-driven via audio.to-keyframes.
+  dependencies: [shape.layer]
+  implementation: >-
+    CanvasKit stroke-to-path (Path.stroke with cap/join/miter) produces fill geometry that the GPU rasterizes with
+    analytic AA; hairline widths below one pixel fall back to coverage-scaled opacity to avoid shimmer.
+  io: >-
+    SVG/AI strokes import with caps, joins and miter limits.
+  limitations: >-
+    Stroke width is in layer pixels and scales with layer/group scale, as in After Effects; a "keep width" option is
+    a product addition to evaluate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Outline it" or "Trace with light" — choose colour and thickness for the line around the selection.
+    defaults: >-
+      Width scales with the region size (about 1% of the region's short side); round caps and joins.
+    automation: >-
+      The edge-trace recipe (tool.edge-trace) creates the stroke on paths generated from the region outline.
+    usability_check: >-
+      A first-time user outlines a roofline in a chosen colour and thickness in under 30 s and three actions.
+  acceptance: >-
+    AS-1 and mini scene "cornice-line": strokes stay sharp and correctly joined at 4K export.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: shape.gradient-fill
+  name: Gradient fill
+  sources:
+    - ref: S08
+      item: "Gradient Fill (Type, Start Point, End Point, Highlight Length, Highlight Angle, Colors)"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "gradient fills"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Fill shapes with linear or radial gradients with any number of colour and opacity stops, positioned with on-canvas handles.
+  projection_example: >-
+    Windows glow brighter at the bottom and fade toward the top, like light pooling on a sill.
+  controls:
+    - { name: "Type", type: "enum(linear|radial)", animatable: false }
+    - { name: "Colors (color and opacity stops)", type: "gradient", animatable: true }
+    - { name: "Start point", type: "point2d", animatable: true }
+    - { name: "End point", type: "point2d", animatable: true }
+    - { name: "Highlight length", type: "percent", animatable: true }
+    - { name: "Highlight angle", type: "angle", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Fill rule", type: "enum(non-zero|even-odd)", animatable: false }
+  animation: >-
+    Stops, points and highlight keyframable; stop colours interpolate between keyframes even when stop counts differ.
+  dependencies: [shape.fill]
+  implementation: >-
+    WGSL gradient shader evaluated in scene-linear with an option for perceptual (Oklab) stop interpolation, plus
+    blue-noise dither before 8-bit output to prevent banding; stops stored as a sampled 1D texture per frame.
+  io: >-
+    SVG/AI linear and radial gradients import, including gradientTransform; mesh and freeform gradients do not.
+  limitations: >-
+    Gradient stop count changes between keyframes are resolved by resampling; exact After Effects gradient-keyframe
+    behaviour is not reproduced.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Fade the color" — pick two colours and drag the gradient arrow on the canvas.
+    defaults: >-
+      Linear gradient from the region's bottom to top using the palette's primary and transparent.
+    automation: >-
+      Handles start at the selected region's bounds; dither is always on.
+    usability_check: >-
+      A first-time user creates a bottom-to-top glow in a window in under 30 s with no visible banding on export.
+  acceptance: >-
+    Mini scene "window-glow": 8-bit H.264 and 16-bit master exports show no banding at a 1% luminance ramp.
+  status: not-started
+  evidence: []
+
+- id: shape.gradient-stroke
+  name: Gradient stroke
+  sources:
+    - ref: S08
+      item: "Gradient Stroke"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "strokes"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Colour a stroke with a linear or radial gradient, with the same caps, joins, dashes, taper and wave as a solid stroke.
+  projection_example: >-
+    The roofline trace shifts from deep blue at the eaves to white at the ridge.
+  controls:
+    - { name: "Type", type: "enum(linear|radial)", animatable: false }
+    - { name: "Colors (color and opacity stops)", type: "gradient", animatable: true }
+    - { name: "Start point", type: "point2d", animatable: true }
+    - { name: "End point", type: "point2d", animatable: true }
+    - { name: "Highlight length", type: "percent", animatable: true }
+    - { name: "Highlight angle", type: "angle", animatable: true }
+    - { name: "Stroke width", type: "float", animatable: true }
+    - { name: "Line cap / join / miter limit", type: "enum(butt|round|projecting)", animatable: false }
+  animation: >-
+    Same as shape.gradient-fill and shape.stroke.
+  dependencies: [shape.stroke, shape.gradient-fill]
+  implementation: >-
+    Stroke-to-path geometry shaded by the shared gradient shader. A product option "along the path" maps the gradient
+    to arc length instead of screen space (needed for colour-travelling traces).
+  io: >-
+    SVG/AI gradient strokes import where present.
+  limitations: >-
+    Gradient along the path is a product addition, not an After Effects option; it requires per-vertex arc-length
+    attributes on the stroke mesh.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Trace with light" recipe → More controls → "Color fade along the line".
+    defaults: >-
+      Gradient along the path from the palette's primary to secondary colour.
+    automation: >-
+      Arc-length mapping is computed automatically when the path changes.
+    usability_check: >-
+      A first-time user makes a trace fade from one colour to another along its length in under 30 s.
+  acceptance: >-
+    AS-1 and mini scene "gradient-trace": the colour gradient travels with a trim-path draw-on in preview and export.
+  status: not-started
+  evidence: []
+
+- id: shape.dashes
+  name: Stroke dashes
+  sources:
+    - ref: S08
+      item: "Stroke Dashes (Dash, Gap, Offset)"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "dash patterns"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Break a stroke into dashes and gaps with several dash/gap pairs, and animate the offset so the pattern travels
+    along the line.
+  projection_example: >-
+    Marching light dashes run around every door frame like a theatre marquee.
+  controls:
+    - { name: "Dash (per pair)", type: "float", animatable: true }
+    - { name: "Gap (per pair)", type: "float", animatable: true }
+    - { name: "Offset", type: "float", animatable: true }
+    - { name: "Add/remove dash pair", type: "action", animatable: false }
+  animation: >-
+    All lengths and the offset keyframable; offset is commonly driven by time (expr.time-loops) or the beat.
+  dependencies: [shape.stroke]
+  implementation: >-
+    CanvasKit PathEffect.MakeDash applied before stroke-to-path; offset wraps modulo the pattern length so loops are seamless.
+  io: >-
+    SVG stroke-dasharray and dashoffset import.
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Marching lights" — choose dash length, gap and speed for the selected outline.
+    defaults: >-
+      Dash and gap scale with stroke width (3:2); speed loops seamlessly over the comp duration.
+    automation: >-
+      Speed is converted into an offset expression that loops exactly at the comp length.
+    usability_check: >-
+      A first-time user makes a door frame show running dashes in under 30 s in three actions.
+  acceptance: >-
+    Mini scene "marquee": dash offset loops without a jump at the comp boundary in a looped export.
+  status: not-started
+  evidence: []
+
+- id: shape.taper
+  name: Stroke taper
+  sources:
+    - ref: S08
+      item: "Stroke Taper (Start Length, End Length, Start Width, End Width, Start Ease, End Ease, Length Units)"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "strokes with ... taper"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Make a stroke thin out or swell at its start and end, like a brush mark or a comet tail.
+  projection_example: >-
+    A light streak tapers to a point as it races along a balcony rail.
+  controls:
+    - { name: "Length units", type: "enum(percent|pixels)", animatable: false }
+    - { name: "Start length", type: "float", animatable: true }
+    - { name: "End length", type: "float", animatable: true }
+    - { name: "Start width", type: "percent", animatable: true }
+    - { name: "End width", type: "percent", animatable: true }
+    - { name: "Start ease", type: "percent", animatable: true }
+    - { name: "End ease", type: "percent", animatable: true }
+  animation: >-
+    All values keyframable; taper follows the trimmed segment when combined with shape.trim-paths.
+  dependencies: [shape.stroke]
+  implementation: >-
+    Variable-width stroke outline generated in core: sample the centreline by arc length (SkContourMeasure), offset
+    along normals by the eased width profile, then fill the resulting polygon on the GPU. CanvasKit has no native
+    variable-width stroke, so this generator is shared with shape.stroke-wave.
+  io: >-
+    No SVG equivalent; exported SVG would need outlined geometry.
+  limitations: >-
+    Very sharp corners with heavy taper can self-intersect; the generator uses a non-zero fill to hide overlaps.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Trace with light" recipe → More controls → "Comet tail".
+    defaults: >-
+      End taper to 0% over the last 30% of the visible segment.
+    automation: >-
+      Taper is applied relative to the trimmed segment so the tail follows the moving head automatically.
+    usability_check: >-
+      A first-time user adds a tapering tail to a moving trace in under 20 s.
+  acceptance: >-
+    AS-1 and mini scene "comet-rail": tapered trim-path streak renders identically in preview and 4K export.
+  status: not-started
+  evidence: []
+
+- id: shape.stroke-wave
+  name: Stroke wave
+  sources:
+    - ref: S08
+      item: "Stroke Wave (Amount, Units, Wavelength/Cycles, Phase)"
+      category: "Shape attributes, paint operations"
+      checked: false
+    - ref: "brief §7"
+      item: "animated irregularity"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Make the width of a stroke ripple in regular waves along its length and animate the ripple's phase.
+  projection_example: >-
+    A pulsing energy line along the base of the wall ripples in thickness in time with the bass.
+  controls:
+    - { name: "Amount", type: "percent", animatable: true }
+    - { name: "Units", type: "enum(pixels|cycles)", animatable: false }
+    - { name: "Wavelength / cycles", type: "float", animatable: true }
+    - { name: "Phase", type: "angle", animatable: true }
+  animation: >-
+    Amount, wavelength and phase keyframable; phase typically driven by time or audio.
+  dependencies: [shape.stroke, shape.taper]
+  implementation: >-
+    Uses the variable-width stroke generator from shape.taper with a sinusoidal width profile over arc length.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Pulse along the line" recipe → More controls.
+    defaults: >-
+      Amount 50%, wavelength scaled to the path length (about 12 waves), phase advancing one cycle per second.
+    automation: >-
+      Phase animation is generated as a time expression; beat sync binds it to audio.analysis when music exists.
+    usability_check: >-
+      A first-time user makes a line ripple in width in under 20 s without editing keyframes.
+  acceptance: >-
+    Mini scene "energy-line": waved stroke loops seamlessly over the comp length.
+  status: not-started
+  evidence: []
+
+- id: shape.trim-paths
+  name: Trim paths (draw-on)
+  sources:
+    - ref: S08
+      item: "Trim Paths (Start, End, Offset, Trim Multiple Shapes: Simultaneously / Individually)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "trim-path animation"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Show only part of a path and animate start, end and offset so lines draw on, draw off or travel around a shape,
+    across several paths at once or one after another.
+  projection_example: >-
+    Light traces the outline of every window and the roofline, drawing on in sequence and then chasing around them.
+  controls:
+    - { name: "Start", type: "percent", animatable: true }
+    - { name: "End", type: "percent", animatable: true }
+    - { name: "Offset", type: "angle", animatable: true }
+    - { name: "Trim multiple shapes", type: "enum(simultaneously|individually)", animatable: false }
+    - { name: "Constant speed across paths (product addition)", type: "bool", animatable: false }
+  animation: >-
+    Start/end/offset keyframable with graph-editor easing; recipes drive them with keyframes, expressions or audio.
+  dependencies: [shape.layer, shape.path, anim.keyframe.core]
+  implementation: >-
+    Arc-length trimming with SkContourMeasure (CanvasKit PathEffect.MakeTrim for the single-path case); "individually"
+    concatenates contours in stack order and trims the combined length. The constant-speed option weights each path
+    by real length so light travels at one speed around differently sized windows.
+  io: >-
+    Exports bake trimmed geometry per frame; no SVG equivalent beyond animated dashoffset.
+  limitations: >-
+    Offset wraps on closed paths only; open paths clamp, as in After Effects.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Draw it on" / "Trace with light" — select edges or regions, choose colour and speed.
+    defaults: >-
+      Draw-on over 2 s with ease-out; constant speed across paths on; offset loop off.
+    automation: >-
+      Creates the shape layer, stroke, trim and keyframes from the selected region outlines (tool.edge-trace) and
+      offsets each path's timing when "one after another" is chosen.
+    usability_check: >-
+      A first-time user makes light trace a roofline and two windows in under 60 s and three deliberate actions.
+  acceptance: >-
+    AS-1 and mini scene "roofline-trace": trace speed stays constant around corners and matches preview, export and reopen.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: shape.merge-paths
+  name: Merge paths (Boolean operations)
+  sources:
+    - ref: S08
+      item: "Merge Paths (Merge, Add, Subtract, Intersect, Exclude Intersections)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "merge/Boolean operations"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Combine the paths above it into one shape by adding, subtracting, intersecting or excluding overlaps, live and animatable.
+  projection_example: >-
+    Subtract window shapes from a wall-sized rectangle so a texture covers only the masonry, not the glass.
+  controls:
+    - { name: "Mode", type: "enum(merge|add|subtract|intersect|exclude-intersections)", animatable: false }
+  animation: >-
+    Inputs animate; the boolean re-evaluates every frame.
+  dependencies: [shape.layer]
+  implementation: >-
+    CanvasKit PathOps (union, difference, intersect, xor; merge as a simplified compound path) on the evaluated
+    paths, memoized per frame by input-geometry hash so static inputs are computed once.
+  io: >-
+    Merged outlines can be exported as SVG or converted to masks.
+  limitations: >-
+    Boolean results of animated, self-intersecting paths can change vertex counts between frames, which matters only
+    when the result is converted to a mask or path keyframes.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Combine shapes" — select shapes and choose Join, Cut out, Keep overlap or Keep non-overlap.
+    defaults: >-
+      Join (add) for a new merge.
+    automation: >-
+      Inserts the merge operator in the right group position and groups the selected paths if needed.
+    usability_check: >-
+      A first-time user cuts three window shapes out of a wall shape in under 45 s.
+  acceptance: >-
+    Mini scene "masonry-only": subtracted windows stay exact after reopen and in 4K export.
+  status: not-started
+  evidence: []
+
+- id: shape.offset-paths
+  name: Offset paths
+  sources:
+    - ref: S08
+      item: "Offset Paths (Amount, Line Join, Miter Limit, Copies, Copy Offset)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "offsets"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Grow or shrink paths outward or inward and make several concentric copies whose spacing can animate.
+  projection_example: >-
+    Concentric outlines ripple outward from a doorway like sound waves.
+  controls:
+    - { name: "Amount", type: "float", animatable: true }
+    - { name: "Line join", type: "enum(miter|round|bevel)", animatable: false }
+    - { name: "Miter limit", type: "float", animatable: true }
+    - { name: "Copies", type: "int", animatable: true }
+    - { name: "Copy offset", type: "float", animatable: true }
+  animation: >-
+    Amount, copies and copy offset keyframable; animating copy offset makes rings travel.
+  dependencies: [shape.layer]
+  implementation: >-
+    Stroke-to-path at twice the amount with the chosen join, then PathOps union (outset) or difference (inset) with
+    the source, via CanvasKit; copies are repeated offsets at amount + i x copy offset.
+  io: >-
+    none
+  limitations: >-
+    Large negative offsets on thin shapes collapse to empty, which is correct but should be explained in the inspector.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Ripple outward" — choose number of rings and speed around the selected outline.
+    defaults: >-
+      Four copies spaced by twice the stroke width, travelling outward once per beat or second.
+    automation: >-
+      Copy offset is animated with a looping expression so the rings flow continuously.
+    usability_check: >-
+      A first-time user makes rings ripple out of a doorway in under 30 s.
+  acceptance: >-
+    Mini scene "door-ripples": inset and outset offsets render identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: shape.pucker-bloat
+  name: Pucker and bloat
+  sources:
+    - ref: S08
+      item: "Pucker & Bloat (Amount)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "pucker/bloat"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Pull a shape's vertices inward while bowing its edges out (pucker), or the reverse (bloat), for star-like or
+    inflated forms.
+  projection_example: >-
+    Square windows inflate into soft pillow shapes and then pinch into four-pointed stars on a drum hit.
+  controls:
+    - { name: "Amount", type: "float", animatable: true }
+  animation: >-
+    Amount keyframable and expression-linkable (range -100 to 100).
+  dependencies: [shape.layer]
+  implementation: >-
+    Core TypeScript geometry: move vertices toward or away from the path centroid and push tangents the opposite way,
+    matching After Effects' visual behaviour.
+  io: >-
+    none
+  limitations: >-
+    Result depends on vertex count; adding vertices changes the look, as in After Effects.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Squash and puff" recipe → More controls.
+    defaults: >-
+      Amount animates 0 → 40 → 0 over one beat.
+    automation: >-
+      The recipe keyframes the amount with ease and loops it on the beat if music exists.
+    usability_check: >-
+      A first-time user makes a window shape puff out and back in under 20 s.
+  acceptance: >-
+    Mini scene "pillow-windows": amount sweep matches preview and export frame for frame.
+  status: not-started
+  evidence: []
+
+- id: shape.repeater
+  name: Repeater
+  sources:
+    - ref: S08
+      item: "Repeater (Copies, Offset, Composite, Transform: Anchor Point, Position, Scale, Rotation, Start Opacity, End Opacity)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "repeaters; draw one window outline, repeat it across a facade, offset stroke timing by column"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Make many copies of the shapes above it, each shifted, scaled, rotated and faded progressively, and nest repeaters
+    to build grids; a product addition delays each copy's animation by a set time.
+  projection_example: >-
+    Draw one window outline, repeat it into a 6 x 4 grid matching the facade, and stagger the draw-on so each column
+    starts 0.2 s after the previous one.
+  controls:
+    - { name: "Copies", type: "float", animatable: true }
+    - { name: "Offset", type: "float", animatable: true }
+    - { name: "Composite", type: "enum(above|below)", animatable: false }
+    - { name: "Anchor point", type: "point2d", animatable: true }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Scale", type: "size2d", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+    - { name: "Start opacity", type: "percent", animatable: true }
+    - { name: "End opacity", type: "percent", animatable: true }
+    - { name: "Copy time offset (product addition)", type: "duration", animatable: false }
+  animation: >-
+    All repeater properties keyframable; fractional copies fade in the last copy. The copy time offset evaluates the
+    group above at t + copyIndex x offset, giving per-copy timing without duplicating layers.
+  dependencies: [shape.group-transform, anim.time-model]
+  implementation: >-
+    Without a time offset, copies are GPU-instanced draws of one cached tessellation with per-instance matrices and
+    opacity. With a time offset, core evaluates the contents above once per distinct time and caches the results.
+    Nested repeaters compose to grids.
+  io: >-
+    Exported SVG would expand copies; there is no other interchange implication.
+  limitations: >-
+    After Effects repeaters expose no copy index to expressions and have no time offset; both are product additions.
+    Copies follow a regular transform, so irregular facades need region-bound recipes (tool.sequence-light-up)
+    instead of a repeater.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Repeat across" — drag the repeat handle on the canvas to add copies in a row, then a second handle for rows;
+      "One after another" sets the delay.
+    defaults: >-
+      Spacing is taken from the first two snapped positions; delay 0.15 s per copy, ordered left to right.
+    automation: >-
+      Can fit the grid spacing to selected regions and builds nested repeaters for rows and columns automatically.
+    usability_check: >-
+      A first-time user repeats one window outline into a 6 x 4 grid with column-staggered timing in under 90 s.
+  acceptance: >-
+    AS-1 and mini scene "facade-grid": 24 repeated outlines with column delay match preview, export and reopen.
+  status: not-started
+  evidence: []
+
+- id: shape.round-corners
+  name: Round corners
+  sources:
+    - ref: S08
+      item: "Round Corners (Radius)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "rounding"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Round every sharp corner of the paths above it by a radius that can animate.
+  projection_example: >-
+    Hard-edged window outlines soften into rounded capsules as the scene turns playful.
+  controls:
+    - { name: "Radius", type: "float", animatable: true }
+  animation: >-
+    Radius keyframable and expression-linkable.
+  dependencies: [shape.layer]
+  implementation: >-
+    Core geometry that replaces each corner vertex with two vertices and Bezier tangents (radius clamped to half the
+    shorter adjacent segment), matching After Effects rather than CanvasKit's PathEffect.MakeCorner, which differs on curves.
+  io: >-
+    none
+  limitations: >-
+    Only corner (non-smooth) vertices are rounded, as in After Effects.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Soften corners" — one slider on the selected outline.
+    defaults: >-
+      Radius 10% of the shape's shorter side.
+    automation: >-
+      The radius is clamped so corners never overshoot short edges.
+    usability_check: >-
+      A first-time user rounds the corners of a window outline in under 15 s.
+  acceptance: >-
+    Mini scene "capsules": animated radius matches preview and export with no geometry pops.
+  status: not-started
+  evidence: []
+
+- id: shape.twist
+  name: Twist
+  sources:
+    - ref: S08
+      item: "Twist (Angle, Center)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "twist"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Swirl shapes around a centre point, turning more strongly towards the centre.
+  projection_example: >-
+    A rose-window pattern twists into a vortex before collapsing into the centre.
+  controls:
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Center", type: "point2d", animatable: true }
+  animation: >-
+    Angle and centre keyframable.
+  dependencies: [shape.layer]
+  implementation: >-
+    Core geometry: adaptive subdivision of the paths, then rotation of each point by an angle that falls off with its
+    distance from the centre, followed by tangent refit.
+  io: >-
+    none
+  limitations: >-
+    Shapes with few vertices need subdivision for a smooth twist; the subdivision is automatic but increases vertex count.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Swirl into the centre" recipe → More controls.
+    defaults: >-
+      Centre at the selection's centre; angle animates 0° → 360° over 2 s.
+    automation: >-
+      Subdivision density is chosen automatically from the on-screen size.
+    usability_check: >-
+      A first-time user swirls a pattern around a chosen point in under 30 s.
+  acceptance: >-
+    Mini scene "rose-vortex": twist renders smoothly at 4K with no faceting.
+  status: not-started
+  evidence: []
+
+- id: shape.wiggle-paths
+  name: Wiggle paths
+  sources:
+    - ref: S08
+      item: "Wiggle Paths (Size, Detail, Points, Wiggles/Second, Correlation, Temporal Phase, Spatial Phase, Random Seed)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "animated irregularity"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Make outlines jitter, wobble or crackle by randomly displacing added detail points over time, with a seed for
+    repeatable results.
+  projection_example: >-
+    Window outlines buzz like faulty neon, or crackle with electricity along the cornice.
+  controls:
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Detail", type: "float", animatable: true }
+    - { name: "Points", type: "enum(corner|smooth)", animatable: false }
+    - { name: "Wiggles/second", type: "float", animatable: true }
+    - { name: "Correlation", type: "percent", animatable: true }
+    - { name: "Temporal phase", type: "angle", animatable: true }
+    - { name: "Spatial phase", type: "angle", animatable: true }
+    - { name: "Random seed", type: "seed", animatable: false }
+  animation: >-
+    All parameters keyframable; the result is a pure function of (seed, time), so scrubbing, preview and export match.
+  dependencies: [shape.layer, expr.stable-random]
+  implementation: >-
+    Core geometry: subdivide by detail, then displace each point along its normal using stateless seeded smooth noise
+    keyed on (seed, point index, time x rate, phases); no per-frame state.
+  io: >-
+    none
+  limitations: >-
+    Exact random sequences will not match After Effects for the same seed; only the behaviour and parameters match.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Make it buzz" — choose intensity and speed on the selected outline.
+    defaults: >-
+      Size scales with the shape size (about 2%), 3 wiggles/second, seed derived from the layer.
+    automation: >-
+      Seeds are assigned per region so repeated windows do not wiggle in unison; "Re-roll" picks a new seed.
+    usability_check: >-
+      A first-time user makes an outline flicker irregularly and re-rolls the randomness in under 20 s.
+  acceptance: >-
+    AS-3 and mini scene "faulty-neon": the wiggle is identical after reopen, random seek and export.
+  status: not-started
+  evidence: []
+
+- id: shape.zig-zag
+  name: Zig zag
+  sources:
+    - ref: S08
+      item: "Zig Zag (Size, Ridges per segment, Points)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "animated irregularity"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Turn straight or curved outlines into regular zig-zags or smooth waves with a set number of ridges.
+  projection_example: >-
+    A calm cornice line turns into a jagged lightning bolt on the thunder sound effect.
+  controls:
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Ridges per segment", type: "float", animatable: true }
+    - { name: "Points", type: "enum(corner|smooth)", animatable: false }
+  animation: >-
+    Size and ridges keyframable; combine with shape.wiggle-paths for irregular lightning.
+  dependencies: [shape.layer]
+  implementation: >-
+    Core geometry: subdivide each segment into ridges and alternate normal offsets (corner or smooth tangents).
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Lightning edge" and "Wavy line" recipes → More controls.
+    defaults: >-
+      Size 8 px scaled to region, 6 ridges per segment, corner points for lightning, smooth for wave.
+    automation: >-
+      The recipe ramps size from 0 at a chosen moment, optionally on an audio onset.
+    usability_check: >-
+      A first-time user turns a straight edge into a zig-zag that appears on cue in under 30 s.
+  acceptance: >-
+    Mini scene "lightning-cornice": zig-zag amplitude animation matches preview and export.
+  status: not-started
+  evidence: []
+
+- id: shape.wiggle-transform
+  name: Wiggle transform
+  sources:
+    - ref: S08
+      item: "Wiggle Transform (Wiggles/Second, Correlation, Temporal Phase, Spatial Phase, Random Seed, Transform)"
+      category: "Path operations"
+      checked: false
+    - ref: "brief §7"
+      item: "animated irregularity"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Randomly shake the position, scale and rotation of shape groups; placed before a repeater, each copy gets its own
+    random motion.
+  projection_example: >-
+    A grid of repeated window frames jostles slightly out of place before the wall "collapses".
+  controls:
+    - { name: "Wiggles/second", type: "float", animatable: true }
+    - { name: "Correlation", type: "percent", animatable: true }
+    - { name: "Temporal phase", type: "angle", animatable: true }
+    - { name: "Spatial phase", type: "angle", animatable: true }
+    - { name: "Random seed", type: "seed", animatable: false }
+    - { name: "Anchor point", type: "point2d", animatable: true }
+    - { name: "Position", type: "point2d", animatable: true }
+    - { name: "Scale", type: "size2d", animatable: true }
+    - { name: "Rotation", type: "angle", animatable: true }
+  animation: >-
+    All parameters keyframable; output is a pure function of (seed, copy index, time).
+  dependencies: [shape.group-transform, expr.stable-random]
+  implementation: >-
+    Evaluated in core as a seeded noise matrix per group instance; when upstream of a repeater the copy index is mixed
+    into the seed so instances differ while staying deterministic.
+  io: >-
+    none
+  limitations: >-
+    Random sequences differ from After Effects for the same seed.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Shake it" — choose how much and how fast for the selected shapes.
+    defaults: >-
+      Position ±5 px and rotation ±3° scaled to shape size, 2 wiggles/second.
+    automation: >-
+      Places the wiggle before any repeater so every copy moves independently.
+    usability_check: >-
+      A first-time user makes a repeated grid jitter independently per copy in under 30 s.
+  acceptance: >-
+    AS-3 and mini scene "jostle-grid": per-copy jitter is identical after reopen and random-access render.
+  status: not-started
+  evidence: []
+
+- id: shape.path-morph
+  name: Path animation and morphing
+  sources:
+    - ref: S08
+      item: "Path keyframes, First Vertex"
+      category: "Shapes and shape attributes"
+      checked: false
+    - ref: "brief §7"
+      item: "path animation and morphing; morph the outlines into another pattern"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Animate a path from one outline to a completely different one, even with different point counts or numbers of
+    contours, and control which points travel to which.
+  projection_example: >-
+    Repeated window outlines morph into a lattice of diamonds, then into circles, staying on the facade grid.
+  controls:
+    - { name: "Path keyframes", type: "path", animatable: true }
+    - { name: "First vertex", type: "int", animatable: false }
+    - { name: "Correspondence", type: "enum(auto-arc-length|by-index|manual-pairs)", animatable: false }
+    - { name: "Morph path direction", type: "enum(auto|keep)", animatable: false }
+    - { name: "Morph to shape", type: "action", animatable: false }
+  animation: >-
+    Path keyframes interpolate with temporal easing from the graph editor; correspondence is stored per keyframe pair.
+  dependencies: [shape.path, anim.keyframe.core]
+  implementation: >-
+    At keyframe-pair creation, core resamples both outlines by arc length to a shared vertex count, aligns starting
+    points by minimizing travel distance, and matches contour counts by splitting or collapsing contours to points.
+    The prepared pair is cached, so per-frame interpolation is a cheap vertex lerp.
+  io: >-
+    Interpolated shapes export as baked geometry; morph pairs are saved in the project.
+  limitations: >-
+    After Effects needs matching vertex order (or adds vertices) and has no contour matching; automatic
+    correspondence is a product addition and can twist on complex shapes, so manual first-vertex and pairs are
+    available.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Morph into" — select outlines, pick a target shape or draw one, set duration.
+    defaults: >-
+      Automatic correspondence with minimal-travel alignment; 1.5 s with easy ease.
+    automation: >-
+      Vertex counts and contours are matched automatically; twisting is detected and the start point re-aligned.
+    usability_check: >-
+      A first-time user morphs a window outline into a circle with no visible twisting in under 45 s.
+  acceptance: >-
+    AS-1 and mini scene "window-to-diamond": 24 morphing outlines render identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: shape.path-snapping
+  name: Path snapping and numeric vertex editing
+  sources:
+    - ref: S01
+      item: "Snapping (layer edges, vertices, paths)"
+      category: "Drawing, painting and paths"
+      checked: false
+    - ref: "brief §7"
+      item: "snapping, numeric editing"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+    - ref: "brief §0.6"
+      item: "path snapping"
+      category: "Automate tedious preparation"
+      checked: true
+  artist_can: >-
+    Snap path points to region edges and corners, guides, grids and other paths while drawing, and type exact vertex
+    and tangent values when precision matters.
+  projection_example: >-
+    Drawing a column outline clicks onto the column region's corners so the light line sits exactly on the stone edge.
+  controls:
+    - { name: "Snap to", type: "enum(region-corners|region-edges|paths|guides|grid|layer-bounds)", animatable: false }
+    - { name: "Snap radius (screen px)", type: "float", animatable: false }
+    - { name: "Vertex X/Y", type: "point2d", animatable: true }
+    - { name: "In/out tangent", type: "point2d", animatable: true }
+    - { name: "Temporarily disable snapping (hold key)", type: "action", animatable: false }
+  animation: >-
+    Numeric edits at the current time create or update path keyframes like any other edit.
+  dependencies: [shape.path, proj.snapping, proj.guides-grids, map.region]
+  implementation: >-
+    A spatial index (uniform grid or R-tree) of snap targets in comp space, including region outlines projected from
+    map.region into the comp, queried on pointer move with a screen-space radius; numeric fields edit vertices via
+    the same typed ops.
+  io: >-
+    none
+  limitations: >-
+    Region snapping depends on how accurately regions were drawn or calibrated; snapping cannot fix a misaligned venue model.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Snapping is on by default while drawing; a magnet toggle and highlighted snap targets show what will be hit.
+    defaults: >-
+      Snap to region corners and edges first, then paths and guides; 10 px screen radius.
+    automation: >-
+      Highlights the nearest snap candidate and shows its name (e.g. "Window 3 — top-left corner").
+    usability_check: >-
+      A first-time user outlines four windows with every corner within 1 px of the region corners in under 2 min.
+  acceptance: >-
+    Mini scene "snap-columns": snapped paths coincide with region outlines in the projector preview.
+  status: not-started
+  evidence: []
+
+- id: shape.resolution-independence
+  name: Vector sharpness at export resolution
+  sources:
+    - ref: S01
+      item: "Continuously Rasterize (shape and vector layers)"
+      category: "Layers"
+      checked: false
+    - ref: "brief §7"
+      item: "Preserve vector sharpness at export resolution"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Scale shapes, text and imported vectors to any size in any comp or nested comp and still get crisp edges at the
+    final output resolution.
+  projection_example: >-
+    A logo designed small is scaled up across a 12 m facade on a 4K projector with no soft or stepped edges.
+  controls:
+    - { name: "Antialiasing quality", type: "enum(draft|analytic|msaa-8x)", animatable: false }
+    - { name: "Rasterize at output resolution", type: "bool", animatable: false }
+  animation: >-
+    Not animatable; applies at every frame and scale.
+  dependencies: [shape.layer]
+  implementation: >-
+    Vector layers are rasterized after full transform concatenation at the output pixel density, through nested comps
+    when transforms are collapsed; GPU analytic AA or 8x MSAA; caches keyed by effective resolution so a zoomed
+    preview never reuses a low-resolution bitmap for export.
+  io: >-
+    Export at any resolution re-rasterizes vectors; imported vector files stay vector (shape.vector-import).
+  limitations: >-
+    Effects that need pixels (blur, glow) rasterize at the effect stage; order follows the documented
+    continuous-rasterization rules, and a non-collapsed nested comp rasterizes at its own resolution.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Automatic: no user action; the inspector warns "This layer will look soft at export" when a nested comp limits sharpness.
+    defaults: >-
+      Rasterize at output resolution on; analytic AA.
+    automation: >-
+      Detects scale-up through non-collapsed nests and offers a one-click fix.
+    usability_check: >-
+      A first-time user exports a scaled-up vector logo at 4K and finds no soft edges, with no setting changes.
+  acceptance: >-
+    AS-1 and mini scene "logo-scale": edge sharpness of a 10x scaled vector matches a natively sized reference in 4K export.
+  status: not-started
+  evidence: []
+
+- id: shape.vector-import
+  name: Vector import (SVG, AI, PDF) to editable shapes
+  sources:
+    - ref: S01
+      item: "Import Illustrator/PDF files; Create Shapes from Vector Layer"
+      category: "Importing and interpreting footage"
+      checked: false
+    - ref: "brief §7"
+      item: "usable vector import"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Bring in logos and line art from SVG, Illustrator or PDF files and turn them into editable, animatable shape
+    layers with their groups, fills, strokes and gradients intact.
+  projection_example: >-
+    Import the client's SVG logo, then trim-path its outlines so it draws itself onto the facade.
+  controls:
+    - { name: "File", type: "file", animatable: false }
+    - { name: "Import as", type: "enum(editable-shapes|vector-footage|one-layer-per-group)", animatable: false }
+    - { name: "Artboard / page", type: "int", animatable: false }
+    - { name: "Text handling", type: "enum(outlines|text-layers)", animatable: false }
+    - { name: "Create shapes from vector layer", type: "action", animatable: false }
+  animation: >-
+    Imported shapes animate like any shape layer.
+  dependencies: [shape.layer, shape.path, proj.import-media]
+  implementation: >-
+    SVG is parsed in-process into the native path model: path data (arcs converted to cubics), basic shapes, groups and
+    transforms, fill/stroke with dash and caps, linear/radial gradients, opacity, viewBox; clip paths become masks.
+    AI (PDF-compatible) and PDF are read through PDF.js operator lists (paths, fills, strokes, colour spaces) with
+    CMYK converted via color.management.
+  io: >-
+    Imports SVG, AI (PDF-compatible save) and PDF. Embedded raster images are extracted as separate footage. Source
+    files are linked so changes can be reloaded with a re-import prompt.
+  limitations: >-
+    Not supported: SVG filters, masks with luminance, CSS/SMIL animation, patterns and mesh gradients; AI files saved
+    without PDF compatibility; Illustrator live effects and appearance stacks import as expanded geometry only.
+    Unsupported items are listed in an import report.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Add a logo or drawing" — drop an SVG/AI/PDF file on the canvas or a region.
+    defaults: >-
+      Imports as editable shapes, fitted inside the target region with aspect ratio preserved.
+    automation: >-
+      Converts automatically, groups by source layers, and reports any features that could not be kept.
+    usability_check: >-
+      A first-time user imports an SVG logo, fits it to a region and starts a draw-on animation in under 90 s.
+  acceptance: >-
+    Mini scene "svg-logo": a reference SVG renders within tolerance of a browser rendering at 4K; import report lists
+    unsupported features.
+  status: not-started
+  evidence: []
+
+- id: shape.auto-trace
+  name: Auto-trace (paths from image edges)
+  sources:
+    - ref: S01
+      item: "Auto-trace (Channel, Threshold, Tolerance, Minimum Area, Corner Roundness, Blur, Time Span)"
+      category: "Masks"
+      checked: false
+    - ref: "brief §7"
+      item: "path tracing"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Generate editable paths automatically from the edges of an image or video, based on alpha, a colour channel or
+    brightness, for one frame or across time.
+  projection_example: >-
+    Trace the bright window shapes from a night photo of the facade to get starting outlines for light traces.
+  controls:
+    - { name: "Time span", type: "enum(current-frame|work-area)", animatable: false }
+    - { name: "Channel", type: "enum(alpha|red|green|blue|luminance)", animatable: false }
+    - { name: "Invert", type: "bool", animatable: false }
+    - { name: "Blur before trace (px)", type: "float", animatable: false }
+    - { name: "Threshold", type: "percent", animatable: false }
+    - { name: "Tolerance (px)", type: "float", animatable: false }
+    - { name: "Minimum area (px)", type: "float", animatable: false }
+    - { name: "Corner roundness", type: "percent", animatable: false }
+    - { name: "Output", type: "enum(masks|shape-layer)", animatable: false }
+  animation: >-
+    Work-area traces produce one path keyframe per frame; results are ordinary editable paths.
+  dependencies: [shape.path, mask.bezier, proj.work-area]
+  implementation: >-
+    Python vision sidecar: OpenCV threshold, findContours and approxPolyDP, then Schneider Bezier curve fitting with
+    the tolerance; results return as native paths through typed ops. Per-frame traces reuse shape.path-morph
+    correspondence to keep vertex order stable.
+  io: >-
+    none
+  limitations: >-
+    A traced photo gives approximate outlines only; it is not camera calibration or measured geometry. Noisy footage
+    gives unstable vertex counts across frames. The edge-trace creative tool (tool.edge-trace) is the guided consumer.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Trace outlines from this picture" — choose bright or dark parts and adjust one detail slider.
+    defaults: >-
+      Luminance channel, threshold chosen by Otsu's method, small-area noise removed.
+    automation: >-
+      Picks the threshold automatically and previews the traced outlines before they are created.
+    usability_check: >-
+      A first-time user gets usable outlines for six windows from a photo in under 60 s and deletes stray shapes easily.
+  acceptance: >-
+    Mini scene "photo-trace": traced outlines of a test photo fall within 2 px of hand-drawn reference outlines.
+  status: not-started
+  evidence: []
+
+- id: shape.mask-conversion
+  name: Shape and mask path conversion
+  sources:
+    - ref: S01
+      item: "Copy paths between masks and shape layers; create shape layers from masks"
+      category: "Drawing, painting and paths"
+      checked: false
+    - ref: "brief §7"
+      item: "conversion between compatible shape and mask representations"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Turn a mask into a shape layer, a shape into masks on another layer, or copy any path (with its keyframes) between
+    masks, shapes and motion paths.
+  projection_example: >-
+    The soft mask that reveals a texture inside a window becomes a shape layer so the same outline can also glow as a stroke.
+  controls:
+    - { name: "Convert mask to shape", type: "action", animatable: false }
+    - { name: "Convert shape to masks on layer", type: "layer-ref", animatable: false }
+    - { name: "Include keyframes", type: "bool", animatable: false }
+    - { name: "Keep link (product addition)", type: "bool", animatable: false }
+  animation: >-
+    Path keyframes and their easing are copied; with "keep link" the target follows the source path live.
+  dependencies: [shape.path, shape.layer, mask.bezier]
+  implementation: >-
+    Both representations share the native path model, so conversion is a typed op that copies path tracks;
+    RotoBezier masks are converted to standard Bezier first. "Keep link" writes a native path-link reference rather
+    than a copy, and the link is shown in the dependency view.
+  io: >-
+    none
+  limitations: >-
+    Mask-only attributes (feather, expansion, mode, opacity) have no shape equivalent and are reported rather than
+    silently dropped; shape operators are baked when converting to masks.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Use this outline for…" on any selected outline: glow line, cut-out, or motion path.
+    defaults: >-
+      Keep link on, so editing the original outline updates every use.
+    automation: >-
+      Creates the target layer, matches its position in the comp and copies keyframes.
+    usability_check: >-
+      A first-time user reuses a window mask as a glowing outline in under 20 s in two actions.
+  acceptance: >-
+    Mini scene "mask-to-glow": converted outline matches the mask exactly across all keyframes after reopen.
+  status: not-started
+  evidence: []
+
+- id: shape.nulls-from-paths
+  name: Create nulls from paths
+  sources:
+    - ref: S01
+      item: "Create Nulls from Paths (Points Follow Nulls, Nulls Follow Points, Trace Path)"
+      category: "Drawing, painting and paths"
+      checked: false
+    - ref: "brief §5"
+      item: "reusable rigs with exposed parameters"
+      category: "Expressions, controllers and reusable rigs"
+      checked: true
+  artist_can: >-
+    Attach null controllers to path points so dragging a null reshapes the path, make nulls ride on the points, or make
+    a null travel along the path with a progress control.
+  projection_example: >-
+    Rig the roofline path's corners to nulls so the whole trace can be adjusted after a calibration tweak, and send a
+    particle emitter along the cornice with a trace null.
+  controls:
+    - { name: "Mode", type: "enum(points-follow-nulls|nulls-follow-points|trace-path)", animatable: false }
+    - { name: "Trace progress", type: "percent", animatable: true }
+    - { name: "Trace loop", type: "bool", animatable: false }
+    - { name: "Vertices to rig", type: "string", animatable: false }
+  animation: >-
+    Nulls are keyframable layers; trace progress is keyframable or expression-driven.
+  dependencies: [shape.path, proj.null-layer, expr.engine]
+  implementation: >-
+    Generates null layers and links through the operation system. Links use native path-vertex constraints in core
+    for speed, with an equivalent AE-style expression (createPath, toComp/fromComp) shown in More controls.
+  io: >-
+    none
+  limitations: >-
+    Points-follow-nulls with many vertices creates many layers; the timeline groups them under a collapsible rig folder.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Add handles to this outline" or "Send something along this line".
+    defaults: >-
+      Rig only corner vertices; trace progress animates 0–100% over the comp with ease.
+    automation: >-
+      Creates, names and parents the nulls and links them; layers are grouped under the path's name.
+    usability_check: >-
+      A first-time user makes a dot travel along a drawn path in under 30 s.
+  acceptance: >-
+    Mini scene "cornice-runner": a traced null follows the path exactly in preview and export, and editing a vertex updates it.
+  status: not-started
+  evidence: []
+
+- id: shape.paint-brush
+  name: Paint brush strokes
+  sources:
+    - ref: S01
+      item: "Brush tool, Paint panel and Brushes panel (Color, Diameter, Angle, Roundness, Hardness, Spacing, Opacity, Flow, Mode, Channels, tablet pressure)"
+      category: "Painting"
+      checked: false
+    - ref: "brief §7"
+      item: "Paint, clone, eraser, and animated stroke functions"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Paint brush strokes directly on a layer (or on transparency) with size, hardness, opacity, flow and pressure
+    response, and edit or reorder every stroke later.
+  projection_example: >-
+    Hand-paint chalk-style doodles on a wall layer that later appear stroke by stroke.
+  controls:
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Diameter", type: "float", animatable: true }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Roundness", type: "percent", animatable: true }
+    - { name: "Hardness", type: "percent", animatable: true }
+    - { name: "Spacing", type: "percent", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Flow", type: "percent", animatable: true }
+    - { name: "Mode", type: "enum(normal|add|screen|multiply|...)", animatable: false }
+    - { name: "Channels", type: "enum(rgba|rgb|alpha)", animatable: false }
+    - { name: "Pressure controls", type: "enum(off|size|opacity|flow|angle|roundness)", animatable: false }
+    - { name: "Paint on transparent", type: "bool", animatable: false }
+  animation: >-
+    Every stroke's path and settings are keyframable; stroke timing is governed by shape.paint-animation.
+  dependencies: [proj.layer, proj.effect-stack, shape.path]
+  implementation: >-
+    Each stroke is a vector stroke record (sampled points with pressure and time) in a non-destructive Paint item in
+    the layer's effect stack, rasterized per frame by stamping brush dabs into an rgba16float premultiplied buffer in
+    WGSL. Pointer Events supply pen pressure and tilt.
+  io: >-
+    Strokes save as vector data in the project; no external paint format.
+  limitations: >-
+    Painting is per-layer and per-frame range; it is not a full raster painting application.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Draw by hand" — pick a brush look (chalk, marker, soft light) and paint on the canvas.
+    defaults: >-
+      Brush size relative to region size; strokes last the whole layer; pressure controls size if a pen is present.
+    automation: >-
+      Creates a transparent paint layer over the selected region when needed.
+    usability_check: >-
+      A first-time user paints three strokes on a wall and changes one stroke's colour afterwards in under 60 s.
+  acceptance: >-
+    Mini scene "chalk-wall": 50 painted strokes re-render identically after reopen and at 4K.
+  status: not-started
+  evidence: []
+
+- id: shape.paint-animation
+  name: Animated paint strokes (write-on)
+  sources:
+    - ref: S01
+      item: "Paint stroke Duration (Constant, Write On, Single Frame, Custom), Stroke Options (Start, End)"
+      category: "Painting"
+      checked: false
+    - ref: "brief §7"
+      item: "animated stroke functions ... drawn animation"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Make painted strokes appear as they were drawn, last for a single frame or a chosen number of frames, or animate
+    their start and end for frame-by-frame drawn animation.
+  projection_example: >-
+    Chalk drawings write themselves onto the wall in the order and speed the artist painted them.
+  controls:
+    - { name: "Duration", type: "enum(constant|write-on|single-frame|custom)", animatable: false }
+    - { name: "Custom duration (frames)", type: "int", animatable: false }
+    - { name: "Start", type: "percent", animatable: true }
+    - { name: "End", type: "percent", animatable: true }
+    - { name: "Playback speed of recorded strokes", type: "float", animatable: false }
+  animation: >-
+    Write On records the drawing speed as End keyframes; Start/End are keyframable afterwards.
+  dependencies: [shape.paint-brush, anim.keyframe.core]
+  implementation: >-
+    Stroke records keep per-sample timestamps; write-on converts them into End keyframes mapped by arc length.
+    Rasterization truncates the dab sequence at the evaluated end.
+  io: >-
+    none
+  limitations: >-
+    For clean vector draw-ons on geometry, shape.trim-paths or fx.generate.write-on are better; paint write-on keeps
+    the hand-drawn timing.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Draw it on as I paint" — record strokes and they replay with the same timing.
+    defaults: >-
+      Write On with real-time playback; strokes play one after another.
+    automation: >-
+      Speed and order adjust globally with one slider, and the app writes the keyframes.
+    usability_check: >-
+      A first-time user records a three-stroke drawing that replays at double speed in under 60 s.
+  acceptance: >-
+    Mini scene "chalk-replay": replay timing matches recorded timing at 30 and 60 fps exports.
+  status: not-started
+  evidence: []
+
+- id: shape.clone-stamp
+  name: Clone stamp
+  sources:
+    - ref: S01
+      item: "Clone Stamp tool (Source, Aligned, Lock Source Time, Source Time Shift, Clone Source Overlay, Clone presets)"
+      category: "Painting"
+      checked: false
+    - ref: "brief §7"
+      item: "Paint, clone, eraser ... asset cleanup"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Copy pixels from another part of the same or a different layer, at the same or another time, to paint out unwanted
+    objects or duplicate details.
+  projection_example: >-
+    Paint out a lamp post and a sign from the reference video of the facade before using it as a texture.
+  controls:
+    - { name: "Source layer", type: "layer-ref", animatable: false }
+    - { name: "Source offset", type: "point2d", animatable: true }
+    - { name: "Aligned", type: "bool", animatable: false }
+    - { name: "Lock source time", type: "bool", animatable: false }
+    - { name: "Source time shift", type: "time", animatable: false }
+    - { name: "Clone source overlay", type: "percent", animatable: false }
+    - { name: "Clone presets (5 slots)", type: "int", animatable: false }
+  animation: >-
+    Each clone stroke is keyframable like a brush stroke (path, offset, duration).
+  dependencies: [shape.paint-brush, preview.cache]
+  implementation: >-
+    Clone strokes are stroke records like brush strokes. WGSL samples the source layer's rendered frame at
+    (t + time shift) with the offset, which needs random-access frame fetch through the FFmpeg/WebCodecs decoder and
+    preview.cache.
+  io: >-
+    Cleaned results can be pre-rendered (proj.pre-render) to avoid re-sampling during playback.
+  limitations: >-
+    Moving-camera cleanup is laborious by hand; track.content-aware-fill is the automated alternative and
+    track.point can drive the clone offset.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Clean up footage" → "Paint it out by hand" (the manual alternative to automatic removal).
+    defaults: >-
+      Aligned on, overlay 50% while dragging, source time locked to the current frame.
+    automation: >-
+      Shows the overlay preview while dragging and can attach the source offset to a tracker.
+    usability_check: >-
+      A first-time user removes a small sign from a still frame in under 2 min.
+  acceptance: >-
+    AS-4 and mini scene "remove-sign": the cleaned region shows no repeating seams at 100% in export.
+  status: not-started
+  evidence: []
+
+- id: shape.eraser
+  name: Eraser
+  sources:
+    - ref: S01
+      item: "Eraser tool (Layer Source & Paint, Paint Only, Last Stroke Only)"
+      category: "Painting"
+      checked: false
+    - ref: "brief §7"
+      item: "Paint, clone, eraser"
+      category: "Vector shapes, paths and drawing"
+      checked: true
+  artist_can: >-
+    Erase parts of a layer or of painted strokes non-destructively, with the same brush and duration settings as painting.
+  projection_example: >-
+    Erase the bottom of a painted mural so it seems to fade into the doorway.
+  controls:
+    - { name: "Erase", type: "enum(layer-source-and-paint|paint-only|last-stroke-only)", animatable: false }
+    - { name: "Diameter", type: "float", animatable: true }
+    - { name: "Hardness", type: "percent", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Duration", type: "enum(constant|write-on|single-frame|custom)", animatable: false }
+  animation: >-
+    Erase strokes are keyframable like brush strokes and can write on to animate a disappearing drawing.
+  dependencies: [shape.paint-brush]
+  implementation: >-
+    Erase strokes are stroke records with a destination-out operation in the paint pass; "paint only" applies to the
+    paint buffer before it is composited over the layer source.
+  io: >-
+    none
+  limitations: >-
+    For clean geometric reveals, masks (mask.bezier) are usually better; the eraser suits hand-made, organic edges.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Vector-path operator or paint tool for After Effects parity. Paths, fills, strokes, trim paths, boolean and offset paths, repeater, morphing and vector import stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Rub out" — switch the brush to eraser while painting.
+    defaults: >-
+      Paint-only erase when the layer has paint; soft 50% hardness.
+    automation: >-
+      Chooses paint-only automatically when erasing over painted strokes so the source footage is untouched.
+    usability_check: >-
+      A first-time user erases part of a stroke and undoes it in under 20 s.
+  acceptance: >-
+    Mini scene "fade-mural": erase strokes survive reopen and render identically in export.
+  status: not-started
+  evidence: []

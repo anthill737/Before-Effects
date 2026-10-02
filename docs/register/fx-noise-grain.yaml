@@ -1,0 +1,896 @@
+# Noise & Grain effects — Before Effects capability register
+# Sources: S02 effect list + support matrix (Noise & Grain rows), S14 Noise and Grain effects (live page updated 17 June 2026, adds Curl Noise), brief §0, §2, §11C, §13, §14, §20. Live pages checked 2026-10-01 in a browser (Adobe CDN blocks non-browser fetches).
+
+- id: fx.noise-grain.add-grain
+  name: Add Grain
+  sources:
+    - ref: S02
+      item: Add Grain
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S14
+      item: Add Grain
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Synthesize film grain from scratch using film-stock presets or custom settings. Controls cover per-channel intensity, size and softness, tint and saturation, tonal response, blending mode and animation speed. The grain can be confined to parts of the image by color match or a masking layer.
+  projection_example: >-
+    Subtle grain ties 3D renders and filmed archive footage together in a "vintage cinema" section of the show.
+  controls:
+    - { name: "Viewing mode (Preview, Blending matte, Final output)", type: "enum", animatable: false }
+    - { name: "Preset (film stocks)", type: "enum", animatable: false }
+    - { name: "Tweaking (intensity, size, softness, aspect ratio, channel intensities, channel size)", type: "group", animatable: true }
+    - { name: "Color (monochromatic, saturation, tint amount, tint color)", type: "group", animatable: true }
+    - { name: "Application (blending mode Film/Multiply/Add/Screen/Overlay, shadows, midtones, highlights, midpoint, channel balance)", type: "group", animatable: true }
+    - { name: "Animation (animation speed, animate smoothly, random seed)", type: "group", animatable: true }
+    - { name: "Blend with original (amount, color matching, masking layer, blur matte, combine mode)", type: "group", animatable: true }
+    - { name: "Preview region (center, width, height, show box)", type: "group", animatable: false }
+  animation: >-
+    Grain changes per frame at Animation Speed × frame rate. Animate Smoothly interpolates between noise frames, and the seed gives a stable variation.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.seed-control, mask.track-matte, color.management]
+  implementation: >-
+    WGSL grain synthesis. Hash noise is seeded by (seed, frame index × speed), with smooth interpolation between noise frames. It is filtered to grain size, softness and aspect per channel and shaped by a luminance response curve. Film, Multiply, Add, Screen and Overlay blends apply in scene-linear. Stateless per frame and MFR-safe; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Adobe's named film-stock presets are approximated by our own presets. Grain finer than a projector pixel after mapping is softened by resampling; see fx.noise-grain.output-space-grain.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Film grain": choose Light, Medium or Heavy.
+    defaults: >-
+      Medium 35 mm-like grain, Film blend, animation speed 1, applied to the whole scene.
+    automation: >-
+      Scales grain size to the output resolution, so it reads the same at preview and at export.
+    usability_check: >-
+      A first-time user adds medium film grain to a scene and compares before/after in under 20 s.
+  acceptance: >-
+    Mini scene "grain-repeat": identical grain frames on re-render, seek and parallel render.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.curl-noise
+  name: Curl Noise
+  sources:
+    - ref: S14
+      item: Curl Noise
+      category: Noise & Grain
+      checked: true
+    - ref: S02
+      item: Curl Noise
+      category: Noise & Grain
+      adobe_support: { gpu: null, bpc: [], mfr: null }
+      checked: false
+  artist_can: >-
+    Generate smooth, swirling 2D noise for smoke, ink and flowing water. Long flow lines are optional, and the noise can be driven internally or by this or another layer's luminance. Controls cover swirl, density, smoothness and vertical bias.
+  projection_example: >-
+    Smoke-like wisps pour out of the windows and curl up the facade, steered by a gradient layer.
+  controls:
+    - { name: "Input noise (Internal, This layer, Other layer)", type: "enum", animatable: false }
+    - { name: "Speed / Direction (internal)", type: "float + angle", animatable: true }
+    - { name: "Source layer, Source mapping (Fill, Center), Mirror at edge, Softness", type: "group", animatable: true }
+    - { name: "Transform (scale, scale width/height, offset, rotation)", type: "group", animatable: true }
+    - { name: "Curl generation (evolution, turbulence speed, noise speed, swirl, density, smoothness, vertical bias)", type: "group", animatable: true }
+    - { name: "Flow options (sample count, sample radius, flow softness, edge definition, flow falloff)", type: "group", animatable: true }
+    - { name: "Output (view Input/Curl/Final, contrast, brightness, clip HDR results, channel)", type: "group", animatable: true }
+  animation: >-
+    Evolution loops cleanly only when Turbulence Speed and Input Noise Speed are 0 (Adobe's rule). The shared seamless-loop control lifts that restriction.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.fractal-noise, fx.noise-grain.seamless-loop, fx.noise-grain.seed-control, fx.generate.region-space-mapping]
+  implementation: >-
+    WGSL. A scalar potential comes from seeded gradient noise, or from the input layer's blurred luminance. The curl is the perpendicular gradient: analytic derivatives for internal noise, central differences for layer input. A second pass gives the flow-line look with line-integral convolution along the field (Sample Count steps over Sample Radius). Output is rgba16float with optional HDR clip; stateless, and layer input reads past edges per Mirror at Edge.
+  io: >-
+    none
+  limitations: >-
+    New in Adobe's 2026 docs and not yet in the S02 matrix, so Adobe's GPU, bit-depth and MFR support are unknown. LIC cost scales with sample count; draft preview uses fewer samples and flags it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Flowing smoke / ink": select a region and choose drift direction and speed.
+    defaults: >-
+      Internal noise, upward drift, medium swirl, flow lines on, white on transparent, loop on.
+    automation: >-
+      Scales the field to the region and sets a seamless loop over the scene length.
+    usability_check: >-
+      A first-time user adds smoke-like flow rising from selected windows and changes its direction in under 45 s.
+  acceptance: >-
+    Mini scene "window-smoke": loop is exact; draft and full-quality renders differ only in the flagged flow sample count.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.dust-scratches
+  name: Dust & Scratches
+  sources:
+    - ref: S02
+      item: Dust & Scratches
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S14
+      item: Dust & Scratches
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Remove specks, dust and small scratches by replacing pixels that differ too much from their neighborhood median, balancing Radius against Threshold to keep detail.
+  projection_example: >-
+    Cleans specks from scanned archival photos of the building used in a history section.
+  controls:
+    - { name: "Radius", type: "int", animatable: true }
+    - { name: "Threshold", type: "float", animatable: true }
+    - { name: "Operate on alpha channel", type: "bool", animatable: false }
+  animation: >-
+    Radius and Threshold keyframable for shots whose damage varies.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.median]
+  implementation: >-
+    WGSL conditional median shared with Median. A per-pixel median within Radius uses a sorting network for r ≤ 3 and a histogram-based median in compute for larger radii. A pixel is replaced only where |pixel − median| > Threshold. Bounds expand by Radius; stateless.
+  io: >-
+    none
+  limitations: >-
+    The S02 matrix lists 16 bpc as "V", read as Y; S14 confirms 8 and 16 bpc. Large radii soften detail, as in Adobe.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Remove dust and specks" in Fix footage; one strength slider.
+    defaults: >-
+      Radius 2, Threshold 20 (8-bit scale).
+    automation: >-
+      The strength slider maps to a Radius/Threshold pair, with a split-view before/after.
+    usability_check: >-
+      A first-time user removes visible specks from a scanned photo in under 30 s without opening More controls.
+  acceptance: >-
+    Mini scene "archive-clean": specks below threshold are removed; edges preserved within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.fractal-noise
+  name: Fractal Noise
+  sources:
+    - ref: S02
+      item: Fractal Noise
+      category: Noise & Grain
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S14
+      item: Fractal Noise
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Generate animated grayscale fractal (Perlin-style) noise for clouds, smoke, fire, lava, steam, water, and for displacement maps and mattes. Controls cover fractal and noise types, contrast and overflow, transforms, layered octaves (complexity and sub-settings), evolution with cycle looping, and a seed.
+  projection_example: >-
+    Clouds drift across the facade. The same noise drives a displacement for melting brick, and a luma matte for an organic reveal.
+  controls:
+    - { name: "Fractal type (Basic, Turbulent smooth/basic/sharp, Dynamic and variants, Max, Rocky, Smeary, Strings, Swirly, Terrain, Threads)", type: "enum", animatable: false }
+    - { name: "Noise type (Block, Linear, Soft linear, Spline)", type: "enum", animatable: false }
+    - { name: "Invert", type: "bool", animatable: false }
+    - { name: "Contrast / Brightness", type: "float", animatable: true }
+    - { name: "Overflow (Clip, Soft clamp, Wrap back, Allow HDR results)", type: "enum", animatable: false }
+    - { name: "Transform (rotation, uniform scaling, scale, scale width/height, offset turbulence, perspective offset)", type: "group", animatable: true }
+    - { name: "Complexity", type: "float", animatable: true }
+    - { name: "Sub settings (sub influence, sub scaling, sub rotation, sub offset, center subscale)", type: "group", animatable: true }
+    - { name: "Evolution", type: "angle", animatable: true }
+    - { name: "Evolution options (cycle evolution, cycle in revolutions, random seed)", type: "group", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blending mode (incl. None, Hue, Saturation)", type: "enum", animatable: false }
+  animation: >-
+    Animate Evolution for smooth change; Cycle Evolution or the shared loop control gives exact loops. Seeds change the pattern without disturbing the evolution animation. Speed is audio-drivable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, expr.engine, fx.noise-grain.seed-control, fx.noise-grain.seamless-loop, fx.generate.region-space-mapping, fx.generate.audio-reactive-controls, fx.distort.displacement-map, mask.track-matte]
+  implementation: >-
+    WGSL fBm of seeded gradient/value noise, using PCG3D lattice hashing with interpolation per Noise Type. Complexity sets the octaves (capped, with the fractional last octave blended), and the fractal type shapes the result (abs, ridged, turbulent variants). Evolution is a fourth noise dimension traced around a circle, so Cycle loops exactly. Offsets are wrapped so f32 lattice coordinates stay precise, and HDR mode writes unclamped rgba16float. Stateless, MFR-safe; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Patterns are not identical to Adobe's for the same seed; looks are matched by type. Cost grows linearly with Complexity. Adobe's advice to pre-render loops is handled by preview.cache, not manual steps.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Clouds / smoke-like texture" (also "Lava", "Water caustics-like", "Steam" looks) in the library; adjust scale, speed and color.
+    defaults: >-
+      Basic fractal, soft linear noise, scale fitted to the region, evolution 1 revolution per 10 s, loop on.
+    automation: >-
+      Fits scale to the region, loops over the scene, and offers "Use as reveal" and "Use as warp" in one click.
+    usability_check: >-
+      A first-time user applies "Clouds" to a wall, changes speed and scale, and gets a seamless 10 s loop in under 60 s.
+  acceptance: >-
+    Mini scene "noise-loop": frame 0 equals frame L bit-for-bit; seek and export match preview; AS-3 reproducibility after reopen.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.match-grain
+  name: Match Grain
+  sources:
+    - ref: S02
+      item: Match Grain
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S14
+      item: Match Grain
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Sample the grain of a source layer and synthesize matching grain on another layer. It compensates for grain already present, and grain can be retuned (bigger, redder) before applying.
+  projection_example: >-
+    A CG statue is made to match the grain of the filmed performer footage it appears beside.
+  controls:
+    - { name: "Viewing mode (Noise samples, Compensation samples, Preview, Blending matte, Final output)", type: "enum", animatable: false }
+    - { name: "Noise source layer", type: "layer", animatable: false }
+    - { name: "Compensate for existing noise", type: "percent", animatable: true }
+    - { name: "Tweaking (as Add Grain)", type: "group", animatable: true }
+    - { name: "Color / Application / Animation (as Add Grain)", type: "group", animatable: true }
+    - { name: "Sampling (auto/manual, number of samples, sample size, source frame, sample points, box color)", type: "group", animatable: false }
+    - { name: "Blend with original", type: "group", animatable: true }
+  animation: >-
+    Grain animates per frame like Add Grain; the noise model is fixed per sampled source frame.
+  dependencies: [fx.noise-grain.add-grain, fx.noise-grain.remove-grain, proj.effect-stack, preview.cache]
+  implementation: >-
+    Estimation runs in a worker. It auto-selects flat 24×24 patches (low gradient variance) from the source frame, estimates per-channel noise σ against luminance, and estimates the spatial power spectrum (grain size and softness). The Add Grain synthesis pass then runs with the fitted parameters, and compensation subtracts the destination's measured noise variance. The model is cached per (source layer, frame); the temporal dependency is one frame of another layer.
+  io: >-
+    none
+  limitations: >-
+    Only adds grain; if the destination is noisier, use Remove Grain first, as Adobe advises. Samples come from the source footage before effects, unless it is precomposed.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Match the grain of…": select the clean layer, then pick the grainy clip.
+    defaults: >-
+      Automatic sampling, compensation on, Final output.
+    automation: >-
+      Samples automatically and warns when too few flat areas exist.
+    usability_check: >-
+      A first-time user matches grain between a CG element and footage in 3 or fewer deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "grain-match": measured noise σ per channel on the output is within 10% of the source.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.median
+  name: Median
+  sources:
+    - ref: S02
+      item: Median
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S14
+      item: Median
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Replace each pixel with the median of its neighborhood. Low radii reduce salt-and-pepper noise; high radii give a painterly, simplified look.
+  projection_example: >-
+    A photo of the facade turns into a painterly, simplified version before it "repaints" itself into reality.
+  controls:
+    - { name: "Radius", type: "int", animatable: true }
+    - { name: "Operate on alpha channel", type: "bool", animatable: false }
+  animation: >-
+    Radius keyframable (painterly to sharp transition).
+  dependencies: [proj.effect-stack, anim.keyframe.core]
+  implementation: >-
+    Shared median kernel: a sorting network for small radii and a histogram-based median for large ones (O(1) per pixel, Perreault-style) in compute. Per channel on unpremultiplied color. Bounds expand by Radius; stateless.
+  io: >-
+    none
+  limitations: >-
+    S02 lists 8/16/32 bpc but S14 states 8 and 16 bpc only; recorded per S02. Very large radii are costly, and draft preview caps them with a flag.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Painterly look" (Stylize looks) or "Smooth out noise" (Fix footage) → More controls.
+    defaults: >-
+      Radius 3 for noise, 12 for painterly.
+    automation: >-
+      Radius is scaled to output resolution so the look holds at export.
+    usability_check: >-
+      A first-time user makes a photo painterly and animates it back to sharp in under 45 s.
+  acceptance: >-
+    Mini scene "paint-to-real": radius animation renders identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.median-legacy
+  name: Median (Legacy)
+  sources:
+    - ref: S02
+      item: Median (Legacy)
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S14
+      item: Median (Legacy)
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Reduce noise by median-filtering within a radius, optionally on the alpha channel.
+  projection_example: >-
+    Removes salt-and-pepper noise from an old scanned plan of the building.
+  controls:
+    - { name: "Radius", type: "int", animatable: true }
+    - { name: "Operate on alpha channel", type: "bool", animatable: false }
+  animation: >-
+    Radius keyframable.
+  dependencies: [fx.noise-grain.median]
+  implementation: >-
+    Uses the Median pass; no separate implementation.
+  io: >-
+    Imported legacy-effect settings, if ever interchanged, map to Median with the same Radius and alpha option.
+  limitations: >-
+    Adobe kept this only for compatibility. Its controls and outcome are identical to Median, so Median covers it fully.
+  disposition: superseded
+  superseded_by: fx.noise-grain.median
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Not shown separately; searching "Median (Legacy)" opens Median.
+    defaults: >-
+      As Median.
+    automation: >-
+      Search alias redirects to Median.
+    usability_check: >-
+      A user searching "median legacy" lands on Median in one action.
+  acceptance: >-
+    Covered by Median's acceptance scene.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.noise
+  name: Noise
+  sources:
+    - ref: S02
+      item: Noise
+      category: Noise & Grain
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S14
+      item: Noise
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Add random per-pixel noise, in color or monochrome, with optional clipping.
+  projection_example: >-
+    A burst of TV static floods the windows during a glitch transition.
+  controls:
+    - { name: "Amount of noise", type: "percent", animatable: true }
+    - { name: "Noise type (Use color noise)", type: "bool", animatable: false }
+    - { name: "Clipping", type: "bool", animatable: false }
+    - { name: "Seed / hold rate (product addition)", type: "seed + float", animatable: false }
+  animation: >-
+    Amount keyframable and audio-drivable; noise changes every frame (optionally held for N frames).
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.seed-control, fx.generate.audio-reactive-controls]
+  implementation: >-
+    WGSL per-pixel hash noise from (seed, frame index, pixel), added in working space. Clipping toggles the clamp, and there is no clipping in HDR, as in Adobe at 32 bpc. Stateless.
+  io: >-
+    none
+  limitations: >-
+    Adobe's Noise has no seed control. Ours is deterministic per frame, so re-renders and parallel renders are identical.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "TV static / noise" in Glitch & texture; one amount slider.
+    defaults: >-
+      Amount 30%, color noise on, clipping on.
+    automation: >-
+      Offers "Static burst on beat", which keyframes amount from onsets.
+    usability_check: >-
+      A first-time user adds a static burst to selected windows in under 30 s.
+  acceptance: >-
+    Mini scene "static-burst": identical frames on re-render and in parallel export.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.noise-alpha
+  name: Noise Alpha
+  sources:
+    - ref: S02
+      item: Noise Alpha
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S14
+      item: Noise Alpha
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Add noise to the alpha channel only (uniform, squared, or animated variants), applied to opaque areas, scaled by opacity, or only at edges. Overflow handling, seed and cycling animation are included.
+  projection_example: >-
+    A projected logo materializes with grainy, sparkling edges before it solidifies.
+  controls:
+    - { name: "Noise (Uniform random, Squared random, Uniform animation, Squared animation)", type: "enum", animatable: false }
+    - { name: "Amount", type: "percent", animatable: true }
+    - { name: "Original alpha (Add, Clamp, Scale, Edges)", type: "enum", animatable: false }
+    - { name: "Overflow (Clip, Wrap back, Wrap)", type: "enum", animatable: false }
+    - { name: "Random seed", type: "seed", animatable: true }
+    - { name: "Noise phase", type: "angle", animatable: true }
+    - { name: "Noise options (cycle noise, cycle in revolutions)", type: "group", animatable: true }
+  animation: >-
+    Animate Noise Phase for smooth change; Cycle Noise loops exactly. Animating the seed gives flashing noise, as in Adobe.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.seed-control, fx.noise-grain.seamless-loop]
+  implementation: >-
+    WGSL seeded hash noise on alpha. Animated variants interpolate hash lattices along the noise phase, which is periodic for Cycle Noise. Overflow is remapped, and color is re-premultiplied to the new alpha. Stateless.
+  io: >-
+    Changes alpha; transparent exports carry the noisy edge.
+  limitations: >-
+    Noisy alpha can produce fringes on projector edge masks; creative alpha stays separate from out.output-mask.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Grainy dissolve" transition recipe → More controls.
+    defaults: >-
+      Edges mode, uniform animation, amount 60%.
+    automation: >-
+      The recipe keyframes Amount from 100% to 0% over the reveal.
+    usability_check: >-
+      A first-time user applies a grainy dissolve-in to a logo in under 30 s.
+  acceptance: >-
+    Mini scene "grain-dissolve": premultiplied alpha has no dark fringes when composited and exported with alpha.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.noise-hls
+  name: Noise HLS
+  sources:
+    - ref: S02
+      item: Noise HLS
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S14
+      item: Noise HLS
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Add noise separately to hue, lightness and saturation (uniform, squared or film-grain-like), animated by keyframing Noise Phase.
+  projection_example: >-
+    Windows flicker with subtle color noise like old neon tubes before they stabilize.
+  controls:
+    - { name: "Noise (Uniform, Squared, Grain)", type: "enum", animatable: false }
+    - { name: "Hue / Lightness / Saturation", type: "percent", animatable: true }
+    - { name: "Grain size", type: "float", animatable: true }
+    - { name: "Noise phase", type: "angle", animatable: true }
+  animation: >-
+    Keyframe Noise Phase (or link it to time) to animate; amounts are audio-drivable.
+  dependencies: [proj.effect-stack, anim.keyframe.core, fx.noise-grain.seed-control, color.management]
+  implementation: >-
+    WGSL: convert scene-linear to display-referred encoding, apply seeded per-channel noise in HLS, then convert back. The Grain type filters noise to Grain Size, and Noise Phase interpolates hash lattices. Stateless.
+  io: >-
+    none
+  limitations: >-
+    HLS math is defined on display-referred values, so this effect has a documented conversion boundary. HDR values above 1 are clipped for this effect.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Color flicker" look → More controls.
+    defaults: >-
+      Hue 5%, lightness 10%, saturation 10%, grain type.
+    automation: >-
+      The look writes a time-linked Noise Phase expression so it animates without keyframes.
+    usability_check: >-
+      A first-time user adds a subtle neon-style color flicker to windows in under 30 s.
+  acceptance: >-
+    Mini scene "neon-flicker": identical frames on re-render; conversion boundary verified against reference values.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.noise-hls-auto
+  name: Noise HLS Auto
+  sources:
+    - ref: S02
+      item: Noise HLS Auto
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8], mfr: true }
+      checked: true
+    - ref: S14
+      item: Noise HLS Auto
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Add hue, lightness and saturation noise that animates by itself at a chosen speed, with no keyframes.
+  projection_example: >-
+    A continuous, gentle color shimmer on stained-glass windows for the whole interlude.
+  controls:
+    - { name: "Noise (Uniform, Squared, Grain)", type: "enum", animatable: false }
+    - { name: "Hue / Lightness / Saturation", type: "percent", animatable: true }
+    - { name: "Grain size", type: "float", animatable: true }
+    - { name: "Noise animation speed", type: "float", animatable: true }
+  animation: >-
+    Self-animating; speed keyframable or audio-drivable, with integrated phase so speed changes don't jump.
+  dependencies: [fx.noise-grain.noise-hls, fx.noise-grain.seed-control, fx.generate.audio-reactive-controls]
+  implementation: >-
+    Same pass as Noise HLS, with phase = ∫ speed dt, evaluated by a prefix-sum cache over the speed curve so random access is exact. Stateless.
+  io: >-
+    none
+  limitations: >-
+    Same HLS conversion boundary as Noise HLS. Kept distinct from Noise HLS because the self-animating behavior is its own outcome.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Color shimmer" look; one speed slider.
+    defaults: >-
+      Speed 10, hue 3%, saturation 8%.
+    automation: >-
+      Looks pick sensible amounts per surface brightness.
+    usability_check: >-
+      A first-time user adds a self-animating color shimmer and slows it down in under 20 s.
+  acceptance: >-
+    Mini scene "glass-shimmer": speed ramps cause no phase jumps; random-access frames equal sequential frames.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.remove-grain
+  name: Remove Grain
+  sources:
+    - ref: S02
+      item: Remove Grain
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16], mfr: true }
+      checked: true
+    - ref: S14
+      item: Remove Grain
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Reduce grain and noise while keeping edges and detail. It uses automatic or manual noise sampling, single or multi-pass reduction, chroma suppression, texture and noise-size bias. Optional temporal filtering and unsharp masking are included, and it can be limited to parts of the image.
+  projection_example: >-
+    Cleans noisy night footage of the venue before it is used as a background plate in the audience preview.
+  controls:
+    - { name: "Viewing mode / Preview region", type: "group", animatable: false }
+    - { name: "Noise reduction settings (noise reduction, passes, single/multi-channel mode, channel noise reduction)", type: "group", animatable: true }
+    - { name: "Fine tuning (chroma suppression, texture, noise size bias, clean solid areas)", type: "group", animatable: true }
+    - { name: "Temporal filtering (enable, amount, motion sensitivity)", type: "group", animatable: true }
+    - { name: "Unsharp mask (amount, radius, threshold)", type: "group", animatable: true }
+    - { name: "Sampling (auto/manual, samples, size, source frame, points)", type: "group", animatable: false }
+    - { name: "Blend with original", type: "group", animatable: true }
+  animation: >-
+    Strength controls keyframable; the noise model comes from one sampled frame.
+  dependencies: [proj.effect-stack, anim.keyframe.core, preview.cache, track.point, fx.blur-sharpen.unsharp-mask]
+  implementation: >-
+    A GPU denoiser guided by the sampled noise model: per-channel non-local means (or wavelet shrinkage) with strength from the estimated σ, multi-pass. Temporal filtering blends motion-compensated neighbor frames (±2) using GPU block matching or OpenCV optical flow in the vision sidecar, gated by motion sensitivity. An unsharp mask follows. Temporal deps of ±N frames are declared, and results are cached.
+  io: >-
+    none
+  limitations: >-
+    Heavy and slow at 4K; results are pre-rendered in the background. An ML denoiser through the Python sidecar is a possible later upgrade, not a requirement.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Clean up grainy footage" in Fix footage; one strength slider plus a before/after split.
+    defaults: >-
+      Automatic sampling, 2 passes, temporal filtering on for static shots.
+    automation: >-
+      Detects whether the shot is static to enable temporal filtering and pre-renders the result in the background.
+    usability_check: >-
+      A first-time user visibly cleans a grainy night clip in under 45 s without choosing sample points.
+  acceptance: >-
+    Mini scene "night-plate": measured noise σ drops by ≥50% while edge sharpness (gradient energy) stays within 10%; random-access frames match sequential ones.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.turbulent-noise
+  name: Turbulent Noise
+  sources:
+    - ref: S02
+      item: Turbulent Noise
+      category: Noise & Grain
+      adobe_support: { gpu: false, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S14
+      item: Turbulent Noise
+      category: Noise & Grain
+      checked: true
+  artist_can: >-
+    Generate fractal noise that moves like a turbulent system, with small features moving faster than large ones. Controls are nearly the same as Fractal Noise, but Adobe's version has no cycle looping.
+  projection_example: >-
+    A fire-like turbulent texture, colored by a gradient map, licks up the columns.
+  controls:
+    - { name: "Fractal type / Noise type / Invert", type: "group", animatable: false }
+    - { name: "Contrast / Brightness", type: "float", animatable: true }
+    - { name: "Overflow (Clip, Soft clamp, Wrap back, Allow HDR results)", type: "enum", animatable: false }
+    - { name: "Transform (rotation, scale, offset turbulence, perspective offset)", type: "group", animatable: true }
+    - { name: "Complexity / Sub settings", type: "group", animatable: true }
+    - { name: "Evolution", type: "angle", animatable: true }
+    - { name: "Evolution options (random seed)", type: "group", animatable: false }
+    - { name: "Opacity / Blending mode", type: "group", animatable: true }
+  animation: >-
+    Animate Evolution and offset for rising turbulence. Looping is a product addition via the shared loop control.
+  dependencies: [fx.noise-grain.fractal-noise, fx.noise-grain.seed-control, fx.noise-grain.seamless-loop, fx.generate.audio-reactive-controls]
+  implementation: >-
+    Shares the Fractal Noise pass, with per-octave evolution and offset rates (finer octaves move faster) for turbulent motion. An optional loop maps each octave's evolution onto its own periodic circle with integer cycle counts. Stateless; bounds = layer.
+  io: >-
+    none
+  limitations: >-
+    Adobe offers no loop; when our loop is on, octave rates are quantized, which slightly changes the motion character.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Fire-like turbulence" / "Boiling energy" looks; adjust speed, scale and color.
+    defaults: >-
+      Turbulent sharp type, upward offset drift, warm gradient colorization from the look.
+    automation: >-
+      The look adds the colorize step and scales to the region.
+    usability_check: >-
+      A first-time user makes fire-like texture rise up selected columns in under 45 s.
+  acceptance: >-
+    Mini scene "column-fire": turbulence is deterministic across seek and parallel render.
+  status: not-started
+  evidence: []
+
+# ---------------------------------------------------------------------------
+# Projection-specific noise and texture capabilities (brief §11C, §15, §16, §20)
+# ---------------------------------------------------------------------------
+
+- id: fx.noise-grain.seamless-loop
+  name: Seamless loop for procedural textures
+  sources:
+    - ref: "brief §11C"
+      item: Controllable evolution, seamless looping
+      category: Noise and texture
+      checked: true
+  artist_can: >-
+    Set a loop length on any evolving generator or noise: seconds, bars of music, or the scene length. The last frame then flows perfectly into the first, with no hand-keyframed evolution revolutions.
+  projection_example: >-
+    A 20-second cloud loop plays all night between shows on the facade with no visible jump.
+  controls:
+    - { name: "Loop", type: "bool", animatable: false }
+    - { name: "Loop length (time, bars, match scene)", type: "time", animatable: false }
+    - { name: "Evolution per loop", type: "float", animatable: false }
+    - { name: "Check loop (diagnostic)", type: "action", animatable: false }
+  animation: >-
+    Replaces manual Evolution keyframing; other animated controls are flagged if they don't return to their start values.
+  dependencies: [fx.noise-grain.fractal-noise, fx.noise-grain.turbulent-noise, fx.noise-grain.curl-noise, fx.generate.cell-pattern, audio.analysis, anim.keyframe.core, render.verify]
+  implementation: >-
+    The evolution parameter maps onto a circle in an extra noise dimension, so state(t) = state(t + L) exactly. Drift offsets wrap on a tiled domain, and Turbulent and Curl speed terms become periodic forms. An automatic check renders frames 0 and L and reports the max difference. Applies to every procedural in fx.generate.* and fx.noise-grain.*.
+  io: >-
+    Loop length is stored with the effect. Exports of looping scenes can be marked loopable in render presets.
+  limitations: >-
+    Transform animations (scale, rotation) are not looped unless they also return; the check flags them. The periodic mapping looks slightly different from unlooped evolution.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Loop seamlessly" toggle on every texture, on by default when the scene is set to loop.
+    defaults: >-
+      Loop length = scene length (or 8 bars when music has a BPM grid).
+    automation: >-
+      Computes the evolution needed for the chosen look and length, and runs the loop check before export.
+    usability_check: >-
+      A first-time user makes a cloud texture loop for a 20 s segment without opening keyframes, the loop check passes, all in under 30 s.
+  acceptance: >-
+    Mini scene "noise-loop": an exported loop played repeatedly shows no jump; frame 0 and frame L are bit-identical in 16f.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.seed-control
+  name: Stable random seeds
+  sources:
+    - ref: "brief §20"
+      item: Use deterministic time and seeded randomness
+      category: Architecture and build rules
+      checked: true
+    - ref: "brief §11D"
+      item: Deterministic seeds
+      category: Simulation and particles
+      checked: true
+  artist_can: >-
+    Every random-looking effect has a seed that keeps its look identical in preview, export, after reopening and on any render worker. Duplicates get different but stable seeds automatically, and "Shuffle" picks a new variation.
+  projection_example: >-
+    100 windows each show a different but repeatable flicker pattern, identical in tonight's export and next week's re-render.
+  controls:
+    - { name: "Seed", type: "int", animatable: false }
+    - { name: "Shuffle", type: "action", animatable: false }
+    - { name: "Seed source (manual, per layer, per region index)", type: "enum", animatable: false }
+    - { name: "Lock seed", type: "bool", animatable: false }
+  animation: >-
+    Seeds are not normally animated, since animating flashes between variations. Time variation comes from evolution or frame-indexed hashing.
+  dependencies: [expr.engine, proj.effect-stack, ux.operation-system, expr.rigs]
+  implementation: >-
+    Core stateless RNG: seed = hash(project seed, effect-instance UUID or user seed, region index), plus frame index where the effect varies in time. PCG/xxhash implementations in TS and WGSL produce bit-identical results, never wall-clock or Math.random. The duplicate op derives new seeds unless "keep look" is chosen. Noise functions are versioned in the project format.
+  io: >-
+    Seeds and noise-function versions are saved in the project; migrations keep the old noise version for existing effects.
+  limitations: >-
+    Adobe seed values will not reproduce Adobe's patterns. Changing a noise algorithm requires keeping the old version so saved projects still match.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Shuffle" (dice) button on every random-looking control group; seeds stay hidden otherwise.
+    defaults: >-
+      Automatic per-instance seed; per-region index seed when applied across regions.
+    automation: >-
+      Assigns distinct stable seeds on duplicate and on per-region application.
+    usability_check: >-
+      A first-time user shuffles a lightning variation, reopens the project and sees the same result, with no seed concept needed, in under 20 s.
+  acceptance: >-
+    AS-3: reopen plus random seek reproduces identical frames; parallel render workers produce frames bit-identical to sequential render.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.organic-reveal
+  name: Organic / textured reveal
+  sources:
+    - ref: "brief §11C"
+      item: Organic growth masks and textured reveals
+      category: Noise and texture
+      checked: true
+  artist_can: >-
+    Reveal or dissolve content inside selected regions with a noise-shaped edge that grows like moss, smoke or burning paper. A colored glowing edge band is optional.
+  projection_example: >-
+    Ivy-like growth spreads up from the base of the walls to reveal a garden material, with a glowing green growth edge.
+  controls:
+    - { name: "Regions", type: "region-ref list", animatable: false }
+    - { name: "Progress", type: "percent", animatable: true }
+    - { name: "Texture (clouds, cells, turbulence, curl)", type: "enum", animatable: false }
+    - { name: "Grow from (point, edge, direction)", type: "enum + point2d", animatable: true }
+    - { name: "Edge softness", type: "float", animatable: true }
+    - { name: "Edge glow color / width", type: "color + float", animatable: true }
+    - { name: "Seed", type: "seed", animatable: false }
+  animation: >-
+    Progress keyframed by the recipe (editable in the graph editor); can be beat-stepped.
+  dependencies: [fx.noise-grain.fractal-noise, fx.generate.cell-pattern, mask.track-matte, map.region, fx.transition.gradient-wipe, ux.recipe-engine, fx.noise-grain.seed-control]
+  implementation: >-
+    The noise generator renders to a matte and combines with a distance field from the chosen origin (jump-flood from a region edge or point). It is thresholded by Progress with softness, the edge band is colored, and the result is applied as a track matte. All WGSL; stateless.
+  io: >-
+    Region-role references.
+  limitations: >-
+    A 2D look; growth does not follow 3D geometry unless used with 3D solid noise.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Grow over" / "Burn away" recipes: select regions, pick texture and duration.
+    defaults: >-
+      Grow from the bottom edge, clouds texture, 3 s, soft edge with a thin glow.
+    automation: >-
+      Builds the matte stack, keyframes progress, and sizes texture to the regions.
+    usability_check: >-
+      A first-time user grows a new material over a wall in 3 or fewer deliberate actions and under 45 s.
+  acceptance: >-
+    Mini scene "ivy-reveal": reveal completes exactly at the set time and covers the full region; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.solid-noise-3d
+  name: 3D solid noise on venue models
+  sources:
+    - ref: "brief §11C"
+      item: Animated fractal/turbulent noise
+      category: Noise and texture
+      checked: true
+    - ref: "brief §16"
+      item: Installation-wide coordinates
+      category: Multiple projectors and output management
+      checked: true
+  artist_can: >-
+    Evaluate noise in 3D object or venue space, so a texture wraps continuously around corners and across model surfaces. It stays locked to the building from every projector.
+  projection_example: >-
+    Lava flows around the corner where two facades meet, with no seam where the faces and projectors overlap.
+  controls:
+    - { name: "Space (object, venue/world)", type: "enum", animatable: false }
+    - { name: "Scale (real-world units)", type: "float", animatable: true }
+    - { name: "Look controls (as Fractal Noise)", type: "group", animatable: true }
+    - { name: "Evolution / loop", type: "group", animatable: true }
+    - { name: "Seed", type: "seed", animatable: false }
+  animation: >-
+    Evolution and offsets keyframable; loop via a periodic lattice in the time dimension.
+  dependencies: [3d.scene, 3d.material-pbr, map.model-3d, fx.noise-grain.fractal-noise, fx.noise-grain.seamless-loop, fx.noise-grain.seed-control, out.edge-blend]
+  implementation: >-
+    3D/4D gradient noise evaluated in TSL node materials (three.js WebGPU) on venue or creative geometry, or in the compositor from a world-position pass. It uses the same hash functions as the 2D pass so looks match, and is periodic in time for looping.
+  io: >-
+    none
+  limitations: >-
+    Needs a venue model with real-world scale. Flat-surface (2D) shows should use region-space mapping instead.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Automatic: noise looks applied to a 3D venue surface use solid noise; "Wrap around corners" shows as on.
+    defaults: >-
+      Venue space, scale 1 m per feature.
+    automation: >-
+      Chooses venue space when the target is a 3D surface spanning several faces.
+    usability_check: >-
+      A first-time user applies lava to a two-face corner and sees no seam at the corner in under 30 s.
+  acceptance: >-
+    AS-5 variant: across a projector overlap, both outputs sample identical noise values at the same surface point (difference under 1/1000).
+  status: not-started
+  evidence: []
+
+- id: fx.noise-grain.output-space-grain
+  name: Grain at projector resolution
+  sources:
+    - ref: "brief §14"
+      item: Gradients must survive the pipeline without banding; effect precision and conversion boundaries
+      category: Color precision and image quality
+      checked: true
+    - ref: "brief §16"
+      item: Per-projector output management
+      category: Multiple projectors and output management
+      checked: true
+  artist_can: >-
+    Optionally generate grain or dither per projector output at native projector pixel size, after mapping, so it is neither blurred nor aliased by the warp onto the building.
+  projection_example: >-
+    Film grain in a vintage section stays crisp on each projector instead of turning into soft mush after the facade warp.
+  controls:
+    - { name: "Enable per output", type: "bool", animatable: false }
+    - { name: "Grain amount / size (projector pixels)", type: "float", animatable: true }
+    - { name: "Dither for 8-bit outputs", type: "bool", animatable: false }
+  animation: >-
+    Amount follows the show's grain setting so creative intent stays in the show.
+  dependencies: [out.projector-output, out.edge-blend, fx.noise-grain.add-grain, render.encode, fx.noise-grain.seed-control]
+  implementation: >-
+    Proposed: an optional seeded grain/dither pass in the projector output pipeline after the residual mesh warp. In blend zones, both projectors must use surface-locked (not per-output) noise to avoid doubled or decorrelated grain.
+  io: >-
+    Would be recorded in the projector bundle manifest as a correction stage so it is never applied twice.
+  limitations: >-
+    Decision 2026-10-02: content-space grain ships first; an optional output-space grain toggle follows once physical projector tests show whether warped grain softens visibly (hardware-dependent validation).
+
+    Open question: is content-space grain, rendered at master resolution and then warped, visibly degraded on real projectors? If so, it may justify an output-stage grain/dither, but that puts a creative element after mapping and breaks the rule that output stages stay technical. Decide after physical tests at milestone E.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Grain, denoise or colour-noise effect for After Effects parity. Fractal and curl noise, seamless loops, stable seeds and organic reveals stay required."
+  milestone: E
+  beginner:
+    action: >-
+      If adopted: automatic. Grain in the show is moved to the projector stage when the export target is "files for my projector setup".
+    defaults: >-
+      Off until tests show a benefit.
+    automation: >-
+      Would detect grain or dither in the show and offer to apply it per output instead.
+    usability_check: >-
+      If adopted, a first-time user exports projector files with grain without making any extra choice, and a reviewer cannot see grain softening on the physical projection.
+  acceptance: >-
+    Physical test on actual hardware comparing content-space and output-space grain; a decision recorded before milestone E closes.
+  status: not-started
+  evidence: []

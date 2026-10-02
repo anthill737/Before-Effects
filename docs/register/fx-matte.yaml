@@ -1,0 +1,368 @@
+# Matte — Before Effects capability register
+# Sources: S02 effect list + support matrix (Matte and Boris FX Mocha tables, checked live 2026-10-01); S01 user guide → Matte effects page (checked live 2026-10-01); S21 Roto Brush and Refine Matte; S20 tracking; brief §6, §11J, §14, §22 (AS-4). Mocha AE is listed by S02 in its own "Boris FX Mocha" category and is recorded here next to Mocha shape.
+
+- id: fx.matte.matte-choker
+  name: Matte Choker
+  sources:
+    - ref: S02
+      item: Matte Choker
+      category: Matte
+      adobe_support:
+        gpu: false
+        bpc: [8, 16]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Matte Choker effect
+      category: Matte
+      checked: true
+  artist_can: >-
+    Fill unwanted holes inside a matte and then tighten its edge back to the original shape, using two spread and choke stages repeated a set number of times.
+  projection_example: >-
+    Fill pinholes in a keyed performer's matte caused by green reflections in a shiny costume before projecting them large.
+  controls:
+    - { name: Geometric Softness 1 / 2, type: number, animatable: true }
+    - { name: Choke 1 / 2, type: number, animatable: true }
+    - { name: Gray Level Softness 1 / 2, type: number, animatable: true }
+    - { name: Iterations, type: integer, animatable: true }
+  animation: >-
+    All stage values and iterations keyframable.
+  dependencies: [proj.effect-stack, fx.matte.simple-choker]
+  implementation: >-
+    WGSL pass graph that builds a signed distance field of the alpha 0.5 contour by jump flooding. Each stage shifts the threshold by Choke within the Geometric Softness radius (negative spreads, positive chokes) and remaps edge grey levels by Gray Level Softness. The stage pair is repeated for Iterations, and 100% gray softness acts as an alpha-only blur as in S01.
+  io: >-
+    none
+  limitations: >-
+    Fills holes by morphology, so it can also close intended gaps narrower than the softness radius.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Matte refinement for keyed footage. Area mask feather and expansion (mask.*) cover projection edges. Revisit together with keying."
+  milestone: D
+  beginner:
+    action: >-
+      "Fill holes in the cutout" in the cutout recipes' More controls, with a single Hole size slider.
+    defaults: >-
+      Two stages that mirror each other; iterations chosen from the hole size.
+    automation: >-
+      Detects enclosed transparent islands inside the subject and sets the spread just large enough to close them.
+    usability_check: >-
+      A first-time user closes the visible holes in the supplied keyed clip with one slider in under 20 s.
+  acceptance: >-
+    Mini scene "matte-holes": no enclosed holes larger than 2 px remain and the outer contour moves under 1 px.
+  status: not-started
+  evidence: []
+
+- id: fx.matte.mocha-shape
+  name: Mocha shape (planar-tracked matte)
+  sources:
+    - ref: S02
+      item: Mocha shape
+      category: Matte
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: false
+      checked: true
+    - ref: S01
+      item: Mocha shape (not documented on the Matte effects page)
+      category: Matte
+      checked: false
+  artist_can: >-
+    Turn shapes that follow a planar track (a wall, screen, sign or panel in footage) into a matte, with feather, invert and add or subtract blending.
+  projection_example: >-
+    Lock a matte to a hand-held panel in filmed performance footage so show content appears only inside the panel.
+  controls:
+    - { name: Blend mode (Add / Subtract), type: enum, animatable: false }
+    - { name: Invert, type: bool, animatable: true }
+    - { name: Render edge width (feather), type: number, animatable: true }
+    - { name: Render type (Shape cutout / Color composite / Color shape), type: enum, animatable: false }
+    - { name: Shape colour, type: color, animatable: true }
+    - { name: Opacity, type: number, animatable: true }
+  animation: >-
+    Shape motion comes from the per-frame planar track; feather and opacity keyframable.
+  dependencies: [track.planar, mask.bezier, mask.track-matte, proj.effect-stack]
+  implementation: >-
+    Bezier shapes attached to a track.planar homography per frame. The core evaluates the transformed path at each time, and the GPU rasteriser draws it with analytic AA and a feather blur. The matte combines with existing alpha by the chosen blend.
+  io: >-
+    Optional import of shape and track data pasted from Boris FX Mocha Pro (clipboard or export text) is an open interop question, not a promise.
+  limitations: >-
+    Adobe's Mocha shape is a container for data authored in the Mocha UI. Ours is authored natively on the planar tracker, so there is no Mocha project round-trip.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Matte refinement for keyed footage. Area mask feather and expansion (mask.*) cover projection edges. Revisit together with keying."
+  milestone: D
+  beginner:
+    action: >-
+      "Stick to a moving surface" recipe: draw around a flat surface in the footage, press Track, then choose "Show content only inside".
+    defaults: >-
+      Shape cutout, small feather, add blending.
+    automation: >-
+      Tracks the plane, fits the shape to it, and creates the matte layer and the track-matte link.
+    usability_check: >-
+      A first-time user confines a video to the supplied moving panel in four actions or fewer and under 90 s.
+  acceptance: >-
+    AS-4 tracked-attachment part and mini scene "planar-matte": content stays inside the panel within 1 px over the clip.
+  status: not-started
+  evidence: []
+
+- id: fx.matte.mocha-ae
+  name: Mocha AE (planar tracker hand-off)
+  sources:
+    - ref: S02
+      item: Mocha AE
+      category: Boris FX Mocha
+      adobe_support:
+        gpu: true
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S20
+      item: Planar tracking with Mocha AE
+      category: Tracking and stabilization
+      checked: false
+  artist_can: >-
+    Track flat surfaces in footage with a planar tracker, then use the result as a matte, a corner-pin insert, stabilisation or transform data on other layers.
+  projection_example: >-
+    Track a flat sign in drone footage of the venue and insert new artwork onto it for a teaser video.
+  controls:
+    - { name: Track (open planar tracker), type: action, animatable: false }
+    - { name: Matte (Shape / Feather / Apply Matte / Visible layers), type: group, animatable: true }
+    - { name: Render module (Insert / Remove / Stabilize), type: enum, animatable: false }
+    - { name: Tracking Data export (Corner Pin / Transform / target layer), type: group, animatable: false }
+  animation: >-
+    Produces keyframes (corner pin or transform) and animated shapes.
+  dependencies: [track.planar, fx.matte.mocha-shape, fx.distort.corner-pin, track.content-aware-fill]
+  implementation: >-
+    No separate plug-in host. The track.planar engine (OpenCV homography in the vision sidecar, editable in-app) covers tracking. Its outputs feed fx.matte.mocha-shape (matte), fx.distort.corner-pin (insert), the layer transform (stabilise) and track.content-aware-fill (remove).
+  io: >-
+    Mocha project files are not imported; corner-pin and transform data are exported as ordinary keyframes.
+  limitations: >-
+    Superseded by track.planar plus the hand-off targets listed in dependencies. Useful outcomes retained are track a plane, matte to it, insert onto it, stabilise on it and remove from it. Mocha-specific features such as lens module calibration and Mocha's own roto UI are not reproduced.
+  disposition: superseded
+  superseded_by: track.planar
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Stick to a moving surface" and "Pin to a moving surface" recipes; there is no separate "Mocha" entry.
+    defaults: >-
+      Perspective track model, track forward and backward from the current frame.
+    automation: >-
+      Chooses the hand-off (matte, insert or stabilise) from the recipe the user picked.
+    usability_check: >-
+      A user searching "mocha" or "planar track" is offered the planar-tracking recipes first and attaches an image to the supplied moving sign in under 2 min.
+  acceptance: >-
+    Mini scene "planar-insert": artwork pinned to the supplied sign stays within 1 px RMS of hand-placed reference corners; proves Mocha AE outcomes are achievable.
+  status: not-started
+  evidence: []
+
+- id: fx.matte.refine-hard-matte
+  name: Refine Hard Matte
+  sources:
+    - ref: S02
+      item: Refine Hard Matte
+      category: Matte
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S21
+      item: Refine Matte effect properties
+      category: Roto Brush and Refine Matte
+      checked: false
+  artist_can: >-
+    Clean up a mostly hard-edged matte (roto, mask, key) by smoothing jagged contours, reducing frame-to-frame chatter, adding motion blur and removing background colour from edges.
+  projection_example: >-
+    Smooth the jittery edge of a rotoscoped column or prop so it does not chatter when projected metres tall.
+  controls:
+    - { name: Smooth, type: number, animatable: true }
+    - { name: Feather, type: number, animatable: true }
+    - { name: Choke, type: number, animatable: true }
+    - { name: Contrast, type: number, animatable: true }
+    - { name: Shift Edge, type: number, animatable: true }
+    - { name: Reduce Chatter, type: number, animatable: true }
+    - { name: Use Motion Blur (Samples Per Frame / Shutter Angle / Higher Quality), type: group, animatable: true }
+    - { name: Decontaminate Edge Colors (Amount / Extend Where Smoothed / Increase Radius / View Map), type: group, animatable: true }
+  animation: >-
+    All values keyframable.
+  dependencies: [proj.effect-stack, preview.cache, track.roto, fx.matte.refine-soft-matte]
+  implementation: >-
+    WGSL pass graph. Contour smoothing uses a curvature-limited blur of the signed distance field, then feather, choke and contrast remaps are applied. Chatter reduction is a motion-compensated temporal filter over neighbouring frames, declared as a temporal dependency. Motion blur is synthesised from optical-flow vectors, and decontamination estimates foreground colour by push-pull fill from the interior.
+  io: >-
+    none
+  limitations: >-
+    Control list taken from knowledge of AE (S21 property details not readable live). The motion-vector source (sidecar optical flow) must be cached for parity between preview and export.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Matte refinement for keyed footage. Area mask feather and expansion (mask.*) cover projection edges. Revisit together with keying."
+  milestone: D
+  beginner:
+    action: >-
+      "Clean up the edges" → Hard edges, offered automatically after roto or tracing a solid object.
+    defaults: >-
+      Smooth 1, chatter reduction 50%, motion blur on when the layer moves.
+    automation: >-
+      Chooses hard or soft refinement from the measured edge-width distribution of the matte.
+    usability_check: >-
+      A first-time user visibly reduces edge chatter on the supplied roto clip with one action in under 15 s.
+  acceptance: >-
+    Mini scene "roto-chatter": temporal alpha variance on the edge band drops versus the raw roto; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.matte.refine-soft-matte
+  name: Refine Soft Matte
+  sources:
+    - ref: S02
+      item: Refine Soft Matte
+      category: Matte
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Refine Soft Matte
+      category: Matte
+      checked: true
+  artist_can: >-
+    Rebuild fine soft edges such as hair, fur, smoke and motion blur in a keyed or rotoscoped matte. It also reduces flicker and removes background colour from the edges.
+  projection_example: >-
+    Keep a keyed dancer's motion-blurred hair soft and free of green spill as she spins inside a window.
+  controls:
+    - { name: Calculate Edge Details, type: bool, animatable: false }
+    - { name: Additional Edge Radius, type: number, animatable: true }
+    - { name: View Edge Region, type: bool, animatable: false }
+    - { name: Smooth, type: number, animatable: true }
+    - { name: Feather, type: number, animatable: true }
+    - { name: Contrast, type: number, animatable: true }
+    - { name: Shift Edge, type: number, animatable: true }
+    - { name: Chatter Reduction, type: number, animatable: true }
+    - { name: More Motion Blur, type: bool, animatable: true }
+    - { name: Decontaminate Edge Colors (Amount / Extend Where Smoothed / Increase Radius / View Map), type: group, animatable: true }
+  animation: >-
+    All values keyframable.
+  dependencies: [proj.effect-stack, preview.cache, fx.keying.ml-matte-fallback, fx.matte.refine-hard-matte]
+  implementation: >-
+    Fast path is a WGSL guided filter (He et al. local linear model) that uses source RGB as the guide inside an edge band derived from the matte and Additional Edge Radius. Chatter reduction uses a temporal guided filter, and decontamination estimates foreground colour by push-pull fill. The "Best" quality path sends the trimap to the vision sidecar's matting model and caches alpha and foreground in preview.cache.
+  io: >-
+    none
+  limitations: >-
+    The guided-filter path cannot invent detail absent from the source. The ML path depends on an installed model and is cached rather than re-run per frame at export.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Matte refinement for keyed footage. Area mask feather and expansion (mask.*) cover projection edges. Revisit together with keying."
+  milestone: D
+  beginner:
+    action: >-
+      "Clean up the edges" → Soft edges (hair, smoke); on by default in "Remove the green background".
+    defaults: >-
+      Edge details on, radius from subject size, decontamination on.
+    automation: >-
+      Shows the analysed edge band briefly on first use, then hides it; switches to Best quality for export.
+    usability_check: >-
+      A first-time user recovers visible hair detail on the supplied keyed clip with one action and no slider changes in under 20 s.
+  acceptance: >-
+    AS-4: edge band alpha error versus a reference matte reduced; export matches preview within tolerance.
+  status: not-started
+  evidence: []
+
+- id: fx.matte.simple-choker
+  name: Simple Choker
+  sources:
+    - ref: S02
+      item: Simple Choker
+      category: Matte
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S01
+      item: Simple Choker effect
+      category: Matte
+      checked: true
+  artist_can: >-
+    Shrink or grow the edge of any matte by small, sub-pixel amounts to remove a thin outline or close a tiny gap.
+  projection_example: >-
+    Shrink a keyed performer's matte by 1 px so no dark outline shows when projected over bright stone.
+  controls:
+    - { name: Choke Matte, type: number, animatable: true }
+    - { name: View (Final Output / Matte), type: enum, animatable: false }
+  animation: >-
+    Choke keyframable and expression-linkable.
+  dependencies: [proj.effect-stack, mask.track-matte]
+  implementation: >-
+    WGSL min/max morphology. Separable passes handle integer radius and a lerp between neighbouring radii gives sub-pixel amounts; large radii switch to a jump-flood distance field. Operates on alpha, then re-premultiplies colour.
+  io: >-
+    none
+  limitations: >-
+    Choking also removes genuine fine detail such as hair tips; soft subjects should use Refine Soft Matte.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Shrink the edge" slider in the inspector of any cutout, keyed layer or matte.
+    defaults: >-
+      0 for plain mattes; 0.5 px inside the key recipe.
+    automation: >-
+      The fringe check (fx.matte.premultiply-fringe-diagnostics) proposes a choke amount when it detects an outline.
+    usability_check: >-
+      A first-time user removes the dark outline from the supplied keyed layer with one slider in under 10 s.
+  acceptance: >-
+    Mini scene "choke-outline": measured outline luminance drop removed; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.matte.premultiply-fringe-diagnostics
+  name: Edge and alpha check (premultiplication and fringe diagnostics)
+  sources:
+    - ref: brief
+      item: §6 acceptance (no unexplained dark or bright fringes), §11J premultiplication fixes and diagnostic patterns, §14
+      category: product requirement
+      checked: true
+    - ref: S37
+      item: Unmult effect (Remove Color Matting option)
+      category: Keying
+      checked: true
+  artist_can: >-
+    See at a glance why an edge looks dark or bright (wrong alpha interpretation, double premultiplication, leftover screen colour, holes) and fix it with one click.
+  projection_example: >-
+    Before exporting a transparent loop for the media server, find and fix the dark halo around particles that would show on a pale wall.
+  controls:
+    - { name: Check view (Alpha / Straight colour / Premultiplied colour / Over black-white-checker-venue / Fringe heatmap / Matte holes), type: enum, animatable: false }
+    - { name: Fringe sensitivity, type: number, animatable: false }
+    - { name: Fix (Treat as premultiplied / Treat as straight / Remove color matting / Shrink edge / Decontaminate), type: action, animatable: false }
+  animation: >-
+    Not animated; a viewer and a set of fix operations.
+  dependencies: [proj.layer, proj.effect-stack, color.management, render.verify, fx.channel.remove-color-matting, fx.matte.simple-choker, fx.keying.unmult]
+  implementation: >-
+    Viewer-only WGSL passes that never enter render output. They show alpha, a straight/premultiplied split, and the result over chosen backgrounds. A fringe metric compares edge-band luminance against an ideal over-composite, flagging values outside [0,1] premultiplied invariants (colour > alpha) and enclosed holes. Fixes are ordinary undoable ops (footage alpha interpretation, add Remove Color Matting, add choke). render.verify reruns the metric on exported alpha.
+  io: >-
+    Export verification reports the alpha mode (straight or premultiplied) written per codec, since ProRes 4444, PNG and EXR differ.
+  limitations: >-
+    The metric uses a heuristic and can flag intentional dark outlines; the user can dismiss a warning per layer.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Check edges" button on any transparent layer and in the export dialog; warnings appear as a badge with a plain explanation such as "Dark edge: this file's transparency is being read the wrong way".
+    defaults: >-
+      Fringe heatmap over the venue preview; one recommended fix highlighted.
+    automation: >-
+      Runs automatically on import of footage with alpha and before transparent exports, guessing straight or premultiplied interpretation from edge statistics.
+    usability_check: >-
+      A first-time user fixes a deliberately mis-interpreted alpha clip in two actions or fewer and under 30 s without knowing the word "premultiplied".
+  acceptance: >-
+    §6 acceptance and mini scene "alpha-roundtrip": straight and premultiplied sources export and re-import with no edge luminance error above tolerance.
+  status: not-started
+  evidence: []

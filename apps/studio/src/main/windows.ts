@@ -1,0 +1,218 @@
+/**
+ * Windows: the editor, the pop-out preview, full-screen projector outputs, display identification
+ * overlays, and hidden render workers. The editor is the source of truth: it publishes the project
+ * and a shared playback clock, and this module relays them to every other window.
+ */
+import { join } from "node:path";
+import { BrowserWindow, type Display, ipcMain, screen } from "electron";
+import type { DisplayInfo, OutputConfig, OutputStatus, SyncHello, TestPattern, TransportState, WindowKind } from "../shared/api.ts";
+import { log } from "./log.ts";
+
+let editor: BrowserWindow | null = null;
+let preview: BrowserWindow | null = null;
+const outputs = new Map<string, { win: BrowserWindow; config: OutputConfig }>();
+let latestProject: unknown = null;
+let latestTransport: TransportState | null = null;
+let previewView: string | null = null;
+
+const preload = () => join(import.meta.dirname, "../preload/index.cjs");
+
+const load = (win: BrowserWindow, kind: WindowKind, mode: string) => {
+  const url = process.env.ELECTRON_RENDERER_URL;
+  const hash = `${kind}`;
+  if (url) void win.loadURL(`${url}#${hash}`);
+  else void win.loadFile(join(import.meta.dirname, "../renderer/index.html"), { hash });
+  win.webContents.on("console-message", (d) => {
+    if (d.level === "error" || mode !== "studio") log(`[${kind}:${d.level}] ${d.message}`);
+  });
+  win.webContents.on("render-process-gone", (_e, d) => log(`[${kind}] renderer gone: ${d.reason} (exit ${d.exitCode})`));
+  win.webContents.on("did-fail-load", (_e, code, desc) => log(`[${kind}] failed to load: ${code} ${desc}`));
+};
+
+export const webPrefs = (kind: WindowKind, mode: string, extra: Record<string, unknown> = {}) => ({
+  preload: preload(),
+  contextIsolation: true,
+  sandbox: false,
+  backgroundThrottling: kind === "render" || kind === "output" ? false : undefined,
+  additionalArguments: [`--be-kind=${kind}`, `--be-mode=${mode}`],
+  ...extra,
+});
+
+export const displayInfo = (): DisplayInfo[] => {
+  const primary = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d: Display, i) => ({
+    id: d.id,
+    label: `${i + 1}: ${d.label || (d.internal ? "Built-in display" : "Display")} — ${Math.round(d.bounds.width * d.scaleFactor)}×${Math.round(d.bounds.height * d.scaleFactor)}`,
+    primary: d.id === primary,
+    internal: d.internal,
+    pixels: { width: Math.round(d.bounds.width * d.scaleFactor), height: Math.round(d.bounds.height * d.scaleFactor) },
+    scaleFactor: d.scaleFactor,
+    refreshRate: d.displayFrequency,
+    bounds: d.bounds,
+  }));
+};
+
+const findDisplay = (id: number): Display => screen.getAllDisplays().find((d) => d.id === id) ?? screen.getPrimaryDisplay();
+
+export const createEditor = (mode: "studio" | "spike" | "uitest"): BrowserWindow => {
+  const kind: WindowKind = mode === "studio" ? "editor" : mode;
+  const win = new BrowserWindow({
+    width: 1680,
+    height: 1000,
+    minWidth: 1100,
+    minHeight: 700,
+    show: false,
+    backgroundColor: "#0e1014",
+    title: "Before Effects",
+    autoHideMenuBar: true,
+    webPreferences: webPrefs(kind, mode),
+  });
+  if (mode !== "spike") win.once("ready-to-show", () => win.show());
+  load(win, kind, mode);
+  win.on("closed", () => {
+    editor = null;
+    // Secondary windows belong to the editor; close them with it.
+    preview?.close();
+    for (const o of outputs.values()) o.win.close();
+  });
+  editor = win;
+  return win;
+};
+
+export const editorWindow = () => editor;
+
+const broadcastWindows = () => {
+  editor?.webContents.send("windows:changed", { preview: !!preview, outputs: outputStatus() });
+};
+
+const outputStatus = (): OutputStatus[] =>
+  [...outputs.entries()].map(([projectorId, o]) => {
+    const d = displayInfo().find((x) => x.id === o.config.displayId);
+    return { projectorId, displayId: o.config.displayId, displayLabel: d?.label ?? "Display", displayPixels: d?.pixels ?? { width: 0, height: 0 }, open: !o.win.isDestroyed() };
+  });
+
+export const registerWindowIpc = (mode: string) => {
+  ipcMain.handle("displays:list", () => displayInfo());
+
+  ipcMain.handle("displays:identify", async () => {
+    // A big number on every display so people can tell which output is which.
+    const wins = screen.getAllDisplays().map((d, i) => {
+      const w = new BrowserWindow({
+        x: d.bounds.x,
+        y: d.bounds.y,
+        width: d.bounds.width,
+        height: d.bounds.height,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        focusable: false,
+        skipTaskbar: true,
+        webPreferences: webPrefs("identify", mode, { additionalArguments: ["--be-kind=identify", `--be-mode=${mode}`, `--be-display=${i + 1}`] }),
+      });
+      w.setIgnoreMouseEvents(true);
+      load(w, "identify", mode);
+      return w;
+    });
+    setTimeout(() => wins.forEach((w) => !w.isDestroyed() && w.close()), 4000);
+  });
+
+  ipcMain.handle("windows:openPreview", (_e, displayId?: number) => {
+    if (preview && !preview.isDestroyed()) {
+      preview.focus();
+      return;
+    }
+    const others = screen.getAllDisplays().filter((d) => d.id !== screen.getDisplayMatching(editor?.getBounds() ?? screen.getPrimaryDisplay().bounds).id);
+    const target = displayId !== undefined ? findDisplay(displayId) : others.sort((a, b) => b.size.width * b.size.height - a.size.width * a.size.height)[0];
+    const area = (target ?? screen.getPrimaryDisplay()).workArea;
+    preview = new BrowserWindow({
+      x: area.x + 40,
+      y: area.y + 40,
+      width: Math.min(1280, area.width - 80),
+      height: Math.min(800, area.height - 80),
+      backgroundColor: "#08090c",
+      title: "Before Effects — Preview",
+      autoHideMenuBar: true,
+      webPreferences: webPrefs("preview", mode),
+    });
+    load(preview, "preview", mode);
+    preview.on("closed", () => {
+      preview = null;
+      broadcastWindows();
+    });
+    broadcastWindows();
+  });
+
+  ipcMain.handle("windows:closePreview", () => preview?.close());
+
+  ipcMain.on("windows:previewView", (_e, view: string) => {
+    previewView = view;
+    preview?.webContents.send("sync:previewView", view);
+  });
+
+  ipcMain.handle("windows:openOutput", (_e, config: OutputConfig) => {
+    const d = findDisplay(config.displayId);
+    const existing = outputs.get(config.projectorId);
+    if (existing && !existing.win.isDestroyed()) {
+      existing.config = config;
+      existing.win.setBounds(d.bounds);
+      existing.win.setFullScreen(true);
+      existing.win.webContents.send("sync:outputConfig", config);
+      broadcastWindows();
+      return outputStatus().find((o) => o.projectorId === config.projectorId);
+    }
+    const win = new BrowserWindow({
+      x: d.bounds.x,
+      y: d.bounds.y,
+      width: d.bounds.width,
+      height: d.bounds.height,
+      frame: false,
+      fullscreen: true,
+      backgroundColor: "#000000",
+      autoHideMenuBar: true,
+      title: "Before Effects — Projector output",
+      // Keep projector feeds free of editor UI and focus stealing.
+      skipTaskbar: false,
+      webPreferences: webPrefs("output", mode),
+    });
+    load(win, "output", mode);
+    outputs.set(config.projectorId, { win, config });
+    win.on("closed", () => {
+      outputs.delete(config.projectorId);
+      broadcastWindows();
+    });
+    log(`projector output ${config.projectorId} opened on display ${d.id} (${d.bounds.width}×${d.bounds.height} @${d.scaleFactor})`);
+    broadcastWindows();
+    return outputStatus().find((o) => o.projectorId === config.projectorId);
+  });
+
+  ipcMain.handle("windows:closeOutput", (_e, projectorId: string) => outputs.get(projectorId)?.win.close());
+
+  ipcMain.handle("windows:setOutputPattern", (_e, projectorId: string, pattern: TestPattern) => {
+    const o = outputs.get(projectorId);
+    if (!o) return;
+    o.config = { ...o.config, pattern };
+    o.win.webContents.send("sync:outputConfig", o.config);
+  });
+
+  ipcMain.handle("windows:outputs", () => outputStatus());
+
+  // ---- sync relay -------------------------------------------------------------------------
+  ipcMain.on("sync:project", (e, project: unknown) => {
+    latestProject = project;
+    for (const w of secondary()) if (w.webContents.id !== e.sender.id) w.webContents.send("sync:project", project);
+  });
+  ipcMain.on("sync:transport", (e, t: TransportState) => {
+    latestTransport = t;
+    for (const w of secondary()) if (w.webContents.id !== e.sender.id) w.webContents.send("sync:transport", t);
+  });
+  ipcMain.handle("sync:hello", (e): SyncHello => {
+    const out = [...outputs.values()].find((o) => o.win.webContents.id === e.sender.id);
+    return { project: latestProject, transport: latestTransport, output: out?.config ?? null, previewView };
+  });
+};
+
+const secondary = (): BrowserWindow[] => [preview, ...[...outputs.values()].map((o) => o.win)].filter((w): w is BrowserWindow => !!w && !w.isDestroyed());
+
+export const closeSecondary = () => {
+  for (const w of secondary()) w.close();
+};

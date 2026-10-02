@@ -1,0 +1,520 @@
+# Delivery (save destinations, Google Drive, upload) — Before Effects capability register
+# Sources: brief §0.1, §0.8, §0.9, §17, §22 AS-7. Google Drive API v3 resumable-upload guide and Google OAuth 2.0 for desktop apps docs checked 2026-10-01 (developers.google.com).
+
+- id: deliver.local
+  name: Local save destinations
+  sources:
+    - ref: brief §17
+      item: "Save locally"
+      category: "Rendering, export, and delivery"
+      checked: true
+    - ref: brief §0.8
+      item: "Recommend a compatible preset and destination; remember sensible preferences"
+      category: "Make export a guided outcome"
+      checked: true
+  artist_can: >-
+    Choose where finished files go. The app remembers good places per kind of export, names files sensibly, and
+    checks there is enough disk space first.
+  projection_example: >-
+    Projector files go to D:\Shows\TownHall\Exports\2026-10-12 and share videos to Videos\Before Effects.
+  controls:
+    - { name: "Destination folder", type: "folder", animatable: false }
+    - { name: "File name pattern", type: "template", animatable: false }
+    - { name: "If file exists (new version, overwrite, ask)", type: "enum", animatable: false }
+  animation: >-
+    None.
+  dependencies: [render.queue, ux.guided-export]
+  implementation: >-
+    Destinations are a provider interface (deliver.provider-interface) with a built-in "local folder" provider.
+    Electron dialog.showOpenDialog picks folders. A free-space check (fs.statfs) against the render estimate runs
+    before the job starts. Atomic writes go to a temp file and are renamed on verified completion. Preferences are
+    stored per export type.
+  io: >-
+    Writes the export and its manifest.
+  limitations: >-
+    Network drives may be slow or disconnect; the app renders locally first, then copies.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The export screen shows "Save to: Videos\Before Effects (change)".
+    defaults: >-
+      Per-type default folders, names like "TownHall – Projector 1 – 2026-10-12.mp4", new version if exists.
+    automation: >-
+      Disk-space check and naming.
+    usability_check: >-
+      Users find their exported file in under 30 seconds without help (§0.10 "find the saved/exported result").
+  acceptance: >-
+    B milestone guided path; AS-7.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: exports saved to the Renders folder, kept after Drive copy; Show in folder button"
+
+- id: deliver.google-drive
+  name: Send to Google Drive
+  sources:
+    - ref: brief §0.1
+      item: "Choose 'Send to Google Drive', select a useful quality preset, and export"
+      category: "Design around the result the user wants"
+      checked: true
+    - ref: brief §17
+      item: "Upload exports to Google Drive with destination selection, clear progress, retries, and a retained local copy; synced-folder route or direct authenticated integration"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Pick "Send to Google Drive" as the export destination, choose the Drive folder, and get the finished file there,
+    with a local copy kept.
+  projection_example: >-
+    Send the review video of tonight's rehearsal to "Shared drives/Client/Reviews" for the client to watch tomorrow.
+  controls:
+    - { name: "Route (Drive for desktop folder, direct upload)", type: "enum", animatable: false }
+    - { name: "Drive folder", type: "folder", animatable: false }
+    - { name: "Keep local copy", type: "bool", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.drive-sync-folder, deliver.drive-api, deliver.local-copy, ux.guided-export, ux.confirmations]
+  implementation: >-
+    A destination provider that chooses a route. If Google Drive for desktop is detected, the default is the synced
+    folder (no sign-in, no app setup). Otherwise, or if the user prefers, it uses the direct OAuth upload. The render
+    always completes locally first, and upload is a separate job phase.
+  io: >-
+    Uploads the exported file (and manifest/bundle if chosen).
+  limitations: >-
+    Each route has different visibility into upload progress (see each route). Uploading counts as external sharing,
+    so the first send to a new folder asks for confirmation (ux.confirmations).
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Export → "Send to Google Drive".
+    defaults: >-
+      The last used Drive folder. Keep local copy on.
+    automation: >-
+      Route detection and folder memory.
+    usability_check: >-
+      Users send a share video to a chosen Drive folder in ≤4 actions after the first setup.
+  acceptance: >-
+    AS-7 (upload an export, retry a failed transfer).
+  status: prototype
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: copy into the Drive for desktop folder, failure reported in plain words and retried without re-rendering, tested against a stand-in folder. Google Drive for desktop is NOT installed on this PC, so a real upload is untested"
+
+- id: deliver.drive-sync-folder
+  name: Google Drive via Drive for desktop synced folder
+  sources:
+    - ref: brief §17
+      item: "Support a synced-folder route"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Deliver to Google Drive without signing in to anything inside Before Effects: the file is copied into the Google
+    Drive folder on this PC, and Drive for desktop uploads it.
+  projection_example: >-
+    The export lands in G:\My Drive\Shows\Exports, and Drive for desktop uploads it in the background.
+  controls:
+    - { name: "Drive folder on this PC", type: "folder", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.local, deliver.local-copy]
+  implementation: >-
+    Detects Drive for desktop by looking for the mounted virtual drive (volume label "Google Drive", default G:) or
+    the configured mirror folder, and confirms the location once with the user. The verified render is copied into
+    the folder (stream to temp name, then rename); the local copy stays in place.
+  io: >-
+    A file copy only.
+  limitations: >-
+    The app cannot reliably observe Drive for desktop's upload progress or completion (no public API; assumption to
+    re-check). The UI says "Handed to Google Drive for desktop — it uploads in the background" and links to Drive's
+    own status. Mount letter and mode are user-configurable, so detection is a best guess.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Send to Google Drive" → automatically uses "Google Drive on this PC" when present.
+    defaults: >-
+      The detected My Drive root, with a "Before Effects" subfolder.
+    automation: >-
+      Detection, copy and naming.
+    usability_check: >-
+      On a PC with Drive for desktop, users deliver a file to Drive without any sign-in step (at least 4 of 5 complete
+      unaided).
+  acceptance: >-
+    AS-7.
+  status: prototype
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: copy into the Drive for desktop folder, failure reported in plain words and retried without re-rendering, tested against a stand-in folder. Google Drive for desktop is NOT installed on this PC, so a real upload is untested"
+
+- id: deliver.drive-api
+  name: Google Drive direct upload (OAuth, resumable)
+  sources:
+    - ref: brief §17
+      item: "Direct authenticated integration; upload failure must not invalidate a successful render"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Upload straight to Google Drive from the app with visible progress, resume after network drops, and get a link
+    to the uploaded file — no Drive for desktop needed.
+  projection_example: >-
+    On venue Wi-Fi, a 4 GB projector bundle uploads to the shared show folder, pausing and resuming twice without
+    starting over.
+  controls:
+    - { name: "Google account (connect, disconnect)", type: "action", animatable: false }
+    - { name: "Drive folder picker", type: "folder", animatable: false }
+    - { name: "Chunk size", type: "MB", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.google-drive, deliver.upload-progress, deliver.local-copy]
+  implementation: >-
+    Google Drive API v3 via googleapis. The OAuth desktop flow uses a loopback redirect (http://127.0.0.1:<port>)
+    plus PKCE in the system browser, with the drive.file scope. The refresh token is stored with Electron
+    safeStorage. Uploads use resumable sessions: POST uploadType=resumable for a session URI (valid one week), PUT
+    chunks in multiples of 256 KiB, and query an interrupted upload with Content-Range "bytes */<size>" (308 + Range
+    gives the next offset). A 404 restarts the session; 5xx errors retry with exponential backoff. The session URI is
+    persisted, so uploads survive app restarts.
+  io: >-
+    Uploads files and creates folders as needed.
+  limitations: >-
+    For personal use, the user needs their own Google Cloud OAuth client (one-time setup, guided). Open check: refresh
+    tokens for apps left in "Testing" publishing status expire after about 7 days, so reconnecting may be needed
+    unless the app is moved to production status.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      "Send to Google Drive" → "Connect Google account" (browser sign-in once) → pick a folder.
+    defaults: >-
+      8 MiB chunks, drive.file scope.
+    automation: >-
+      Token refresh, resumable sessions and retries.
+    usability_check: >-
+      With the OAuth client prepared, users connect and upload in under 3 minutes. After a forced network drop, the
+      upload resumes without re-rendering.
+  acceptance: >-
+    AS-7 (retry a failed transfer). Mini scene "drive-resume": kill the network at 50%; the upload completes from
+    the stored offset.
+  status: not-started
+  evidence: []
+
+- id: deliver.upload-progress
+  name: Upload progress and retry without re-rendering
+  sources:
+    - ref: brief §0.8
+      item: "Distinguish rendering, encoding, and uploading; if an upload fails, offer retry without re-rendering"
+      category: "Make export a guided outcome"
+      checked: true
+    - ref: brief §17
+      item: "Clear progress, retries; upload failure must not invalidate a successful render"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    See uploading as its own step with speed and time left, and retry or resume a failed upload with one click —
+    the rendered file is never thrown away.
+  projection_example: >-
+    "Uploading 62% · 4 min left". After a Wi-Fi drop: "Upload paused — Retry". The render is already safe on disk.
+  controls:
+    - { name: "Pause / resume / retry", type: "action", animatable: false }
+    - { name: "Auto-retry count", type: "int", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.drive-api, deliver.history, ux.errors]
+  implementation: >-
+    Upload jobs are persisted in the job store separately from render jobs, keyed by the verified file's SHA-256.
+    Progress is computed from the confirmed byte ranges reported by the server. Retries use exponential backoff with
+    jitter. Failure states map to plain-language errors with actions (retry, choose another folder, reconnect
+    account).
+  io: >-
+    None.
+  limitations: >-
+    For the synced-folder route, progress after the hand-off is Drive for desktop's and not visible to the app.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      A progress row with three labelled phases: Rendering → Encoding → Uploading. "Retry upload" on failure.
+    defaults: >-
+      3 automatic retries.
+    automation: >-
+      Retries, resume, and hash checks.
+    usability_check: >-
+      After an injected upload failure, at least 4 of 5 users retry successfully without re-rendering, and can say
+      the video itself was fine.
+  acceptance: >-
+    AS-7 (retry a failed transfer).
+  status: prototype
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: copy into the Drive for desktop folder, failure reported in plain words and retried without re-rendering, tested against a stand-in folder. Google Drive for desktop is NOT installed on this PC, so a real upload is untested"
+
+- id: deliver.local-copy
+  name: Retained local copy
+  sources:
+    - ref: brief §17
+      item: "A retained local copy"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Always keep the finished file on this PC, even when it is also sent to the cloud, unless you choose otherwise.
+  projection_example: >-
+    The show file is uploaded to Drive and also stays in the local Exports folder for the projector's USB stick.
+  controls:
+    - { name: "Keep local copy", type: "bool", animatable: false }
+    - { name: "Local folder", type: "folder", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.local]
+  implementation: >-
+    Every remote delivery reads from a verified local file that is never moved or deleted by the delivery job. If the
+    user turns the copy off, it is deleted only after the remote upload is confirmed (and for the synced folder, only
+    when the user asks).
+  io: >-
+    None.
+  limitations: >-
+    Large bundles use disk space; the history view shows sizes and offers cleanup.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A checkbox "Also keep a copy on this PC" on cloud destinations.
+    defaults: >-
+      On.
+    automation: >-
+      Safe ordering of copy, upload and cleanup.
+    usability_check: >-
+      Users locate the local copy of an uploaded file in under 30 seconds.
+  acceptance: >-
+    AS-7.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: exports saved to the Renders folder, kept after Drive copy; Show in folder button"
+
+- id: deliver.reveal
+  name: Show the finished file
+  sources:
+    - ref: brief §0.8
+      item: "Show the finished file and destination"
+      category: "Make export a guided outcome"
+      checked: true
+    - ref: brief §0.10
+      item: "Find the saved/exported result without assistance"
+      category: "Test ease of use"
+      checked: true
+  artist_can: >-
+    When an export finishes, see a card with the file's name, size, a preview frame, and buttons to open it, show it
+    in its folder, copy its path, or open it in Drive.
+  projection_example: >-
+    "Projector 1 video is ready — 1.2 GB · Show in folder · Play · Open in Google Drive".
+  controls:
+    - { name: "Show in folder / Play / Copy path / Open in Drive", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.local, render.verify]
+  implementation: >-
+    Electron shell.showItemInFolder and shell.openPath. A Drive link comes from the API response (webViewLink) for
+    the direct route, or the local synced path otherwise. A completion notification in the app (plus an OS toast,
+    never on projector outputs). The card also lists the verification results.
+  io: >-
+    None.
+  limitations: >-
+    None.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      A completion card with "Show in folder" as the first button.
+    defaults: >-
+      The card stays until dismissed and is then kept in history.
+    automation: >-
+      Appears automatically.
+    usability_check: >-
+      §0.10: users find the exported result without assistance (at least 95%).
+  acceptance: >-
+    B milestone guided path.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: exports saved to the Renders folder, kept after Drive copy; Show in folder button"
+
+- id: deliver.history
+  name: Export and delivery history
+  sources:
+    - ref: brief §17
+      item: "Export history"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    See past exports and where they went, with their status, and resend, re-upload or reveal any of them.
+  projection_example: >-
+    Last week's client review video failed to upload; resend it from history without opening the project.
+  controls:
+    - { name: "History list (file, destinations, status, date)", type: "view", animatable: false }
+    - { name: "Resend / reveal / remove", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.local, render.queue]
+  implementation: >-
+    An append-only JSON-lines log per project, plus a global index: export ID, snapshot hash, manifest path,
+    destinations with status and remote IDs/links. Missing files are detected on view.
+  io: >-
+    None.
+  limitations: >-
+    History cannot resend files that were deleted from disk; it offers to re-render from the recorded snapshot if the
+    project still exists.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Export panel → "Past exports".
+    defaults: >-
+      Newest first.
+    automation: >-
+      Status tracking.
+    usability_check: >-
+      Users resend a previous export to Drive in ≤3 actions.
+  acceptance: >-
+    AS-7.
+  status: implemented
+  evidence:
+    - "journey test (apps/studio: npx electron . --ui-test) steps export-run, render-while-editing, cancel-and-retry, export-half-range, drive-upload-retry; 2026-10-02: exports saved to the Renders folder, kept after Drive copy; Show in folder button"
+
+- id: deliver.share-link
+  name: Share link after upload
+  sources:
+    - ref: brief §0.9
+      item: "Use confirmations when warranted by external sharing"
+      category: "Remove fear, confusion, and unnecessary interruptions"
+      checked: true
+  artist_can: >-
+    After uploading, get a link to send to someone, with a clear choice of who can open it.
+  projection_example: >-
+    Copy a "view only, anyone with the link" link to the review video and paste it into a message to the client.
+  controls:
+    - { name: "Who can open (only me, specific people, anyone with the link)", type: "enum", animatable: false }
+    - { name: "Copy link", type: "action", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.drive-api, ux.confirmations]
+  implementation: >-
+    Drive API v3 permissions.create (role reader, type anyone or user) on files created by the app (drive.file
+    scope), then webViewLink. Widening access needs an explicit confirmation naming the audience.
+  io: >-
+    None.
+  limitations: >-
+    Only available on the direct route, or for files the app created. Shared-drive policies may block "anyone"
+    links.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      Completion card → "Get a link".
+    defaults: >-
+      Only me (no change) until the user picks otherwise.
+    automation: >-
+      Permission creation and link copy.
+    usability_check: >-
+      Users create a view-only link and can correctly state who can open it (at least 4 of 5).
+  acceptance: >-
+    AS-7 variant.
+  status: not-started
+  evidence: []
+
+- id: deliver.provider-interface
+  name: Extensible delivery destinations
+  sources:
+    - ref: brief §17
+      item: "Other cloud services remain extensible until named"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Get new destinations (another cloud drive, a media server folder, a USB stick) added later without changing how
+    exporting works.
+  projection_example: >-
+    A future "Copy to the media server" destination appears next to Google Drive with the same progress and retry
+    behaviour.
+  controls:
+    - { name: "Destination list", type: "list", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.local, deliver.upload-progress]
+  implementation: >-
+    A TypeScript DeliveryProvider interface: detect(), configure(), deliver(file, manifest, progress, signal) →
+    remote reference, resume(state), and a describe() returning plain-language labels. Built-ins are local folder,
+    Drive synced folder and Drive API. Providers run in the main process with persisted job state.
+  io: >-
+    None.
+  limitations: >-
+    None beyond each provider's own.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: E
+  beginner:
+    action: >-
+      New destinations simply appear in the export "Send to" list.
+    defaults: >-
+      N/A.
+    automation: >-
+      N/A.
+    usability_check: >-
+      A new provider passes the same delivery journey tests as Drive (automated contract tests).
+  acceptance: >-
+    Contract test suite for providers.
+  status: not-started
+  evidence: []
+
+- id: deliver.other-services
+  name: Other named cloud services
+  sources:
+    - ref: brief §17
+      item: "Other cloud services remain extensible until named"
+      category: "Rendering, export, and delivery"
+      checked: true
+  artist_can: >-
+    Deliver to services other than Google Drive (e.g. Dropbox, OneDrive, YouTube, an FTP server) once they are named.
+  projection_example: >-
+    Unknown until named.
+  controls:
+    - { name: "To be defined per service", type: "n/a", animatable: false }
+  animation: >-
+    None.
+  dependencies: [deliver.provider-interface]
+  implementation: >-
+    Through deliver.provider-interface, using each service's official API or synced-folder client.
+  io: >-
+    Per service.
+  limitations: >-
+    No other service named yet; deliver.provider-interface keeps the door open. Recommendation: add a service when one is named.
+
+    Open question: which other services, if any, does the user need? No service is built until named.
+  disposition: unresolved
+  superseded_by: null
+  exclusion_reason: null
+  milestone: F
+  beginner:
+    action: >-
+      To be defined per service.
+    defaults: >-
+      N/A.
+    automation: >-
+      N/A.
+    usability_check: >-
+      Same journey test as Google Drive.
+  acceptance: >-
+    None until named.
+  status: not-started
+  evidence: []

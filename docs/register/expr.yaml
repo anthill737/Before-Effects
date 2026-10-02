@@ -1,0 +1,1509 @@
+# Expressions, controllers and rigs — Before Effects capability register
+# Sources: S06 (expression basics; expression language reference), S01 (user guide: Essential Graphics, Motion Graphics templates, scripting, data-driven animation, animation presets, keyframe assistants), brief §0.4, §5, §20. Adobe helpx pages returned HTTP 403 on 2026-10-01; Adobe items authored from knowledge (checked: false).
+
+- id: expr.engine
+  name: Expression engine
+  sources:
+    - ref: S06
+      item: "Expressions (JavaScript expression engine)"
+      category: "Expression basics"
+      checked: false
+    - ref: "brief §5"
+      item: "expression system for time-based math, looping, noise/wiggle, seeded randomness, conditional logic"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Attach a small formula to any animatable property so its value is computed every frame from time, other
+    properties or controls, either replacing the keyframed value or modifying it.
+  projection_example: >-
+    Every window's glow intensity follows one master slider plus a per-window offset, with no keyframes on the
+    100 window layers.
+  controls:
+    - { name: "Expression source", type: "string", animatable: false }
+    - { name: "Enabled", type: "bool", animatable: false }
+    - { name: "Show post-expression graph", type: "bool", animatable: false }
+    - { name: "Per-evaluation time budget (ms)", type: "int", animatable: false }
+  animation: >-
+    The expression receives the pre-expression (keyframed) value as `value` and returns the final value at each
+    frame; the post-expression curve is visible in the graph editor and can be baked (expr.bake-to-keyframes).
+  dependencies: [anim.keyframe.core, anim.time-model, ux.operation-system]
+  implementation: >-
+    QuickJS-WASM sandbox with one runtime per evaluation worker (preview and each render worker); an interrupt
+    handler enforces the per-evaluation time budget, and an AE-compatible API subset (thisLayer, thisComp,
+    thisProperty, time, value, effect(), transform) is bound as host objects backed by the core property
+    evaluator. Source is compiled to bytecode once per source hash and cached; every property read is recorded
+    into a dependency graph used for cache invalidation and cycle detection, so evaluation is a pure function of
+    (project snapshot, flick time).
+  io: >-
+    Expression source is saved verbatim in the project with an engine-version tag; AE projects are not imported
+    (see expr.legacy-compat and proj.aep-interop).
+  limitations: >-
+    Supports an AE-compatible subset, not the full ExtendScript surface; no file, network, clock or DOM access,
+    and no state carried between frames (as in AE). Expressions that sample many other times become slow and may
+    hit the time budget.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through recipes and the "Link to…" and "Follow with delay" actions, which write expressions for the
+      user; the text is available under "Edit animation → Formula".
+    defaults: >-
+      A new expression starts as `value` (no change) and the preview time budget is 50 ms per evaluation.
+    automation: >-
+      Recipes, rigs, and the assistant generate expressions. The app compiles them, tracks their dependencies,
+      and invalidates caches automatically.
+    usability_check: >-
+      A first-time user completes "Light up one after another" on 20 windows without seeing expression text; an
+      experienced user adds `wiggle(2,10)` to a property and sees the result in under 10 s.
+  acceptance: >-
+    AS-1 and AS-3; mini scene "expr-determinism": 200 expression-driven layers produce identical frame hashes in
+    the preview cache, the headless export and after reopening.
+  status: not-started
+  evidence: []
+
+- id: expr.editor
+  name: Expression editor
+  sources:
+    - ref: S06
+      item: "Expression field / expression editor and Expression Language menu"
+      category: "Expression basics"
+      checked: false
+    - ref: "brief §5"
+      item: "expression editing, useful error messages"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Write and edit expressions in an editor with syntax highlighting, autocomplete for properties and methods,
+    inline documentation and live error markers.
+  projection_example: >-
+    Tweak the delay formula of the window rig and watch the cascade timing change while scrubbing.
+  controls:
+    - { name: "Expression text", type: "string", animatable: false }
+    - { name: "Enable expression", type: "bool", animatable: false }
+    - { name: "Insert from language menu", type: "action", animatable: false }
+    - { name: "Convert to keyframes", type: "action", animatable: false }
+  animation: >-
+    Not animated itself; every committed edit is one undoable operation and applies at all times.
+  dependencies: [expr.engine, ux.operation-system]
+  implementation: >-
+    CodeMirror 6 in the React inspector with a JavaScript mode; autocomplete is fed by typings for the supported
+    API plus live project names (layers, effects, controls). A worker compiles on a debounce to lint errors, and
+    commit issues a SetExpression op whose Immer patches restore the previous text on undo. Renaming a layer or
+    effect rewrites referencing expressions in the same op, as AE does.
+  io: >-
+    none
+  limitations: >-
+    Autocomplete covers only the supported API subset; importing arbitrary JavaScript libraries is not available.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Edit animation → Formula" on any property; a property driven by a formula shows a small badge, and its
+      generated formula starts with a comment naming the recipe that made it.
+    defaults: >-
+      The editor opens on the current expression with the recipe comment, at a readable font size, and with
+      autocomplete on.
+    automation: >-
+      Autocomplete inserts correct property paths, for example
+      `thisComp.layer("Window 12").effect("Delay")("Slider")`, and renames propagate automatically.
+    usability_check: >-
+      An intermediate user changes a generated delay from 0.1 to 0.2 s by editing text in under 30 s; after a
+      typo, the error marker appears within 1 s.
+  acceptance: >-
+    Mini scene "expr-edit-rename": renaming a referenced layer updates the expressions automatically, and the
+    rendered output is unchanged.
+  status: not-started
+  evidence: []
+
+- id: expr.pick-whip
+  name: Pick whip property linking
+  sources:
+    - ref: S06
+      item: "Expression pick whip"
+      category: "Expression basics"
+      checked: false
+    - ref: "brief §5"
+      item: "property linking ... visual linking"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Link one property to another by dragging a pick whip from the property to its target; the app writes the
+    link expression.
+  projection_example: >-
+    Drag from each column light's opacity to a master "Brightness" slider so one control dims the whole facade.
+  controls:
+    - { name: "Link target", type: "property-ref", animatable: false }
+    - { name: "Link mode", type: "enum(direct|offset|multiply|map-range)", animatable: false }
+    - { name: "Dimension mapping", type: "enum(all|x|y|z|average)", animatable: false }
+  animation: >-
+    The linked property follows its target at every frame; the link is a normal expression that can be edited
+    later.
+  dependencies: [expr.engine, expr.layer-references, ux.operation-system]
+  implementation: >-
+    A drag gesture in the timeline, inspector or canvas resolves the drop target to a stable property path. A
+    generator writes a name-based expression for AE readability, backed by a stored stable-id map, and adapts
+    dimension mismatches (for example 1D to 2D becomes `[v, v]`), all in one op.
+  io: >-
+    none
+  limitations: >-
+    A cross-composition link needs the target comp to remain in the project; duplicate layer names are resolved
+    through the stored stable ids and flagged.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Link to…": click the link icon, then click the control or object to follow; "Follow with delay"
+      (anim.follow-delay) is offered next to it.
+    defaults: >-
+      Direct link, dimensions matched automatically, with "keep current look" on.
+    automation: >-
+      The app converts dimension mismatches, adds an offset that keeps the current value when "keep current look"
+      is on, and draws a link line on the canvas.
+    usability_check: >-
+      A first-time user links 3 lights to one slider in under 60 s without typing.
+  acceptance: >-
+    Mini scene "master-dimmer": one slider dims 50 layers, and the change matches in preview and export.
+  status: not-started
+  evidence: []
+
+- id: expr.layer-references
+  name: Layer, comp, effect and marker references
+  sources:
+    - ref: S06
+      item: "Global, Comp, Layer, Property and Marker attributes (thisComp, thisLayer, index, name, effect(), marker, inPoint, outPoint, numLayers)"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Read other layers, effect controls, markers and comp attributes in expressions: index, name, parent,
+    in/out points, comp size, frame duration, number of layers and marker times or comments.
+  projection_example: >-
+    Each window layer reads its order and the comp marker "drop", so the windows start in sequence right after a
+    beat marker.
+  controls:
+    - { name: "Reference by", type: "enum(name|index|stable-order)", animatable: false }
+    - { name: "Target layer", type: "layer-ref", animatable: false }
+    - { name: "Target property", type: "property-ref", animatable: false }
+    - { name: "Marker name", type: "string", animatable: false }
+  animation: >-
+    References are live: values update when the referenced layer changes, moves in time or is re-timed.
+  dependencies: [expr.engine, proj.layer, proj.composition, proj.markers]
+  implementation: >-
+    TypeScript host objects (Comp, Layer, Property, PropertyGroup, Effect, MarkerProperty) bound into QuickJS,
+    resolving names through stable ids and registering a dependency edge on each access. Supported attributes
+    include index, name, parent, hasParent, inPoint, outPoint, startTime, width, height, frameDuration,
+    numLayers, marker.key(), marker.nearestKey(), propertyGroup(n) and propertyIndex.
+  io: >-
+    none
+  limitations: >-
+    As in AE, `index` changes when layers are reordered; index-driven rigs warn when a reorder would change their
+    output.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through rig and recipe controls such as "Order by: left to right / layer order / random"; direct use
+      is under "Edit animation → Formula".
+    defaults: >-
+      Generated expressions refer to layers by name. Ordered recipes read a stored per-layer "Order" control
+      instead of raw `index`.
+    automation: >-
+      Recipes compute the order from region positions and store it per layer, so reordering the timeline does not
+      scramble the timing.
+    usability_check: >-
+      Reordering layers in a 20-window "one after another" setup leaves the timing unchanged unless the user picks
+      "Order by layer stack", confirmed by a novice on the first attempt.
+  acceptance: >-
+    Mini scene "marker-cue": layers start at the comp marker "drop"; moving the marker retimes every layer
+    identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: expr.time-loops
+  name: Time and loop expressions
+  sources:
+    - ref: S06
+      item: "time, loopIn(), loopOut(), loopInDuration(), loopOutDuration()"
+      category: "Expression language reference"
+      checked: false
+    - ref: "brief §5"
+      item: "time-based math, looping"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Use time in formulas, and repeat keyframed animation indefinitely before or after the keyframes with cycle,
+    ping-pong, offset or continue loops.
+  projection_example: >-
+    A 2-second "breathing" pulse keyframed once on a column loops for the whole five-minute show.
+  controls:
+    - { name: "Loop type", type: "enum(cycle|pingpong|offset|continue)", animatable: false }
+    - { name: "Direction", type: "enum(out|in)", animatable: false }
+    - { name: "Keyframes to loop (0 = all)", type: "int", animatable: false }
+    - { name: "Loop duration", type: "duration", animatable: false }
+  animation: >-
+    Works on any property with at least two keyframes; `continue` extrapolates using the final velocity.
+  dependencies: [expr.engine, anim.keyframe.core, anim.loop]
+  implementation: >-
+    loopIn, loopOut, loopInDuration and loopOutDuration are host functions that map the flick time into the
+    keyframed range and call the core keyframe evaluator, using the same math as the native anim.loop cycle modes.
+    The guided "Repeat" option and the expression therefore give identical values. `time` is flicks converted to
+    float64 seconds.
+  io: >-
+    none
+  limitations: >-
+    As in AE, `offset` and `continue` are limited on non-numeric properties such as paths, which support only
+    cycle and ping-pong.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Repeat this" toggle on any animation (anim.loop), which writes a native loop; the expression form appears
+      only in the Formula view.
+    defaults: >-
+      Cycle all keyframes, after the last keyframe.
+    automation: >-
+      The app checks whether the first and last values match and suggests ping-pong when a cycle would visibly
+      jump.
+    usability_check: >-
+      A first-time user makes a keyframed pulse repeat to the end of the comp in 2 actions.
+  acceptance: >-
+    Mini scene "loop-parity": loopOut("cycle") and the native cycle give identical values at 1,000 sampled times,
+    including times 10 minutes in.
+  status: not-started
+  evidence: []
+
+- id: expr.wiggle-noise
+  name: Wiggle, noise and smoothing
+  sources:
+    - ref: S06
+      item: "wiggle(), temporalWiggle(), smooth(), noise()"
+      category: "Expression language reference"
+      checked: false
+    - ref: "brief §5"
+      item: "noise/wiggle"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Add organic random motion with wiggle (frequency, amplitude, octaves, amplitude multiplier), smooth noise
+    fields, and temporal smoothing of jittery values.
+  projection_example: >-
+    Neon window outlines flicker gently like old tubes; each window flickers differently, but the same way on
+    every playback.
+  controls:
+    - { name: "Frequency (per second)", type: "float", animatable: true }
+    - { name: "Amplitude", type: "float", animatable: true }
+    - { name: "Octaves", type: "int", animatable: false }
+    - { name: "Amplitude multiplier", type: "float", animatable: false }
+    - { name: "Time offset", type: "time", animatable: false }
+    - { name: "Seed", type: "seed", animatable: true }
+  animation: >-
+    Wiggle parameters can be linked to sliders, so intensity can be keyframed or driven by audio
+    (audio.to-keyframes).
+  dependencies: [expr.engine, expr.stable-random]
+  implementation: >-
+    wiggle and temporalWiggle are TypeScript host functions using seeded gradient noise summed over octaves,
+    keyed by layer id, property path and seedRandom state. noise(x) is a deterministic Perlin-style 1D–3D field,
+    and smooth(width, samples) samples valueAtTime through the core evaluator.
+  io: >-
+    none
+  limitations: >-
+    Output matches AE's statistical behaviour, not its exact numbers; identical sequences to AE are not promised.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make it flicker" / "Add jitter" recipe with Intensity, Speed and Smoothness controls.
+    defaults: >-
+      2 wiggles per second, amplitude 10% of the property's useful range, 1 octave.
+    automation: >-
+      The app scales amplitude to the property's units and the target region's size, and links the parameters to
+      a controller.
+    usability_check: >-
+      A user adds flicker to a selection of windows in 3 actions or fewer and changes its speed with one slider.
+  acceptance: >-
+    AS-3: wiggle values are identical in random-access export, sequential preview and after reopening.
+  status: not-started
+  evidence: []
+
+- id: expr.random-seeded
+  name: Random, Gaussian random and seedRandom
+  sources:
+    - ref: S06
+      item: "random(), gaussRandom(), seedRandom(offset, timeless)"
+      category: "Expression language reference"
+      checked: false
+    - ref: "brief §5"
+      item: "seeded randomness"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Use random numbers, random vectors and Gaussian random values; reseed them per layer; and choose whether they
+    change every frame or stay fixed (timeless).
+  projection_example: >-
+    Give each of 40 windows a fixed random hue from a palette and a random start delay.
+  controls:
+    - { name: "Seed", type: "seed", animatable: true }
+    - { name: "Timeless", type: "bool", animatable: false }
+    - { name: "Minimum", type: "float", animatable: true }
+    - { name: "Maximum", type: "float", animatable: true }
+    - { name: "Distribution", type: "enum(uniform|gaussian)", animatable: false }
+  animation: >-
+    Values change every frame unless timeless; keyframing the seed steps through variations.
+  dependencies: [expr.engine, expr.stable-random]
+  implementation: >-
+    random(), gaussRandom() and seedRandom() are bound to the stateless core RNG: a counter-based integer hash
+    (PCG/Philox style) keyed by project seed, layer stable id, property path, user seed and frame index (dropped
+    when timeless). Calls within one evaluation consume a deterministic call counter.
+  io: >-
+    none
+  limitations: >-
+    Values differ from AE's, so random-driven tutorial expressions look different but are statistically
+    equivalent.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Shuffle" / "Randomize order" controls on recipes, plus a "New variation" button that changes the seed.
+    defaults: >-
+      Timeless for per-layer choices such as colours and delays; per-frame for flicker.
+    automation: >-
+      Recipes set seeds automatically and offer "Try another variation" and "Keep this one".
+    usability_check: >-
+      A user clicks "New variation" and gets a different but stable arrangement; reopening the project shows the
+      same arrangement in 10 of 10 trials.
+  acceptance: >-
+    Mini scene "seeded-palette": the hues of 40 windows are identical across preview, export, reopen and a
+    different render-worker count.
+  status: not-started
+  evidence: []
+
+- id: expr.stable-random
+  name: Stable randomness between preview and export
+  sources:
+    - ref: "brief §5"
+      item: "keeping all random results stable between preview and export"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+    - ref: "brief §20"
+      item: "Use deterministic time and seeded randomness"
+      category: "Architecture and build rules"
+      checked: true
+    - ref: S06
+      item: "seedRandom()"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Rely on every random choice (expression random, wiggle, recipe shuffles, effect noise seeds, particle seeds)
+    being identical in preview, in export, after reopening and on another machine.
+  projection_example: >-
+    The random order in which 100 windows light up during rehearsal is exactly the order in the export played at
+    the venue.
+  controls:
+    - { name: "Project seed", type: "seed", animatable: false }
+    - { name: "Per-recipe / per-layer seed", type: "seed", animatable: true }
+    - { name: "New variation", type: "action", animatable: false }
+    - { name: "Keep this variation when duplicating", type: "bool", animatable: false }
+  animation: >-
+    Seeds can be keyframed with hold interpolation to step between variations; random sequences are always pure
+    functions of seed and time.
+  dependencies: [anim.time-model, ux.operation-system]
+  implementation: >-
+    The core provides a stateless counter-based RNG:
+    hash(projectSeed, ownerStableId, propertyPath, userSeed, frameIndex, callCounter) produces 64-bit integers,
+    with no global state. Math.random and Date are removed from the QuickJS sandbox, and WGSL effect and particle
+    shaders use the same key derivation in integer math. Seeds and stable ids are saved in the project, and CI
+    compares frame hashes from preview and headless export.
+  io: >-
+    The project seed, per-owner seeds and stable ids are saved; collecting files and migrating the project
+    preserve them.
+  limitations: >-
+    Pasting into another project assigns new owner ids, which changes the variation unless "keep this variation"
+    is on. Float math downstream of the RNG must also be deterministic across GPUs, which needs tolerance tests.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Automatic, with nothing to set up; any recipe with randomness shows "New variation" and "Keep this
+      variation".
+    defaults: >-
+      A project seed is generated when the project is created, and every random owner gets a derived seed.
+    automation: >-
+      The app derives and stores seeds, removes non-deterministic sources, and checks preview/export parity during
+      render verification (render.verify).
+    usability_check: >-
+      In 5 of 5 sessions, novices confirm the exported video shows the random pattern they approved in preview;
+      the automated parity test matches 100% of frames.
+  acceptance: >-
+    AS-3 (particles and effects reproducible after reopening and seeking). Mini scene "random-parity" hashes the
+    frames from preview, from export with 1 and with 8 workers, and after reopening.
+  status: not-started
+  evidence: []
+
+- id: expr.value-at-time
+  name: valueAtTime, velocity and keyframe access
+  sources:
+    - ref: S06
+      item: "valueAtTime(), velocityAtTime(), speedAtTime(), key(), nearestKey(), numKeys"
+      category: "Expression language reference"
+      checked: false
+    - ref: "brief §5"
+      item: "sampling another property's value at another time"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Sample any property at another time, read its velocity or speed, and inspect its keyframes, which enables
+    delays, echoes, follow-through and overshoot.
+  projection_example: >-
+    Each facade section copies the master animation 0.15 s after the previous section, so the motion ripples
+    across the building.
+  controls:
+    - { name: "Source property", type: "property-ref", animatable: false }
+    - { name: "Time offset", type: "duration", animatable: true }
+    - { name: "Keyframe index", type: "int", animatable: false }
+  animation: >-
+    Offsets can be driven by order index or a slider; works on keyframed, expression-driven and nested-comp
+    properties.
+  dependencies: [expr.engine, expr.layer-references, anim.keyframe.core]
+  implementation: >-
+    valueAtTime(t) calls the core evaluator at any flick time, memoized per (property, time), and returns the
+    post-expression value of other properties; velocityAtTime uses the analytic derivative of the interpolation,
+    or a central difference for expression output. key(n) and nearestKey() expose time, value and index.
+  io: >-
+    none
+  limitations: >-
+    Many samples per frame (for example a 50-sample echo) are expensive and can hit the time budget. A property
+    may sample only its own pre-expression value, to avoid recursion.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Follow with delay" (anim.follow-delay) and the "Ripple across" recipe, with Delay and Order controls.
+    defaults: >-
+      A delay of 0.1 s per step, ordered left to right.
+    automation: >-
+      The app writes valueAtTime-based links and calculates each layer's offset from its order.
+    usability_check: >-
+      A user makes 10 panels follow a master with a delay in under 1 minute without typing.
+  acceptance: >-
+    Brief §4 example "one architectural section follows another with a controlled delay"; mini scene
+    "ripple-follow" matches between preview and export.
+  status: not-started
+  evidence: []
+
+- id: expr.vector-math
+  name: Vector math
+  sources:
+    - ref: S06
+      item: "Vector Math: add(), sub(), mul(), div(), clamp(), dot(), cross(), normalize(), length(), lookAt()"
+      category: "Expression language reference"
+      checked: false
+    - ref: "brief §5"
+      item: "vector operations, conditional logic"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Do vector arithmetic on positions, scales and colours; measure distances; clamp values; aim one layer at
+    another; and use conditional logic and standard JavaScript Math.
+  projection_example: >-
+    Brighten each window according to its distance from a moving light layer.
+  controls:
+    - { name: "Operand A", type: "property-ref", animatable: false }
+    - { name: "Operand B", type: "property-ref", animatable: false }
+    - { name: "Clamp minimum", type: "float", animatable: true }
+    - { name: "Clamp maximum", type: "float", animatable: true }
+  animation: >-
+    Pure functions, evaluated every frame.
+  dependencies: [expr.engine]
+  implementation: >-
+    TypeScript host functions operate on JavaScript arrays with AE semantics (component-wise, dimension
+    promotion); standard Math and conditional logic run natively in QuickJS. Whether `+` and `-` work directly on
+    arrays, as in legacy AE, is decided under expr.legacy-compat.
+  io: >-
+    none
+  limitations: >-
+    Numbers are float64. Expression colours use AE's 0–1 RGBA convention in the display-referred working
+    encoding, and the conversion to the scene-linear compositor is documented under color.management.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through recipes such as "Glow near the light" (distance falloff) → More controls.
+    defaults: >-
+      Distances are in comp pixels, and falloff is clamped to 0–100%.
+    automation: >-
+      Recipes write the vector math and link it to a controller.
+    usability_check: >-
+      A user applies "Glow near the light", drags the light, and sees nearby windows brighten, in 3 actions or
+      fewer.
+  acceptance: >-
+    Mini scene "distance-glow": window brightness follows the light's distance identically in preview and
+    export.
+  status: not-started
+  evidence: []
+
+- id: expr.interpolation
+  name: Interpolation and range mapping
+  sources:
+    - ref: S06
+      item: "Interpolation methods: linear(), ease(), easeIn(), easeOut()"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Remap one value range to another with linear or eased interpolation, for example audio level to scale, or
+    progress to opacity.
+  projection_example: >-
+    Map one "Progress" slider (0–100) to each column's rise, so all columns finish together but start at
+    different times.
+  controls:
+    - { name: "Input", type: "property-ref", animatable: false }
+    - { name: "Input minimum", type: "float", animatable: true }
+    - { name: "Input maximum", type: "float", animatable: true }
+    - { name: "Output minimum", type: "float", animatable: true }
+    - { name: "Output maximum", type: "float", animatable: true }
+    - { name: "Curve", type: "enum(linear|ease|ease-in|ease-out)", animatable: false }
+  animation: >-
+    Inputs can be time, sliders, audio amplitude or any other property.
+  dependencies: [expr.engine, expr.pick-whip]
+  implementation: >-
+    Host functions mirror AE's signatures, linear(t, tMin, tMax, v1, v2) and linear(t, v1, v2), with clamping
+    and component-wise arrays. The ease variants use the same cubic as anim.easy-ease, so guided easing and
+    expression easing match.
+  io: >-
+    none
+  limitations: >-
+    The ease curve shapes approximate AE's; exact numerical parity is not guaranteed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Link to…" → "Map range": two range sliders map the source onto the target, with no formula visible.
+    defaults: >-
+      Linear mapping with clamping, and the input range taken from the source's observed range.
+    automation: >-
+      The app measures the source's min and max over the comp (for example audio peaks) and proposes the input
+      range.
+    usability_check: >-
+      A user maps audio level to a 100–130% scale range in under 45 s without typing.
+  acceptance: >-
+    Mini scene "range-map": an audio amplitude track (audio.to-keyframes) drives window scale identically in
+    preview and export.
+  status: not-started
+  evidence: []
+
+- id: expr.color-conversion
+  name: Colour conversion functions
+  sources:
+    - ref: S06
+      item: "Color Conversion: rgbToHsl(), hslToRgb(), hexToRgb()"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Convert between RGB, HSL and hex colours in expressions to shift hue, saturation or lightness procedurally.
+  projection_example: >-
+    Rotate each window's hue by 360/100 × its order to paint a rainbow across 100 windows.
+  controls:
+    - { name: "Hue shift", type: "angle", animatable: true }
+    - { name: "Saturation", type: "percent", animatable: true }
+    - { name: "Lightness", type: "percent", animatable: true }
+    - { name: "Hex colour", type: "string", animatable: false }
+  animation: >-
+    Hue, saturation and lightness inputs can be keyframed or linked to controllers.
+  dependencies: [expr.engine, color.management]
+  implementation: >-
+    Host functions follow AE's 0–1 RGBA convention in the display-referred working encoding; color.management
+    converts results to scene-linear for compositing. A perceptual OKLCH helper is a product addition for even
+    hue spreads.
+  io: >-
+    none
+  limitations: >-
+    HSL is not perceptually uniform, so evenly spaced HSL hues can look uneven in brightness; the OKLCH helper is
+    not part of AE's language.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      "Color by order" / "Rainbow across" recipe controls: Palette, Hue spread, Start colour.
+    defaults: >-
+      Even hue spread in OKLCH, with saturation and lightness kept from the original colour.
+    automation: >-
+      The recipe writes the colour expression per instance and stores the palette on the controller.
+    usability_check: >-
+      A user colours 100 windows in a hue gradient in 3 actions or fewer.
+  acceptance: >-
+    Mini scene "hue-by-index": colours are identical in preview and export and stay unchanged after reopening.
+  status: not-started
+  evidence: []
+
+- id: expr.space-transforms
+  name: Layer space transforms
+  sources:
+    - ref: S06
+      item: "Layer Space Transforms: toComp(), fromComp(), toWorld(), fromWorld(), toCompVec(), fromCompToSurface()"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Convert points between a layer's own space, the composition and 3D world space, so elements can stick to
+    corners of other layers, parented objects or 3D positions seen through the comp camera.
+  projection_example: >-
+    Pin a light flare to the top-right corner of a parented, rotating window panel, or attach a 2D label to a 3D
+    column as seen by the content camera.
+  controls:
+    - { name: "Source layer", type: "layer-ref", animatable: false }
+    - { name: "Point", type: "point3d", animatable: true }
+    - { name: "Target space", type: "enum(layer|comp|world|surface)", animatable: false }
+  animation: >-
+    Results update every frame as parents, cameras and the source layer animate.
+  dependencies: [expr.engine, proj.parenting, 3d.scene, 3d.camera]
+  implementation: >-
+    Host methods use the core transform stack (parent chain, anchor, 3D matrices, active comp camera
+    projection) computed by the same evaluator that rendering uses, so attached points never drift between
+    preview and export.
+  io: >-
+    none
+  limitations: >-
+    "Comp" means the content composition, not projector space; projector and calibration transforms (map.*) are
+    deliberately not exposed, which prevents applying mapping twice.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      "Stick to…": click a layer corner or point to attach the selection to it; More controls shows the
+      generated link.
+    defaults: >-
+      Attach to the nearest corner or anchor, keeping the current offset.
+    automation: >-
+      The app writes the toComp/fromComp chain, including parenting and 3D camera projection.
+    usability_check: >-
+      A user attaches a sparkle to the corner of a moving panel in under 45 s.
+  acceptance: >-
+    AS-2; mini scene "corner-follow": the attached point stays within 0.5 px of the corner throughout preview and
+    export.
+  status: not-started
+  evidence: []
+
+- id: expr.source-rect
+  name: sourceRectAtTime layer bounds
+  sources:
+    - ref: S06
+      item: "sourceRectAtTime(t, includeExtents)"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Read the bounding box of a text or shape layer at any time, to auto-size background boxes, underline bars and
+    frames.
+  projection_example: >-
+    A banner panel behind the show title grows automatically as the title text is edited.
+  controls:
+    - { name: "Measured layer", type: "layer-ref", animatable: false }
+    - { name: "Include stroke extents", type: "bool", animatable: false }
+    - { name: "Padding", type: "size2d", animatable: true }
+    - { name: "Corner roundness", type: "float", animatable: true }
+  animation: >-
+    Bounds follow animated text and shape content at every frame.
+  dependencies: [expr.engine, text.layer, shape.layer]
+  implementation: >-
+    The host function queries the layout engine for bounds: HarfBuzz line layout for text, or CanvasKit path
+    bounds (with stroke extents when includeExtents is set) for shapes. Results are memoized per (layer, time,
+    content hash).
+  io: >-
+    none
+  limitations: >-
+    As in AE, bounds come from layout, not from pixels after effects; whether text bounds include ascenders and
+    descenders follows a documented rule.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      "Box behind text" / "Auto-fit background" recipe, with Padding, Corner roundness and Colour.
+    defaults: >-
+      20 px padding, square corners, 80% opacity.
+    automation: >-
+      The recipe creates the box shape and the sourceRectAtTime expression linked to the text layer.
+    usability_check: >-
+      A user adds an auto-sizing background to a title in 2 actions; editing the text resizes the box with no
+      further action.
+  acceptance: >-
+    Mini scene "auto-banner": the box tracks the edited title text on every frame of the export.
+  status: not-started
+  evidence: []
+
+- id: expr.path-expressions
+  name: Path expressions
+  sources:
+    - ref: S06
+      item: "Path Property attributes and methods: points(), inTangents(), outTangents(), isClosed(), pointOnPath(), tangentOnPath(), normalOnPath(), createPath()"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Read the vertices of mask and shape paths, find positions and directions along a path, and build or modify
+    paths procedurally.
+  projection_example: >-
+    A spark rides along the traced roofline at a percentage set by a slider, rotated to follow the line's
+    direction.
+  controls:
+    - { name: "Path", type: "property-ref", animatable: false }
+    - { name: "Percentage along path", type: "percent", animatable: true }
+    - { name: "Constant speed (arc length)", type: "bool", animatable: false }
+    - { name: "Closed", type: "bool", animatable: false }
+  animation: >-
+    The percentage and offsets can be keyframed or linked, and generated paths update every frame.
+  dependencies: [expr.engine, shape.path]
+  implementation: >-
+    Host Path objects are backed by the core Bezier path model. pointOnPath, tangentOnPath and normalOnPath use
+    arc-length parameterization from CanvasKit PathMeasure or a cached length table, and createPath returns a
+    path value that the path property consumes.
+  io: >-
+    none
+  limitations: >-
+    A createPath result whose vertex count changes over time cannot interpolate smoothly. AE's percentage
+    parameter is not arc-length uniform, so the constant-speed option is a product addition, documented as such.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Travel along this edge" (tool.edge-trace) and "Attach points to nulls"
+      (shape.nulls-from-paths).
+    defaults: >-
+      Constant speed along the path, oriented to the tangent.
+    automation: >-
+      The app writes the path-following expression and a Progress slider linked to it.
+    usability_check: >-
+      A user makes a dot travel the whole roofline in 3 actions or fewer.
+  acceptance: >-
+    AS-1: a spark travels the traced roofline at constant speed, timed to audio, and matches between preview and
+    export.
+  status: not-started
+  evidence: []
+
+- id: expr.text-expressions
+  name: Text expressions and text style API
+  sources:
+    - ref: S06
+      item: "Text attributes and methods: text.sourceText, sourceText.style, setText(), setFont(), setFontSize(), setFillColor(), getStyleAt(), createStyle()"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Generate or modify text content and style with expressions: counters, clocks, values read from data or
+    controls, case changes and per-character style changes.
+  projection_example: >-
+    A countdown from 10 to 1 above the entrance, driven by one slider, with the final digit turning red.
+  controls:
+    - { name: "Source text", type: "string", animatable: true }
+    - { name: "Number format", type: "string", animatable: false }
+    - { name: "Font", type: "font", animatable: false }
+    - { name: "Font size", type: "float", animatable: true }
+    - { name: "Fill colour", type: "color", animatable: true }
+  animation: >-
+    The generated text can change on every frame; style setters can be time-dependent.
+  dependencies: [expr.engine, text.layer, text.source-text-animation]
+  implementation: >-
+    Immutable host TextDocument and TextStyle objects: setters return new style objects, mirroring AE's API.
+    The result feeds HarfBuzz layout, and per-frame relayout is cached by (text, style hash).
+  io: >-
+    none
+  limitations: >-
+    Text that changes every frame forces relayout on each frame; only the style subset in AE's text API is
+    supported.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      "Counter", "Clock" and "Show a number" text recipes, and "Show data" from expr.data-driven.
+    defaults: >-
+      An integer counter from 10 to 0 over the layer's duration, using the show's font.
+    automation: >-
+      The recipe writes the text expression and exposes Start, End and Format controls.
+    usability_check: >-
+      A user creates a 10-to-1 countdown in under 1 minute without typing code.
+  acceptance: >-
+    Mini scene "countdown": every frame of the export shows the expected digit.
+  status: not-started
+  evidence: []
+
+- id: expr.errors
+  name: Expression error reporting and safe fallback
+  sources:
+    - ref: S06
+      item: "Expression errors (error banner, expression disabled on error)"
+      category: "Expression basics"
+      checked: false
+    - ref: "brief §5"
+      item: "Expression failures must identify the affected property without crashing the application"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    See which layer and property has a broken expression and why, in plain language, while that property falls
+    back to its normal value and work continues.
+  projection_example: >-
+    After the controller layer is deleted, the 100 window rigs show one grouped warning, "Windows lost their
+    Brightness control", with a one-click fix.
+  controls:
+    - { name: "Show error details", type: "bool", animatable: false }
+    - { name: "Jump to property", type: "action", animatable: false }
+    - { name: "Turn off formula", type: "action", animatable: false }
+    - { name: "Apply suggested fix", type: "action", animatable: false }
+  animation: >-
+    Errors are evaluated per frame, so the report lists the time ranges where the expression fails.
+  dependencies: [expr.engine]
+  implementation: >-
+    Every evaluation is wrapped. Exceptions, interrupt timeouts, out-of-memory and invalid results (NaN, wrong
+    dimension, wrong type) are captured with layer id, property path, line and column. The property falls back
+    to its pre-expression value, and errors are grouped by cause across layers. A QuickJS runtime that fails is
+    recycled without killing the evaluation worker, and render jobs record errors in the log and the verification
+    report.
+  io: >-
+    Expression errors are listed in render logs and in render.verify reports.
+  limitations: >-
+    The fallback value can hide a problem in an export, so export warns whenever any expression errored and
+    lists the affected frames.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A plain banner such as "1 animation formula stopped working on Window 12 → Brightness", with "Show me",
+      "Fix" and "Turn off formula".
+    defaults: >-
+      Errors are grouped by cause; export asks once for confirmation when errors exist.
+    automation: >-
+      The app suggests fixes for common causes: a renamed or missing layer (offers the closest match), a missing
+      effect control, or a wrong dimension (wraps the value automatically).
+    usability_check: >-
+      Given a broken rig, a first-time user finds and fixes or turns off the broken formula in under 60 s, and the
+      app never freezes or quits.
+  acceptance: >-
+    Mini scene "broken-reference": the app stays responsive, the exact property is identified, and the export log
+    lists it; a runaway `while(true)` expression is stopped within the time budget.
+  status: not-started
+  evidence: []
+
+- id: expr.cycle-detection
+  name: Expression dependency cycle detection
+  sources:
+    - ref: S06
+      item: "Expression errors (circular reference between properties)"
+      category: "Expression basics"
+      checked: false
+    - ref: "brief §5"
+      item: "Detect dependency cycles"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Be warned when properties depend on each other in a loop, with the loop shown, instead of a hang or unstable
+    values.
+  projection_example: >-
+    Linking A's position to B and B's position back to A shows the two-step loop and offers to remove one link.
+  controls:
+    - { name: "Show dependency loop", type: "action", animatable: false }
+    - { name: "Break link", type: "action", animatable: false }
+  animation: >-
+    Not animated itself; cycles that occur only at some times (data-dependent references) are reported with
+    their time ranges.
+  dependencies: [expr.engine, expr.errors]
+  implementation: >-
+    A static dependency graph is built from parsed references and the reads recorded at runtime; Tarjan SCC runs
+    when a link or expression is committed. At evaluation, a re-entrancy guard on the (property, time) evaluation
+    stack catches data-dependent cycles. A property inside a cycle falls back to its pre-expression value, and a
+    read of another property at a different time is allowed when it terminates.
+  io: >-
+    none
+  limitations: >-
+    Some cycles are only discovered during evaluation; the rules for time-offset self-reference are documented
+    and may differ from AE in edge cases.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A warning when creating the link: "This would make A and B follow each other forever", offering to reverse
+      the link instead.
+    defaults: >-
+      Circular links are blocked in guided linking and flagged, not blocked, in the Formula editor.
+    automation: >-
+      The app draws the loop on the canvas and timeline and proposes the link to remove.
+    usability_check: >-
+      At least 4 of 5 users who attempt a circular link understand the warning and resolve it in one action.
+  acceptance: >-
+    Mini scene "cycle-guard": a three-property cycle is detected within 100 ms, the UI stays responsive, and
+    export completes with the cycle listed rather than hanging.
+  status: not-started
+  evidence: []
+
+- id: expr.bake-to-keyframes
+  name: Convert expression to keyframes
+  sources:
+    - ref: S01
+      item: "Convert Expression to Keyframes"
+      category: "Keyframe assistants"
+      checked: false
+  artist_can: >-
+    Turn an expression's output into ordinary keyframes, one per frame or simplified, so it can be adjusted by
+    hand or no longer depends on its source.
+  projection_example: >-
+    Bake the wiggle flicker on the hero window, then hand-adjust the frame where the light goes dark on the beat.
+  controls:
+    - { name: "Range", type: "enum(work-area|layer|comp)", animatable: false }
+    - { name: "Simplify tolerance", type: "float", animatable: false }
+    - { name: "Keep expression (disabled)", type: "bool", animatable: false }
+  animation: >-
+    Produces keyframes (linear, or Bezier when simplified) that behave like any others.
+  dependencies: [expr.engine, anim.keyframe.core, proj.work-area]
+  implementation: >-
+    Samples the evaluator at every frame in flick time, then optionally fits Bezier keyframes within the
+    tolerance using curve fitting (Ramer–Douglas–Peucker plus least-squares handles). It runs as one undoable op
+    and keeps the expression disabled for reference.
+  io: >-
+    none
+  limitations: >-
+    Baked keyframes no longer respond to controller or data changes.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Make editable by hand" on any formula-driven property (More controls).
+    defaults: >-
+      Work-area range, simplified, original expression kept but disabled.
+    automation: >-
+      The app picks a simplification tolerance that keeps every sampled frame within 0.5% of the original value.
+    usability_check: >-
+      A user bakes a flicker and moves one resulting keyframe in under 30 s.
+  acceptance: >-
+    Mini scene "bake-flicker": without simplification, the baked output equals the expression output at every
+    frame.
+  status: not-started
+  evidence: []
+
+- id: expr.controllers
+  name: Controllers and expression controls
+  sources:
+    - ref: S06
+      item: "Expression Controls: Slider, Angle, Checkbox, Color, Point, 3D Point, Layer, Dropdown Menu Control"
+      category: "Expression controls"
+      checked: false
+    - ref: "brief §5"
+      item: "controls such as sliders, angles, points, colors, checkboxes, and dropdowns"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Add named creative controls (sliders, angles, points, colours, checkboxes, dropdowns, layer pickers) to a
+    controller layer, and drive many properties from them.
+  projection_example: >-
+    A "Show Controller" with Brightness, Colour, Speed and a Mode dropdown (Calm / Party) drives the whole
+    facade.
+  controls:
+    - { name: "Slider", type: "float", animatable: true }
+    - { name: "Slider range", type: "float", animatable: false }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Point", type: "point2d", animatable: true }
+    - { name: "3D point", type: "point3d", animatable: true }
+    - { name: "Colour", type: "color", animatable: true }
+    - { name: "Checkbox", type: "bool", animatable: true }
+    - { name: "Dropdown", type: "enum(user-defined)", animatable: true }
+    - { name: "Layer", type: "layer-ref", animatable: true }
+  animation: >-
+    Every control is keyframable (checkbox, dropdown and layer use hold keyframes) and can itself be linked or
+    audio-driven.
+  dependencies: [expr.engine, proj.null-layer, fx.expression-controls.slider-control, fx.expression-controls.angle-control, fx.expression-controls.point-control, fx.expression-controls.color-control, fx.expression-controls.checkbox-control]
+  implementation: >-
+    Controllers are effects in the expression-controls category that declare no render pass. A controller panel
+    groups them by layer, dropdown items carry stable ids (exposed to expressions as 1-based indexes for AE
+    compatibility), and renaming a control rewrites referencing expressions in the same op.
+  io: >-
+    none
+  limitations: >-
+    Reordering dropdown items changes the index that expressions see, as in AE; generated rigs compare against
+    item ids to avoid this.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Controllers appear automatically as a recipe's simple controls (for example Brightness, Colour, Speed);
+      "Add a control" is under More controls.
+    defaults: >-
+      Sensible ranges per recipe (for example Brightness 0–100%) and labels in plain words.
+    automation: >-
+      Recipes create the controller layer, the controls, and all links to them.
+    usability_check: >-
+      A first-time user changes the whole show's colour through a controller in under 20 s.
+  acceptance: >-
+    AS-1; mini scene "show-controller": one controller drives 100 layers, with a Mode dropdown switching looks in
+    both preview and export.
+  status: not-started
+  evidence: []
+
+- id: expr.rigs
+  name: Reusable rigs with exposed parameters
+  sources:
+    - ref: "brief §5"
+      item: "reusable rigs with exposed parameters"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+    - ref: "brief §0.4"
+      item: "guided workflow and detailed tools must edit the same data"
+      category: "User experience"
+      checked: true
+    - ref: S01
+      item: "Essential Graphics panel (rig exposure of properties)"
+      category: "Essential Graphics"
+      checked: false
+  artist_can: >-
+    Package layers, expressions and controllers into a reusable rig that exposes a few named parameters, and
+    apply it to new targets in this or another project.
+  projection_example: >-
+    A "window lightbox" rig (glow, frame stroke, flicker) is applied to every window of a new venue, exposing
+    Colour, Delay and Intensity.
+  controls:
+    - { name: "Exposed parameters", type: "property-ref", animatable: false }
+    - { name: "Parameter defaults and ranges", type: "float", animatable: false }
+    - { name: "Targets (layers or region roles)", type: "layer-ref", animatable: false }
+    - { name: "Instance override", type: "bool", animatable: false }
+    - { name: "Update instances from rig", type: "action", animatable: false }
+  animation: >-
+    Exposed parameters are keyframable per instance or on a shared controller.
+  dependencies: [expr.engine, expr.controllers, ux.recipe-engine, proj.precompose, map.region]
+  implementation: >-
+    A rig is a recipe-engine template with a typed parameter schema, a generator that emits ops (layers,
+    effects, expressions referencing the rig controller) and binding slots by region role. Instances store
+    parameter values and overrides, and updating the rig definition regenerates instances while merging tracked
+    overrides (proj.recipe-override).
+  io: >-
+    Rigs are saved in the project and exportable as a versioned library file (JSON plus referenced assets) for
+    other projects.
+  limitations: >-
+    Structural changes to a rig can conflict with instance overrides; conflicts are shown for a decision, never
+    dropped silently.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Save as reusable look" on any recipe result, and "Apply look to…" on a selection or region group.
+    defaults: >-
+      Exposes the recipe's simple controls plus any control the user changed.
+    automation: >-
+      The app detects which parameters the user changed, proposes exposing them, and binds targets by region
+      role so the look transfers to another venue.
+    usability_check: >-
+      A user saves a look from one window and applies it to 20 others in 3 actions or fewer.
+  acceptance: >-
+    AS-7 (bind the same show to another venue); mini scene "rig-reuse": a rig update propagates to all instances
+    while each instance's custom colour is kept.
+  status: not-started
+  evidence: []
+
+- id: expr.index-rig
+  name: Index-driven rig (100 windows, one rig)
+  sources:
+    - ref: "brief §5"
+      item: "animate 100 windows using one rig, with each window's index determining its delay and color, while keeping all random results stable between preview and export"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+    - ref: S06
+      item: "index, thisComp.numLayers"
+      category: "Expression language reference"
+      checked: false
+  artist_can: >-
+    Drive any number of copies from one rig, where each copy's position in an order sets its delay, colour and
+    variation; editing the rig once updates every copy.
+  projection_example: >-
+    100 windows light up left to right with a 0.05 s stagger and a hue gradient; changing Delay to 0.1 s retimes
+    all 100 at once.
+  controls:
+    - { name: "Order", type: "enum(left-to-right|right-to-left|top-to-bottom|bottom-to-top|center-out|random|layer-order|custom)", animatable: false }
+    - { name: "Delay per step", type: "duration", animatable: true }
+    - { name: "Colour spread", type: "gradient", animatable: true }
+    - { name: "Random variation", type: "percent", animatable: true }
+    - { name: "Seed", type: "seed", animatable: false }
+    - { name: "Group by", type: "enum(none|floor|column|region-group)", animatable: false }
+  animation: >-
+    Delay, colour spread and variation are keyframable on the shared controller; the per-copy order is fixed data
+    that can be edited.
+  dependencies: [expr.rigs, expr.layer-references, expr.value-at-time, expr.random-seeded, expr.stable-random, map.region]
+  implementation: >-
+    Each instance stores an "order" value computed from region centroids or a user order, so it never depends on
+    raw layer index. Its expressions read the shared controller and this order value, and one controller change
+    invalidates the 100 dependent properties through the dependency graph. Generated formulas that match a known
+    rig template run on a native TypeScript fast path; customized formulas fall back to QuickJS.
+  io: >-
+    none
+  limitations: >-
+    An order derived from geometry can be wrong for irregular facades, so manual reordering is provided; a fully
+    custom formula on every copy runs at QuickJS speed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Light up one after another" (tool.sequence-light-up) on selected windows, with Order, Delay and Colour;
+      More controls exposes this rig.
+    defaults: >-
+      Left to right, top row first, with a delay scaled so the whole sequence lasts 2 s, and the palette taken
+      from the show colours.
+    automation: >-
+      The app computes the order from region positions, creates the instances, writes the expressions, and seeds
+      the randomness.
+    usability_check: >-
+      A first-time user sets 100 windows to light in sequence in 3 actions or fewer and under 2 minutes; changing
+      the delay takes one slider move.
+  acceptance: >-
+    Mini scene "100-windows": 100 instances from one rig; one edit retimes all; preview and export frame hashes
+    match; reopening is identical; per-frame evaluation stays within the target time. Contributes to AS-1.
+  status: not-started
+  evidence: []
+
+- id: expr.essential-properties
+  name: Essential Properties (per-instance overrides of nested comps)
+  sources:
+    - ref: S01
+      item: "Essential Properties (Essential Graphics panel, overrides on nested composition layers)"
+      category: "Essential Graphics"
+      checked: false
+  artist_can: >-
+    Expose chosen properties of a nested composition, so each placement of that comp can have its own values
+    (colour, text, delay) while sharing one master design.
+  projection_example: >-
+    One "window animation" comp is placed in 30 windows; each placement overrides only its colour and start
+    offset.
+  controls:
+    - { name: "Exposed property list", type: "property-ref", animatable: false }
+    - { name: "Per-instance override value", type: "float", animatable: true }
+    - { name: "Reset to master", type: "action", animatable: false }
+  animation: >-
+    Override values are keyframable on each comp layer, independently of the master.
+  dependencies: [proj.nesting, expr.engine]
+  implementation: >-
+    A composition declares an exposed-property schema, and each comp layer stores override values. Nested
+    evaluation carries an instance path in its context, overrides replace master values for that path, and cache
+    keys include the instance path; expressions can read `essentialProperty(name)`.
+  io: >-
+    Overrides are saved with each comp layer; a missing exposed property on the master is reported, not
+    discarded.
+  limitations: >-
+    Overrides make nested renders instance-specific, so pre-render caches (proj.pre-render) are per instance and
+    use more memory.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: C
+  beginner:
+    action: >-
+      "Make this different here" on a property inside a reused design; a "custom here" chip shows the override.
+    defaults: >-
+      Colour, text and start offset are exposed automatically on recipe-generated nested designs.
+    automation: >-
+      The app exposes the property and creates the override on the selected instance only.
+    usability_check: >-
+      A user changes the colour of one of 30 placed copies in 3 actions or fewer without affecting the others.
+  acceptance: >-
+    Mini scene "per-instance": 30 placements with 3 overrides render correctly; editing the master updates all
+    non-overridden values.
+  status: not-started
+  evidence: []
+
+- id: expr.motion-templates
+  name: Motion graphics templates
+  sources:
+    - ref: S01
+      item: "Motion Graphics templates and the Essential Graphics panel"
+      category: "Essential Graphics"
+      checked: false
+  artist_can: >-
+    Package a composition with a simplified control panel (exposed sliders, text, colours and media replacement
+    slots) as a template that can be reused in other projects.
+  projection_example: >-
+    A "title card" template with Title, Colour and Logo slots is reused across several venue shows.
+  controls:
+    - { name: "Template name", type: "string", animatable: false }
+    - { name: "Exposed controls", type: "property-ref", animatable: false }
+    - { name: "Media replacement slot", type: "file", animatable: false }
+    - { name: "Control grouping", type: "string", animatable: false }
+    - { name: "Poster frame", type: "time", animatable: false }
+  animation: >-
+    Exposed controls stay keyframable in the project that uses the template.
+  dependencies: [expr.essential-properties, expr.rigs, proj.templates]
+  implementation: >-
+    A template is a packaged comp subtree with an exposed-control schema, thumbnail and assets, serialized as a
+    versioned zip using a subset of the project format. Importing it instantiates the template through
+    operations, so the import is undoable.
+  io: >-
+    Uses Before Effects' own template format. Adobe .mogrt files are neither opened nor written.
+  limitations: >-
+    There is no Premiere Pro or .mogrt compatibility; templates that depend on fonts report substitutions on
+    import (text.font-substitution).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: D
+  beginner:
+    action: >-
+      "Save as template", and "Use template" in the library, with an animated thumbnail.
+    defaults: >-
+      Exposes the text, colour and media slots found in the comp, plus the controller's controls.
+    automation: >-
+      The app collects the referenced assets, renders an animated thumbnail, and groups the controls.
+    usability_check: >-
+      A user saves a title as a template and reuses it in a new project in under 2 minutes.
+  acceptance: >-
+    Mini scene "template-roundtrip": a saved template opened in a new project renders identically, and its
+    exposed controls work.
+  status: not-started
+  evidence: []
+
+- id: expr.presets
+  name: Animation presets and saved looks
+  sources:
+    - ref: S01
+      item: "Animation presets (save and apply effects, keyframes, expressions)"
+      category: "Effects and animation presets"
+      checked: false
+    - ref: "brief §5"
+      item: "save/share custom presets"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Save a combination of effects, keyframes, expressions and layer styles as a preset, browse presets with
+    animated thumbnails, and apply them to other layers.
+  projection_example: >-
+    Save the "flicker on" look from one sign and apply it to every shopfront sign.
+  controls:
+    - { name: "Preset name", type: "string", animatable: false }
+    - { name: "Included properties", type: "property-ref", animatable: false }
+    - { name: "Apply mode", type: "enum(add|replace)", animatable: false }
+    - { name: "Time placement", type: "enum(current-time|layer-start)", animatable: false }
+    - { name: "Scale timing to layer", type: "bool", animatable: false }
+  animation: >-
+    Keyframes are stored relative to the preset's placement time and can be time-scaled when applied.
+  dependencies: [expr.engine, anim.keyframe.core, proj.effect-stack, ux.effect-library]
+  implementation: >-
+    A preset is a serialized list of operations relative to its target (relative property paths, keyframe times
+    relative to placement), plus a thumbnail rendered on a sample surface. Applying it is one grouped op.
+  io: >-
+    Uses Before Effects' own preset format (JSON). Adobe .ffx files are not imported.
+  limitations: >-
+    Presets that reference other layers need re-binding when applied; the app prompts for the missing target.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Save as favourite look", then drag it from the library onto a selection.
+    defaults: >-
+      Applied at the current time, timing scaled to fit short layers.
+    automation: >-
+      The app renders an animated thumbnail and re-binds controller references automatically when a matching
+      controller exists.
+    usability_check: >-
+      A user saves a preset and applies it to 5 layers in under 45 s.
+  acceptance: >-
+    Mini scene "preset-apply": a preset applied to 5 layers gives the same result as the original look, and undo
+    removes it in one step.
+  status: not-started
+  evidence: []
+
+- id: expr.data-driven
+  name: Data-driven animation (JSON and CSV)
+  sources:
+    - ref: S01
+      item: "Data-driven animation (JSON, CSV, TSV, mgJSON; sourceData, dataValue(), dataKeyTimes(), dataKeyValues())"
+      category: "Data-driven animation"
+      checked: false
+    - ref: "brief §5"
+      item: "data-driven animation"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Import JSON or CSV data and drive animation, text and colours from it, including time-series data.
+  projection_example: >-
+    A facade "data show" in which each window's brightness follows the city's hourly energy use from a CSV file.
+  controls:
+    - { name: "Data file", type: "file", animatable: false }
+    - { name: "Column / key", type: "string", animatable: false }
+    - { name: "Row or time", type: "int", animatable: true }
+    - { name: "Value mapping", type: "curve", animatable: false }
+    - { name: "Reload data", type: "action", animatable: false }
+  animation: >-
+    Data values drive any property per frame, and time-series data plays back over the comp timeline.
+  dependencies: [expr.engine, expr.interpolation, proj.import-media]
+  implementation: >-
+    The core parses JSON and CSV/TSV into a project data asset. The expression API exposes
+    footage(name).sourceData, dataValue(), dataKeyTimes() and dataKeyValues(). A snapshot of the data is stored
+    in the project so evaluation stays deterministic, and reloading is an explicit undoable op.
+  io: >-
+    Imports JSON, CSV and TSV, plus time-sampled mgJSON where feasible. The data snapshot is embedded or
+    collected with the project (proj.collect-files).
+  limitations: >-
+    Live or streaming data needs a record-and-bake path before export; expressions cannot fetch from the
+    network.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: D
+  beginner:
+    action: >-
+      "Drive with data": choose a file, pick a column, and map it to a property with range sliders.
+    defaults: >-
+      The first numeric column, mapped across its full observed range, one row per second.
+    automation: >-
+      The app detects column types and value ranges and writes the dataValue expressions and mapping.
+    usability_check: >-
+      A user maps a CSV column to the brightness of 20 windows in under 3 minutes.
+  acceptance: >-
+    Mini scene "csv-drive": export is identical after the source data file is moved or deleted, because the
+    embedded snapshot is used.
+  status: not-started
+  evidence: []
+
+- id: expr.scripting
+  name: Sandboxed scripting
+  sources:
+    - ref: S01
+      item: "Scripts (ExtendScript automation, File > Scripts, ScriptUI panels)"
+      category: "Automation and scripting"
+      checked: false
+    - ref: "brief §5"
+      item: "scripting for repetitive scene creation ... Sandbox scripts and bound their execution time"
+      category: "Expressions, controllers, and reusable rigs"
+      checked: true
+  artist_can: >-
+    Run scripts that create and edit layers, keyframes, effects and comps in bulk, applied as one undoable step.
+  projection_example: >-
+    A script creates one comp per projector region, names each one, and adds a labelled solid to each.
+  controls:
+    - { name: "Script file", type: "file", animatable: false }
+    - { name: "Parameters", type: "string", animatable: false }
+    - { name: "Time limit", type: "duration", animatable: false }
+    - { name: "Preview changes first", type: "bool", animatable: false }
+    - { name: "Run", type: "action", animatable: false }
+  animation: >-
+    Scripts can create keyframes and expressions; they do not run per frame.
+  dependencies: [ux.operation-system, expr.engine, proj.project-model]
+  implementation: >-
+    Scripts run in a separate QuickJS-WASM runtime in a worker, with an interrupt-handler wall-clock limit and a
+    memory limit. The API is the typed operation registry plus a read-only query API with published TypeScript
+    typings, and all ops from one run form a single undo group. File access goes only through an explicit picker
+    capability, network access is denied, and a dry run shows a diff before applying.
+  io: >-
+    Scripts are .js files in the user library and appear as buttons. AE .jsx/ExtendScript and ScriptUI are not
+    supported.
+  limitations: >-
+    Not compatible with AE scripts. Long scripts must yield and are stopped at the time limit, and their partial
+    changes are rolled back.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: D
+  beginner:
+    action: >-
+      Advanced only; novices get the same bulk results from recipes and the assistant (ai.assistant), which use
+      the same operation registry. Saved scripts appear as named buttons.
+    defaults: >-
+      10 s time limit, changes previewed before they are applied, one undo step per run.
+    automation: >-
+      The app bundles each run into one undo group, rolls back on timeout or error, and reports the changed items.
+    usability_check: >-
+      An advanced user runs a provided script and undoes all of it with one undo; a runaway loop is stopped
+      within the time limit with a plain message and no frozen UI.
+  acceptance: >-
+    Mini scene "script-bulk": creating 50 comps is one undo step, and an infinite loop is terminated within the
+    limit without freezing the UI.
+  status: not-started
+  evidence: []
+
+- id: expr.legacy-compat
+  name: Compatibility with After Effects tutorial expressions
+  sources:
+    - ref: S06
+      item: "JavaScript and Legacy ExtendScript expression engines; syntax differences"
+      category: "Expression basics"
+      checked: false
+  artist_can: >-
+    Paste expressions from After Effects tutorials and projects and have them work, or be converted
+    automatically, with a note on what changed.
+  projection_example: >-
+    Paste a popular "inertial bounce" expression from a tutorial onto a panel's scale.
+  controls:
+    - { name: "Compatibility mode", type: "enum(modern|ae-legacy)", animatable: false }
+    - { name: "Show conversion notes", type: "bool", animatable: false }
+  animation: >-
+    Same as expr.engine.
+  dependencies: [expr.engine]
+  implementation: >-
+    Candidate approach: a compile-time source transform for legacy idioms (array `+`/`-` operator overloading,
+    snake_case aliases such as this_comp, string coercion of sourceText, implicit-global patterns), validated
+    against a curated corpus of common tutorial expressions.
+  io: >-
+    Expressions pasted as text; .aep import is a separate question (proj.aep-interop).
+  limitations: >-
+    Decision 2026-10-02: After Effects project import is required, so imported expressions must keep working: a modern JavaScript engine plus a compatibility transform for common legacy ExtendScript patterns (array arithmetic, snake_case aliases). Unsupported expressions are listed in the import compatibility report and fall back to their baked keyframes.
+
+    Open question: how much legacy ExtendScript syntax and behaviour (array operator overloading, snake_case
+    aliases, ExtendScript-only String and Date quirks) should be accepted? And should a tutorial-expression
+    corpus define the compatibility target? Without .aep import, the benefit is limited to pasted code.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects expression API surface that recipes and rigs do not use. Expression engine, rigs, controllers and randomness stay required for recipes and AE import."
+  milestone: D
+  beginner:
+    action: >-
+      Paste into the Formula field; the app reports what it adjusted, if anything.
+    defaults: >-
+      Modern mode, with automatic conversion of recognized legacy idioms.
+    automation: >-
+      The app rewrites recognized legacy syntax and explains each change in one line.
+    usability_check: >-
+      At least 80% of a curated corpus of 50 popular tutorial expressions run unmodified or after automatic
+      conversion.
+  acceptance: >-
+    Mini scene "tutorial-corpus": the corpus runs and the pass rate is recorded as evidence.
+  status: not-started
+  evidence: []

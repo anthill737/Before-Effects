@@ -1,0 +1,2646 @@
+# 3D — Before Effects capability register
+# Sources: S01 (AE user guide: 3D layers, 3D design space, gizmos, cameras, lights, materials, IBL, shadows, shadow catchers, parametric meshes, model import, Draft 3D, Cinema 4D/Classic 3D, stereoscopic), S10 (Advanced 3D renderer), brief §9 (true 3D and 2.5D), brief §15/§19 (venue vs show separation). Live pages checked 2026-10-01 where `checked: true`.
+
+- id: 3d.scene
+  name: 3D scene
+  sources:
+    - ref: S10
+      item: Advanced 3D renderer
+      category: Work with 3D composition
+      checked: true
+    - ref: S01
+      item: 3D layers
+      category: Work with layers
+      checked: false
+    - ref: brief
+      item: §9 True 3D and 2.5D workspace
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Build a 3D scene inside a composition where flat layers, imported models, primitives, extruded type,
+    cameras and lights share one coordinate space and render together with correct depth, lighting and shadows.
+  projection_example: >-
+    A tunnel behind a real doorway: primitive walls, a model train passing through, lit and rendered from the
+    audience viewpoint into the doorway region.
+  controls:
+    - { name: Renderer, type: enum(final|classic-look), animatable: false }
+    - { name: Scene unit, type: enum(m|cm|ft), animatable: false }
+    - { name: Ambient colour, type: color, animatable: true }
+    - { name: Background, type: enum(transparent|color|environment), animatable: false }
+  animation: >-
+    Every transform, camera, light and material property is keyframable, expression-linkable and audio-drivable,
+    evaluated at exact flick times so seeking and export match.
+  dependencies: [proj.composition, proj.layer, anim.keyframe.core, 3d.renderer, 3d.camera, 3d.light, 3d.units-scale, 3d.physical-vs-creative]
+  implementation: >-
+    The scene graph lives in the core project model. Each frame the engine updates a persistent three.js scene
+    (WebGPURenderer, TSL node materials) from evaluated properties and renders a scene-linear, premultiplied
+    rgba16float target into the WGSL compositor. 2D layers stacked between 3D layers split render groups, as in AE.
+  io: >-
+    Saved in the project; models referenced by path plus content hash. Depth, normal and ID passes on request (pass.*).
+  limitations: >-
+    A 2D layer between 3D layers breaks intersection across it (AE semantics). Not a modelling, sculpting or CAD package.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Add depth" / "Make it 3D" on the selection, or start from the "Tunnel in a doorway" starter scene.
+    defaults: >-
+      Camera at the audience viewpoint, one key light plus a soft environment, metres as units.
+    automation: >-
+      Creates a camera and lights when the first 3D object appears and switches the composition to 3D rendering.
+    usability_check: >-
+      A first-time user turns a flat logo into a 3D object and orbits around it in under 60 s without opening a dialog.
+  acceptance: >-
+    AS-2 tunnel scene; mini scene "logo-in-space": reopen and seek produce identical frames to the first render.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: 3d.layer-3d
+  name: 3D layer switch (2.5D layers)
+  sources:
+    - ref: S01
+      item: 3D layers
+      category: Work with layers
+      checked: false
+    - ref: brief
+      item: §9 flat layers positioned in 3D
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Turn any footage, solid, precomp, text or shape layer into a card in 3D space with XYZ position, orientation,
+    rotation and scale, so layers at different depths create parallax.
+  projection_example: >-
+    Cut-out forest layers stacked at different depths behind a window region; a slow camera drift makes the window
+    look like it opens onto a deep landscape.
+  controls:
+    - { name: 3D layer, type: bool, animatable: false }
+    - { name: Position, type: point3d, animatable: true }
+    - { name: Orientation, type: vector3, animatable: true }
+    - { name: X/Y/Z Rotation, type: angle, animatable: true }
+    - { name: Scale, type: vector3, animatable: true }
+    - { name: Anchor point, type: point3d, animatable: true }
+  animation: >-
+    All transform channels keyframable with separate dimensions; spatial paths in 3D; auto-orient to camera or path.
+  dependencies: [3d.scene, proj.layer, anim.motion-path, 3d.light-linking]
+  implementation: >-
+    The layer is a textured quad (PlaneGeometry) whose base colour and opacity come from the layer's own rendered
+    rgba16float texture. Vector and text layers re-rasterize at their projected screen size (Skia CanvasKit) so they stay sharp.
+  io: >-
+    none
+  limitations: >-
+    Effects on a 3D layer render in layer space before projection (AE order). Depth effects that read auxiliary
+    channels do not apply correctly to a layer viewed off-axis.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Add depth" on selected layers, then drag the depth handle on the canvas.
+    defaults: >-
+      Layers keep their apparent size when converted (z placed so the audience camera sees the same framing).
+    automation: >-
+      Auto-scales layers pushed back in depth so they keep their framed size unless "true size" is chosen.
+    usability_check: >-
+      A novice spreads four layers in depth and previews parallax in under 2 minutes with no numeric entry.
+  acceptance: >-
+    Mini scene "parallax-window": converted layers keep framing at t=0 and produce parallax under camera motion.
+  status: not-started
+  evidence: []
+
+- id: 3d.renderer
+  name: Physically based 3D renderer (Advanced 3D equivalent)
+  sources:
+    - ref: S10
+      item: Advanced 3D renderer — Render Quality, Shadows (Resolution, Smoothness, Casting Box Size/Center, Fit to Scene)
+      category: Work with 3D composition
+      checked: true
+  artist_can: >-
+    Render models, primitives, extrusions and 3D layers with physically based materials, image-based lighting and
+    shadows, choosing a quality level that trades interactivity for final image quality.
+  projection_example: >-
+    A metallic sculpture model appears to stand in a niche of the facade, reflecting an HDR sky and casting a shadow.
+  controls:
+    - { name: Render quality, type: int, animatable: false }
+    - { name: Shadow resolution, type: enum(half|full|double), animatable: false }
+    - { name: Shadow smoothness, type: int, animatable: false }
+    - { name: Casting box size, type: vector3, animatable: false }
+    - { name: Casting box centre, type: point3d, animatable: false }
+    - { name: Fit casting box to scene, type: action, animatable: false }
+    - { name: Anti-aliasing samples, type: enum(1|4|8|16), animatable: false }
+  animation: >-
+    Renderer settings are not animated; everything they render is.
+  dependencies: [3d.scene, 3d.material-pbr, 3d.light, 3d.shadows, 3d.quality-modes]
+  implementation: >-
+    three.js WebGPURenderer with MeshStandardNodeMaterial/MeshPhysicalNodeMaterial, PCF-soft shadow maps (cascaded for
+    directional lights) in place of AE voxel shadows, PMREM-filtered environment maps. Final quality uses a fixed
+    supersampling jitter pattern and no cross-frame accumulation, so every frame is independently reproducible.
+  io: >-
+    none
+  limitations: >-
+    Appearance will not match Adobe Standard Material exactly. Bit-identical output is only promised on the same GPU,
+    driver and app version; across machines the target is a measured tolerance. Emissive surfaces do not light other objects.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      No action needed; a "Quality" slider (Fast ↔ Best) sits in the viewer toolbar.
+    defaults: >-
+      Fast in the viewer, Best for every export.
+    automation: >-
+      Fits the shadow casting box to the visible scene automatically when objects move outside it.
+    usability_check: >-
+      Users never need to open renderer options to get correct shadows in the three starter 3D scenes.
+  acceptance: >-
+    AS-2; mini scene "pbr-spheres": roughness/metal grid renders consistently between viewer Best and export.
+  status: not-started
+  evidence: []
+
+- id: 3d.renderer-classic
+  name: Classic 3D look and material options
+  sources:
+    - ref: S01
+      item: Classic 3D renderer; Material Options (Ambient, Diffuse, Specular Intensity, Specular Shininess, Metal, Light Transmission)
+      category: Work with 3D composition
+      checked: false
+    - ref: S01
+      item: Modify materials properties of a 3D layer
+      category: Work with materials
+      checked: true
+  artist_can: >-
+    Light flat 2D layers in 3D with the simple Ambient/Diffuse/Specular/Shininess/Metal options and light transmission,
+    for the graphic "lit postcard" look rather than photoreal shading.
+  projection_example: >-
+    Flat paper-cut illustrations on a facade catch a moving spotlight, with light glowing through a translucent banner.
+  controls:
+    - { name: Ambient, type: percent, animatable: true }
+    - { name: Diffuse, type: percent, animatable: true }
+    - { name: Specular intensity, type: percent, animatable: true }
+    - { name: Specular shininess, type: percent, animatable: true }
+    - { name: Metal, type: percent, animatable: true }
+    - { name: Light transmission, type: percent, animatable: true }
+  animation: >-
+    All options keyframable and expression-linkable.
+  dependencies: [3d.renderer, 3d.material-pbr, 3d.light]
+  implementation: >-
+    A "classic look" material preset on the same renderer: AE options map to PBR channels as documented by Adobe
+    (Diffuse→base colour, Shininess→inverse roughness, Metal→metalness); light transmission is a TSL back-lighting node.
+  io: >-
+    none
+  limitations: >-
+    One renderer serves both looks; Classic 3D's exact shading and intersection quirks are not reproduced.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Not needed for projection workflows now: After Effects 3D/DCC parity item. Revisit if a show needs it."
+  milestone: C
+  beginner:
+    action: >-
+      Material picker → "Flat graphic" style.
+    defaults: >-
+      Ambient 100, Diffuse 100, Specular 0 so the 3D layer matches its 2D look.
+    automation: >-
+      Converting a 2D layer to 3D defaults to the flat-graphic style so artwork does not suddenly change colour.
+    usability_check: >-
+      Converting a graphic layer to 3D shows no visible colour change (ΔE < 2) under default lighting.
+  acceptance: >-
+    Mini scene "lit-postcards": a spotlight sweep across flat layers with light transmission renders identically in preview and export.
+  status: not-started
+  evidence: []
+
+- id: 3d.renderer-cinema4d
+  name: Cinema 4D composition renderer
+  sources:
+    - ref: S01
+      item: CINEMA 4D Composition Renderer
+      category: Work with compositions
+      checked: false
+  artist_can: >-
+    Get extruded and bevelled type and shapes, environment reflections and curved footage layers without a separate
+    renderer choice.
+  projection_example: >-
+    Chrome-bevelled show title over the entrance reflecting an environment map.
+  controls:
+    - { name: none (covered by 3d.extrude / 3d.environment-light / 3d.mesh-primitives), type: none, animatable: false }
+  animation: >-
+    See replacement entries.
+  dependencies: [3d.renderer, 3d.extrude, 3d.environment-light, 3d.mesh-primitives]
+  implementation: >-
+    No second renderer. Extrusion and bevel come from 3d.extrude, reflections from 3d.environment-light, curved
+    footage from the curved-panel primitive in 3d.mesh-primitives.
+  io: >-
+    none
+  limitations: >-
+    Superseded by 3d.renderer: the useful outcomes (extrusion, bevel, reflections, curved layers) are covered there and
+    must be demonstrated in the mini scene below before this disposition is final.
+  disposition: superseded
+  superseded_by: 3d.renderer
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Not a user-facing choice; reached through "Make it 3D" and the material picker.
+    defaults: >-
+      n/a
+    automation: >-
+      n/a
+    usability_check: >-
+      A user reproduces a bevelled reflective title and a curved video panel without choosing a renderer.
+  acceptance: >-
+    Mini scene "c4d-outcomes": bevelled reflective title plus curved footage panel.
+  status: not-started
+  evidence: []
+
+- id: 3d.quality-modes
+  name: Draft (real-time) vs final 3D quality
+  sources:
+    - ref: S01
+      item: What is Draft 3D Preview
+      category: 3D viewing and preview
+      checked: true
+    - ref: S10
+      item: Draft 3D; Render Quality
+      category: Work with 3D composition
+      checked: true
+  artist_can: >-
+    Work interactively in a fast draft 3D view and switch to final quality to check the true look before export.
+  projection_example: >-
+    Scrub a heavy collapse scene in draft while blocking timing, then check final shadows and motion blur on one frame.
+  controls:
+    - { name: Viewer 3D quality, type: enum(draft|balanced|final), animatable: false }
+    - { name: Draft skips (shadows/DOF/motion blur), type: flags, animatable: false }
+    - { name: Show final for this frame, type: action, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [3d.renderer, preview.quality, preview.fidelity-disclosure]
+  implementation: >-
+    Same scene graph and evaluation for all modes; draft lowers pixel ratio, shadow-map size and PMREM resolution
+    and skips DOF and motion-blur subframes. Exports always run at final quality.
+  io: >-
+    none
+  limitations: >-
+    Draft differs visibly from export; the difference is always disclosed by preview.fidelity-disclosure.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Viewer toggle "Fast / Best"; badge lists what Fast is skipping.
+    defaults: >-
+      Fast while dragging, Best when idle on a frame.
+    automation: >-
+      Automatically refines the paused frame to final quality in the background.
+    usability_check: >-
+      In a test, 8 of 10 users correctly say whether the viewer shows the export look after reading the badge.
+  acceptance: >-
+    Mini scene "heavy-collapse": draft playback ≥ 24 fps on the target GPU; final frame matches export within tolerance.
+  status: not-started
+  evidence: []
+
+- id: 3d.viewport-aids
+  name: Ground plane, extended viewer and venue ghost
+  sources:
+    - ref: S01
+      item: 3D Ground Plane; Extended Viewer
+      category: 3D viewing and preview
+      checked: true
+    - ref: brief
+      item: §9 / §15 venue geometry distinct from creative geometry
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    See a ground grid, view content beyond the frame edges, and see the measured building as a non-rendering ghost
+    while placing creative objects.
+  projection_example: >-
+    Place a virtual balcony so it lines up with the real cornice shown as a wireframe ghost of the venue model.
+  controls:
+    - { name: Ground plane, type: bool, animatable: false }
+    - { name: Extended viewer, type: bool, animatable: false }
+    - { name: Venue ghost, type: enum(off|wireframe|shaded|photo), animatable: false }
+    - { name: Ghost opacity, type: percent, animatable: false }
+  animation: >-
+    n/a (viewer state, saved per viewer)
+  dependencies: [3d.scene, map.venue, map.model-3d, 3d.physical-vs-creative]
+  implementation: >-
+    Overlay passes drawn after the scene render in the viewer only; the venue ghost reads the locked venue geometry
+    and is excluded from every render path like an AE guide layer.
+  io: >-
+    none
+  limitations: >-
+    Ghost shows the venue as surveyed; it is only as accurate as the venue model.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Show the building" toggle in the 3D viewer.
+    defaults: >-
+      Ground plane and venue ghost on when a venue exists.
+    automation: >-
+      Ghost auto-hides inside the active camera frame when "Show final" is on.
+    usability_check: >-
+      A user aligns a virtual box to a ghosted window within 5 cm in under 2 minutes.
+  acceptance: >-
+    AS-2: tunnel geometry aligned to the doorway using the ghost; ghost never appears in any export.
+  status: not-started
+  evidence: []
+
+- id: 3d.view-navigation
+  name: Orbit, pan and dolly navigation and view layouts
+  sources:
+    - ref: S10
+      item: Camera controls (dolly, orbit, pan)
+      category: Work with 3D composition
+      checked: true
+    - ref: S01
+      item: Work in 3D design space; view layouts; custom views
+      category: Work with 3D composition
+      checked: false
+  artist_can: >-
+    Orbit, pan and dolly around the scene, frame the selection, and use one, two or four viewers with custom and
+    active-camera views.
+  projection_example: >-
+    Orbit behind the facade to check the tunnel walls are closed, then return to the audience camera.
+  controls:
+    - { name: Orbit / Pan / Dolly tools, type: tool, animatable: false }
+    - { name: Frame selection, type: action, animatable: false }
+    - { name: View layout, type: enum(1|2h|2v|4), animatable: false }
+    - { name: View, type: enum(active-camera|custom-1|custom-2|custom-3|ortho), animatable: false }
+    - { name: Navigation moves active camera, type: bool, animatable: false }
+  animation: >-
+    View navigation is not animation; with "moves active camera" enabled, navigation writes camera keyframes.
+  dependencies: [3d.scene, 3d.camera, ux.operation-system]
+  implementation: >-
+    Viewer cameras are editor state saved per viewer (not undoable ops). Only the explicit "move active camera" mode
+    emits camera transform ops, so looking around never silently edits the show.
+  io: >-
+    none
+  limitations: >-
+    Custom views cannot be rendered; render through a camera layer.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Middle-drag to orbit, scroll to dolly; "Back to audience view" button.
+    defaults: >-
+      Single viewer on the audience camera.
+    automation: >-
+      "Frame selection" picks a distance that fits the object.
+    usability_check: >-
+      Users who orbit away return to the audience view within 5 s in 10 of 10 trials.
+  acceptance: >-
+    Mini scene "orbit-check": navigation produces no undo entries and no camera changes unless the mode is on.
+  status: not-started
+  evidence: []
+
+- id: 3d.view-ortho
+  name: Orthographic and perspective views
+  sources:
+    - ref: S01
+      item: 3D views (Front, Left, Top, Back, Right, Bottom, Custom)
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §9 orthographic and perspective views
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Check placement in front/side/top orthographic views and render through an orthographic camera when an undistorted
+    elevation is needed.
+  projection_example: >-
+    Use the front orthographic view (an architectural elevation) to align a frieze exactly with the window rows.
+  controls:
+    - { name: Ortho view, type: enum(front|back|left|right|top|bottom), animatable: false }
+    - { name: Camera projection, type: enum(perspective|orthographic), animatable: false }
+    - { name: Ortho size, type: float, animatable: true }
+  animation: >-
+    Ortho size keyframable on camera layers.
+  dependencies: [3d.view-navigation, 3d.camera]
+  implementation: >-
+    three.js OrthographicCamera for viewer and camera layers; drawing primitives in any view (as AE allows) places them
+    on the view plane.
+  io: >-
+    none
+  limitations: >-
+    Depth of field is disabled in orthographic projection.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      View cube in the viewer corner: click "Front".
+    defaults: >-
+      Front view aligned to the venue's main facade normal.
+    automation: >-
+      Front view auto-aligns to the selected venue surface instead of world Z.
+    usability_check: >-
+      A user switches to front view and back in two clicks without help.
+  acceptance: >-
+    Mini scene "elevation-align": frieze aligned in front view matches region edges within 1 px at output.
+  status: not-started
+  evidence: []
+
+- id: 3d.gizmo
+  name: 3D transform gizmos
+  sources:
+    - ref: S01
+      item: 3D Transform Gizmo; Single 3D gizmo for multiple 3D layers
+      category: Work in 3D design space
+      checked: false
+  artist_can: >-
+    Move, rotate and scale objects directly with on-canvas handles, including one gizmo for several selected objects.
+  projection_example: >-
+    Drag a group of virtual panels outward from the wall along its normal with a single handle.
+  controls:
+    - { name: Gizmo mode, type: enum(move|rotate|scale|universal), animatable: false }
+    - { name: Axis space, type: enum(local|world|view|surface), animatable: false }
+    - { name: Snap increment, type: float, animatable: false }
+  animation: >-
+    Gizmo drags set keyframes when the property already has keyframes (stopwatch on).
+  dependencies: [3d.scene, ux.operation-system, proj.undo-redo, 3d.align-snap]
+  implementation: >-
+    A WebGPU overlay pass in the viewer with ray-picked handles; each drag emits typed transform ops merged into one
+    undo step.
+  io: >-
+    none
+  limitations: >-
+    None beyond the operation model.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select an object; arrows/rings appear. "Surface" axis mode moves along the wall.
+    defaults: >-
+      Universal gizmo, surface axes when a venue surface is under the object.
+    automation: >-
+      Chooses surface-aligned axes automatically for objects placed on venue surfaces.
+    usability_check: >-
+      A novice moves an object 1 m out from the wall in under 20 s.
+  acceptance: >-
+    Mini scene "panel-push": multi-select drag produces one undo step and correct per-object positions.
+  status: not-started
+  evidence: []
+
+- id: 3d.pivot
+  name: Object pivots
+  sources:
+    - ref: S01
+      item: Anchor point in 3D; Pan Behind (Anchor Point) tool
+      category: Work with layers
+      checked: false
+    - ref: brief
+      item: §9 object pivots
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Move the point an object rotates and scales around without moving the object, snap it to bounds, edges or vertices.
+  projection_example: >-
+    Put a virtual door's pivot on its real hinge edge so it swings open like the building's door.
+  controls:
+    - { name: Pivot (anchor point), type: point3d, animatable: true }
+    - { name: Pivot preset, type: enum(center|bottom-center|bounds-corner|origin), animatable: false }
+    - { name: Snap pivot to vertex/edge, type: bool, animatable: false }
+  animation: >-
+    Pivot keyframable like the AE anchor point.
+  dependencies: [3d.gizmo, 3d.align-snap, anim.keyframe.core]
+  implementation: >-
+    Pivot edits emit a compensating pair of ops (anchor + position) so the object stays put; vertex/edge snapping uses
+    three-mesh-bvh raycasts.
+  io: >-
+    Imported model pivots come from the source file's node origin.
+  limitations: >-
+    Compensation is exact at the current time only when position is animated; the app warns before changing an animated pivot.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Right-click → "Rotate around…" → click an edge.
+    defaults: >-
+      Bottom-centre for primitives and models so they sit on surfaces.
+    automation: >-
+      Suggests the nearest venue edge as a hinge when a panel touches one.
+    usability_check: >-
+      A user sets a door hinge pivot and swings it in under 45 s.
+  acceptance: >-
+    AS-3 panels swing about region edges; pivot changes do not shift objects visually.
+  status: not-started
+  evidence: []
+
+- id: 3d.align-snap
+  name: 3D alignment and snapping
+  sources:
+    - ref: brief
+      item: §9 alignment; §0.3 snapping and alignment guides
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Snap objects to vertices, edges, faces, the grid or the ground; drop them onto surfaces; align and distribute
+    several objects.
+  projection_example: >-
+    Distribute twelve virtual lanterns evenly along a real ledge and snap each to the ledge face.
+  controls:
+    - { name: Snap targets, type: flags(vertex|edge|face|grid|ground|venue), animatable: false }
+    - { name: Drop to surface, type: action, animatable: false }
+    - { name: Align, type: enum(min|center|max), animatable: false }
+    - { name: Distribute, type: enum(spacing|centers), animatable: false }
+  animation: >-
+    Alignment edits keyframes at the current time when properties are animated.
+  dependencies: [3d.gizmo, 3d.physical-vs-creative, map.model-3d]
+  implementation: >-
+    three-mesh-bvh (MIT) acceleration on creative meshes and the read-only venue mesh; snapping never edits venue geometry.
+  io: >-
+    none
+  limitations: >-
+    Snapping precision is bounded by the venue model's accuracy.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Place on wall" and "Line up" buttons in the context toolbar.
+    defaults: >-
+      Venue faces and edges are snap targets when a venue exists.
+    automation: >-
+      Dropped objects orient to the face normal automatically.
+    usability_check: >-
+      A user lines up 6 objects evenly on a ledge in under 60 s.
+  acceptance: >-
+    Mini scene "lanterns-on-ledge": all objects within 1 mm of the face after drop-to-surface.
+  status: not-started
+  evidence: []
+
+- id: 3d.units-scale
+  name: Units and real-world scale
+  sources:
+    - ref: S01
+      item: Model Settings — Object Scale, Model Units, Make Comp Size
+      category: Import and add 3D models
+      checked: true
+    - ref: brief
+      item: §9 units and scale
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Work in real units (metres, centimetres or feet) that match the measured venue, and read sizes and distances in those units.
+  projection_example: >-
+    A 3 m doorway in the survey is 3 m in the creative scene, so a 1.8 m virtual figure walking through looks human-sized.
+  controls:
+    - { name: Display units, type: enum(m|cm|mm|ft|in), animatable: false }
+    - { name: Pixels per metre (2.5D layers), type: float, animatable: false }
+    - { name: Measure tool, type: tool, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [3d.scene, map.venue]
+  implementation: >-
+    The internal scene unit is the metre. 2D layers placed in 3D use a per-composition pixels-per-metre factor; models
+    are converted from their declared units (glTF metres, FBX UnitScaleFactor, OBJ asked on import).
+  io: >-
+    Model import converts units; exported 3D data (pass.depth) is in metres.
+  limitations: >-
+    AE projects use pixels as 3D units; values carried from AE habits need the pixels-per-metre factor.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Sizes show in metres in the inspector; a ruler tool measures on the canvas.
+    defaults: >-
+      Metres; pixels-per-metre derived from the venue region when present.
+    automation: >-
+      Detects implausible model scale (e.g. a 300 m chair) and offers "Fit to real size".
+    usability_check: >-
+      A user imports a mis-scaled model and corrects it with one click when prompted.
+  acceptance: >-
+    Mini scene "scale-check": a 1 m cube measures 1 m against the venue survey in the viewer.
+  status: not-started
+  evidence: []
+
+- id: 3d.hierarchy
+  name: 3D hierarchy, nulls and model node access
+  sources:
+    - ref: S01
+      item: Parenting and null objects in 3D; FAQ — "Can I access the rigging of 3D models?"
+      category: Work with layers / Import and add 3D models
+      checked: false
+    - ref: brief
+      item: §9 consistent transforms and hierarchy
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Parent objects to 3D nulls and to each other, and move, hide or re-material individual parts of an imported model.
+  projection_example: >-
+    Animate each window shutter of an imported facade-ornament model separately to flap open in sequence.
+  controls:
+    - { name: Parent, type: layer-ref, animatable: false }
+    - { name: Model node transform override, type: transform3d, animatable: true }
+    - { name: Model node visible, type: bool, animatable: true }
+  animation: >-
+    Node overrides keyframable and drivable by rigs (expr.rigs) and tool.sequence-light-up timing.
+  dependencies: [3d.scene, 3d.model-import, expr.rigs, tool.sequence-light-up]
+  implementation: >-
+    glTF/FBX nodes map to stable node paths; overrides are stored by path so re-importing an updated model keeps them,
+    with a report of paths that no longer exist.
+  io: >-
+    Overrides survive model reimport where node paths match.
+  limitations: >-
+    No skeleton editing or re-rigging; skinned bones can be overridden but IK is out of scope (use the DCC path).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Click a part of a model to select just that part; "Animate parts in sequence".
+    defaults: >-
+      Model selected as a whole first, parts on double-click.
+    automation: >-
+      Groups identical parts (e.g. all shutters) for one-step sequencing.
+    usability_check: >-
+      A user selects one part of a model and changes its colour in under 30 s.
+  acceptance: >-
+    Mini scene "shutters": per-node overrides survive save, reopen and model reimport.
+  status: not-started
+  evidence: []
+
+- id: 3d.camera
+  name: Camera layers
+  sources:
+    - ref: S01
+      item: Cameras, camera settings, Adjust Default Camera Settings
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §9 camera control; §15 projector vs content vs audience camera
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Add one-node or two-node cameras with focal length, angle of view, film size and clipping, and animate them.
+  projection_example: >-
+    A slow dolly into the tunnel from the audience viewpoint makes the illusion feel deeper as the music builds.
+  controls:
+    - { name: Type, type: enum(one-node|two-node), animatable: false }
+    - { name: Focal length / Zoom, type: float, animatable: true }
+    - { name: Angle of view, type: angle, animatable: true }
+    - { name: Film size, type: float, animatable: false }
+    - { name: Lens preset, type: enum(15mm|20mm|24mm|28mm|35mm|50mm|80mm|135mm|200mm), animatable: false }
+    - { name: Near/far clip, type: float, animatable: true }
+  animation: >-
+    All camera properties keyframable, expression-linkable and trackable (track.camera-solve output).
+  dependencies: [3d.scene, anim.keyframe.core, 3d.units-scale]
+  implementation: >-
+    three.js PerspectiveCamera driven by evaluated properties; zoom/film-size conversions follow AE's model so imported
+    camera data maps directly. Projector cameras are separate objects owned by map.projector.
+  io: >-
+    Camera data exportable as JSON/.chan for external tools; import from glTF and track.camera-solve.
+  limitations: >-
+    A creative camera is not the projector; editing it never alters calibration.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Camera move" recipe: choose Push in / Drift / Orbit, set amount and duration.
+    defaults: >-
+      Camera at the saved audience viewpoint, 35 mm equivalent.
+    automation: >-
+      Creates the audience camera from the venue's audience position automatically.
+    usability_check: >-
+      A novice adds a 5 s push-in that keeps the tunnel framed in under 60 s.
+  acceptance: >-
+    AS-2 camera move; camera values identical after save/reopen and at random-access seek.
+  status: not-started
+  evidence: []
+
+- id: 3d.camera-path
+  name: Camera paths and point of interest
+  sources:
+    - ref: S01
+      item: Point of Interest; Auto-Orient; motion paths in 3D
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §9 camera paths
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Move a camera along a drawn 3D path at constant or eased speed while it looks at a point of interest or along the path.
+  projection_example: >-
+    A fly-through that travels down the tunnel at constant speed, always looking at the far light.
+  controls:
+    - { name: Point of interest, type: point3d, animatable: true }
+    - { name: Orient, type: enum(off|toward-poi|along-path), animatable: false }
+    - { name: Path source, type: layer-ref, animatable: false }
+    - { name: Constant speed, type: bool, animatable: false }
+    - { name: Bank/roll, type: angle, animatable: true }
+  animation: >-
+    Path progress keyframable with ease curves; roving keyframes for constant speed.
+  dependencies: [3d.camera, anim.motion-path, anim.graph-editor, shape.path]
+  implementation: >-
+    Spatial Bezier evaluation in core with arc-length reparameterisation; look-at quaternions computed per frame;
+    orbit/fly-through rigs generated by the recipe engine as editable nulls and keyframes.
+  io: >-
+    none
+  limitations: >-
+    Look-at flips near vertical; bank control resolves it manually.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Fly along a path": draw the path in the viewer, pick a speed.
+    defaults: >-
+      Look along the path; ease in/out of 0.5 s.
+    automation: >-
+      Smooths hand-drawn paths and sets constant speed.
+    usability_check: >-
+      A user creates a fly-through in under 2 minutes without touching the graph editor.
+  acceptance: >-
+    Mini scene "tunnel-flythrough": measured speed variation under 1% with constant speed on.
+  status: not-started
+  evidence: []
+
+- id: 3d.camera-multi
+  name: Multiple cameras and camera switching
+  sources:
+    - ref: S01
+      item: Active camera (topmost camera layer) and multiple cameras
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §9 multiple cameras; §15 projector, content and audience cameras
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Keep several cameras in a scene and cut or switch between them over time; see clearly which camera is creative,
+    which is the audience preview and which belong to projectors.
+  projection_example: >-
+    Cut from a wide audience view to a close camera for an inset scene shown inside one window.
+  controls:
+    - { name: Active camera at time, type: derived, animatable: false }
+    - { name: Camera role, type: enum(creative|audience-preview), animatable: false }
+    - { name: Camera switcher track, type: layer-ref, animatable: true }
+  animation: >-
+    Switching via layer trims (AE rule) or a camera-switch track with hold keyframes.
+  dependencies: [3d.camera, map.projector, proj.layer]
+  implementation: >-
+    Active camera resolved per frame as the topmost enabled camera (AE semantics) unless a switch track exists.
+    Projector cameras are referenced read-only from map.projector and cannot become creative cameras.
+  io: >-
+    none
+  limitations: >-
+    Perspective-dependent illusions are only correct from the chosen audience viewpoint; other cameras reveal that.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Camera list in the viewer with "Look through" and "Cut to this camera here".
+    defaults: >-
+      One audience camera; extra cameras labelled by role.
+    automation: >-
+      Warns when the active creative camera differs from the audience viewpoint used for an illusion.
+    usability_check: >-
+      A user adds a second camera and cuts to it at a marker in under 60 s.
+  acceptance: >-
+    Mini scene "two-cam-cut": cut lands on the exact frame; projector output unaffected.
+  status: not-started
+  evidence: []
+
+- id: 3d.depth-of-field
+  name: Camera depth of field
+  sources:
+    - ref: S01
+      item: Camera Options — Depth of Field, Focus Distance, Aperture, Blur Level, Iris shape/rotation/roundness, Highlight gain/threshold/saturation
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §9 depth of field
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Focus the camera at a distance or on a layer so nearer and farther objects blur with a controllable bokeh.
+  projection_example: >-
+    Rack focus from the front of the tunnel to a figure at its end as the music changes.
+  controls:
+    - { name: Depth of field, type: bool, animatable: false }
+    - { name: Focus distance, type: float, animatable: true }
+    - { name: Link focus to layer, type: layer-ref, animatable: false }
+    - { name: Aperture / f-stop, type: float, animatable: true }
+    - { name: Blur level, type: percent, animatable: true }
+    - { name: Iris shape, type: enum(fast-rect|triangle|square|pentagon|hexagon|heptagon|octagon|nonagon|decagon), animatable: false }
+    - { name: Iris rotation / roundness, type: float, animatable: true }
+    - { name: Highlight gain / threshold / saturation, type: float, animatable: true }
+  animation: >-
+    Focus and aperture keyframable; focus can follow a layer by expression.
+  dependencies: [3d.camera, pass.depth, fx.blur-sharpen.camera-lens-blur, fx.3d-channel.depth-of-field]
+  implementation: >-
+    Thin-lens circle of confusion from the linear depth pass, then a WGSL gather bokeh pass with separate near/far
+    layers to limit edge bleeding; shared code with the depth-of-field effects.
+  io: >-
+    none
+  limitations: >-
+    Post-process DOF cannot reveal occluded background. The real projector has its own optical focus; this is an artistic look.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Not needed for projection workflows now: After Effects 3D/DCC parity item. Revisit if a show needs it."
+  milestone: D
+  beginner:
+    action: >-
+      "Focus on…" then click an object; "Blur strength" slider.
+    defaults: >-
+      Off; when enabled, focus on the clicked object with moderate blur.
+    automation: >-
+      Keeps focus on a moving object by linking focus distance automatically.
+    usability_check: >-
+      A user creates a rack focus between two objects in under 90 s.
+  acceptance: >-
+    Mini scene "rack-focus": bokeh matches between viewer Best and export; no halo beyond tolerance at depth edges.
+  status: not-started
+  evidence: []
+
+- id: 3d.motion-blur
+  name: 3D motion blur
+  sources:
+    - ref: S01
+      item: Motion blur — Shutter Angle, Shutter Phase, Samples Per Frame, Adaptive Sample Limit
+      category: Composition settings / Advanced
+      checked: false
+    - ref: brief
+      item: §9 motion blur
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Add realistic motion blur to moving 3D objects and cameras with shutter angle and phase control.
+  projection_example: >-
+    Falling bricks in a collapse streak naturally instead of strobing on the facade.
+  controls:
+    - { name: Motion blur (layer/comp switches), type: bool, animatable: false }
+    - { name: Shutter angle, type: angle, animatable: false }
+    - { name: Shutter phase, type: angle, animatable: false }
+    - { name: Samples per frame, type: int, animatable: false }
+    - { name: Adaptive sample limit, type: int, animatable: false }
+  animation: >-
+    n/a (render setting per layer/composition)
+  dependencies: [3d.renderer, 3d.quality-modes, render.settings]
+  implementation: >-
+    Final quality renders N subframes at exact flick offsets inside the shutter interval and averages them in linear
+    light (deterministic). Draft uses a velocity-buffer blur node and is flagged as approximate.
+  io: >-
+    none
+  limitations: >-
+    Cost scales with samples; very fast rotation may need more samples than the adaptive limit.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Not needed for projection workflows now: After Effects 3D/DCC parity item. Revisit if a show needs it."
+  milestone: D
+  beginner:
+    action: >-
+      "Smooth fast motion" toggle on the object or scene.
+    defaults: >-
+      180° shutter, -90° phase, 16 samples.
+    automation: >-
+      Turns on automatically for recipes with fast motion (collapse, fly-through).
+    usability_check: >-
+      Users can tell blur is on from the viewer badge and the export matches it in a side-by-side check.
+  acceptance: >-
+    AS-3 fragments; per-frame hash identical across two exports.
+  status: not-started
+  evidence: []
+
+- id: 3d.light
+  name: 3D lights
+  sources:
+    - ref: S01
+      item: Light layers — Parallel, Spot, Point, Ambient, Environment; Intensity, Color, Falloff (None, Smooth, Inverse Square Clamped), Radius, Cone Angle/Feather
+      category: Work with 3D composition
+      checked: false
+    - ref: S01
+      item: Modify materials properties — Inverse Square Clamped falloff tip
+      category: Work with materials
+      checked: true
+  artist_can: >-
+    Add parallel, spot, point, ambient and environment lights with colour, intensity, falloff and cone controls.
+  projection_example: >-
+    A virtual torch beam sweeps across carved stone shapes so they seem to cast real relief shadows.
+  controls:
+    - { name: Light type, type: enum(parallel|spot|point|ambient|environment), animatable: false }
+    - { name: Intensity, type: percent, animatable: true }
+    - { name: Colour, type: color, animatable: true }
+    - { name: Falloff, type: enum(none|smooth|inverse-square-clamped), animatable: false }
+    - { name: Radius / falloff distance, type: float, animatable: true }
+    - { name: Cone angle / feather, type: angle, animatable: true }
+    - { name: Casts shadows, type: bool, animatable: false }
+  animation: >-
+    All values keyframable, expression-linkable and audio-drivable (lights pulsing with the bass).
+  dependencies: [3d.scene, 3d.renderer, 3d.shadows, 3d.environment-light]
+  implementation: >-
+    three.js DirectionalLight, SpotLight, PointLight (decay 2 for inverse square) and AmbientLight with a documented
+    AE-percent to physical-intensity mapping; Environment delegates to 3d.environment-light.
+  io: >-
+    Lights import from glTF KHR_lights_punctual (3d.model-lights-cameras).
+  limitations: >-
+    Virtual light only brightens the projected image; it cannot exceed the projector's brightness on the real surface.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Light it" recipe: Soft / Dramatic / Sweep; drag the light handle on the canvas.
+    defaults: >-
+      Key light from the upper left of the audience view plus ambient fill.
+    automation: >-
+      Proposes lighting from the venue's orientation and the audience viewpoint.
+    usability_check: >-
+      A novice adds a sweeping spotlight across a model in under 90 s.
+  acceptance: >-
+    AS-2 tunnel lighting; light intensity identical in preview and export.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: 3d.light-linking
+  name: Light and shadow participation (Accepts Lights, Casts/Accepts Shadows)
+  sources:
+    - ref: S01
+      item: Accepts Lights; Cast Shadows; Receive/Accepts Shadows (Only = shadow catcher)
+      category: Create realistic reflections and ambient lighting / Shadow catchers
+      checked: true
+    - ref: S01
+      item: Light Transmission (Material Options)
+      category: Work with 3D composition
+      checked: false
+  artist_can: >-
+    Choose per object whether it is lit, casts shadows or receives shadows, and limit lights to chosen objects.
+  projection_example: >-
+    Keep a glowing neon sign unlit by the scene lights so it stays fully bright while a spotlight sweeps the wall.
+  controls:
+    - { name: Accepts lights, type: bool, animatable: false }
+    - { name: Casts shadows, type: enum(on|off|only), animatable: false }
+    - { name: Accepts shadows, type: enum(on|off|only), animatable: false }
+    - { name: Light include list, type: layer-refs, animatable: false }
+  animation: >-
+    n/a
+  dependencies: [3d.light, 3d.shadows]
+  implementation: >-
+    TSL per-material lights node (material.lightsNode) for include lists; unlit objects use MeshBasicNodeMaterial with
+    base and emission only; shadow flags map to castShadow/receiveShadow and the shadow-catcher material.
+  io: >-
+    none
+  limitations: >-
+    Environment reflections cannot be linked per light; only on/off per object.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Inspector toggles "Lit by scene" and "Casts shadow".
+    defaults: >-
+      Everything lit and casting; emissive-only materials default to unlit.
+    automation: >-
+      Turns off "Lit by scene" automatically for objects using a "glow/neon" material.
+    usability_check: >-
+      A user makes one object ignore a light in under 30 s.
+  acceptance: >-
+    Mini scene "neon-under-spot": neon brightness unchanged as the spotlight passes.
+  status: not-started
+  evidence: []
+
+- id: 3d.shadows
+  name: Shadows
+  sources:
+    - ref: S01
+      item: Cast and accept shadows; Enable lights to cast shadows; Shadow Darkness, Shadow Diffusion
+      category: Cast and accept shadows
+      checked: false
+    - ref: S10
+      item: Shadows — Resolution, Smoothness, Casting Box
+      category: Advanced 3D renderer
+      checked: true
+  artist_can: >-
+    Make lights cast soft or hard shadows of controllable darkness from objects onto other objects.
+  projection_example: >-
+    Virtual pillars cast long shadows across a projected floor pattern as a sun light sets.
+  controls:
+    - { name: Shadow darkness, type: percent, animatable: true }
+    - { name: Shadow diffusion / softness, type: float, animatable: true }
+    - { name: Shadow resolution, type: enum(half|full|double), animatable: false }
+    - { name: Casting box, type: box3, animatable: false }
+  animation: >-
+    Darkness and softness keyframable.
+  dependencies: [3d.light, 3d.renderer, 3d.light-linking]
+  implementation: >-
+    three.js shadow maps per light (cascaded shadow maps for directional, cube maps for point) with PCF-soft filtering;
+    resolution tiers map to map sizes 1024/2048/4096; fixed sampling patterns for reproducibility.
+  io: >-
+    Shadow-only pass available via pass.render-passes.
+  limitations: >-
+    Very soft area-light shadows are approximated; contact shadows are not ray traced.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Shadows" toggle on a light, with a Soft ↔ Sharp slider.
+    defaults: >-
+      Key light casts medium-soft shadows; casting box fits the scene.
+    automation: >-
+      Refits shadow bounds when objects move far.
+    usability_check: >-
+      A user turns on shadows and softens them in under 20 s.
+  acceptance: >-
+    AS-2 tunnel shadows; no shadow acne at default settings in starter scenes.
+  status: not-started
+  evidence: []
+
+- id: 3d.shadow-catcher
+  name: Shadow catcher
+  sources:
+    - ref: S01
+      item: Shadow catchers — Accepts Shadows set to Only, Shadow Color
+      category: Cast and accept shadows
+      checked: true
+  artist_can: >-
+    Make an invisible surface that only shows the shadows falling on it, so virtual objects cast shadows onto other
+    footage or onto the real building.
+  projection_example: >-
+    A giant virtual ball rolls along a real ledge and its shadow falls on the real wall below.
+  controls:
+    - { name: Shadow-only surface, type: bool, animatable: false }
+    - { name: Shadow colour, type: color, animatable: true }
+    - { name: Catcher source, type: enum(plane|venue-surface), animatable: false }
+  animation: >-
+    Shadow colour and opacity keyframable; follows embedded model animation.
+  dependencies: [3d.shadows, 3d.light-linking, 3d.physical-vs-creative, map.model-3d]
+  implementation: >-
+    ShadowNodeMaterial (shadow-only, transparent) on a plane or on a read-only proxy instance of the venue mesh, so the
+    shadow lands exactly on the surveyed geometry.
+  io: >-
+    none
+  limitations: >-
+    A projected shadow can only be darker than surrounding projected light; it cannot darken the wall below its
+    ambient-lit appearance with the projector off.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Cast shadows on the building" toggle on a 3D object.
+    defaults: >-
+      Uses venue surfaces under the object as catchers; black shadow at 60%.
+    automation: >-
+      Creates the catcher from the venue geometry automatically; no manual plane alignment.
+    usability_check: >-
+      A user makes a model cast a shadow on the facade in two actions.
+  acceptance: >-
+    AS-2/AS-3 shadows land on venue surfaces within the calibration tolerance.
+  status: not-started
+  evidence: []
+
+- id: 3d.environment-light
+  name: Environment lights (image-based lighting)
+  sources:
+    - ref: S01
+      item: Image-Based Lighting — Environment light Source (.hdr/.exr, footage or composition), Cast Shadows, Create Environment Light Background Layer
+      category: Create realistic reflections and ambient lighting
+      checked: true
+    - ref: S01
+      item: Animated Environment Lights
+      category: Create realistic reflections and ambient lighting
+      checked: false
+  artist_can: >-
+    Light and reflect a scene from an HDR image, video or animated composition surrounding it, optionally showing it as background.
+  projection_example: >-
+    Chrome letters over the entrance reflect a slowly rotating sunset HDR that matches the show's colour story.
+  controls:
+    - { name: Source, type: layer-ref, animatable: false }
+    - { name: Intensity, type: percent, animatable: true }
+    - { name: Rotation, type: vector3, animatable: true }
+    - { name: Casts shadows, type: bool, animatable: false }
+    - { name: Show as background, type: bool, animatable: false }
+  animation: >-
+    Intensity and rotation keyframable; animated sources update per frame.
+  dependencies: [3d.light, 3d.renderer]
+  implementation: >-
+    EXRLoader/HDRLoader equirect → PMREMGenerator on the GPU; animated sources regenerate PMREM per frame at reduced
+    resolution, cached by source-frame hash. Environment shadows use a derived directional light from the brightest
+    region (approximation of AE voxel shadows), disclosed in the inspector.
+  io: >-
+    Reads .hdr, .exr, footage and precomps as sources.
+  limitations: >-
+    Animated environments cost a PMREM rebuild per frame; LDR sources give flat lighting.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Lighting mood" picker with HDR thumbnails (Studio, Sunset, Night city).
+    defaults: >-
+      Neutral studio HDR when 3D objects exist and no lights are added.
+    automation: >-
+      Converts 8-bit images to float on assignment and warns that they will light flatly.
+    usability_check: >-
+      A user changes a scene's lighting mood in one click and sees reflections update.
+  acceptance: >-
+    Mini scene "chrome-title": reflections match between preview Best and export.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-pbr
+  name: PBR materials
+  sources:
+    - ref: S01
+      item: Parametric mesh material — Base Color, Roughness, Metallic, Emission Color, Emission Intensity, Ambient Response
+      category: Create parametric meshes
+      checked: true
+    - ref: S01
+      item: Modify materials properties of a 3D layer
+      category: Work with materials
+      checked: true
+    - ref: S10
+      item: Physically-based rendering; Adobe Standard Material
+      category: Advanced 3D renderer
+      checked: true
+  artist_can: >-
+    Give 3D objects physically based materials with base colour, roughness, metallic, specular level and ambient response,
+    each settable by value or texture.
+  projection_example: >-
+    Turn a virtual copy of the facade from stone to polished copper by animating metallic and roughness.
+  controls:
+    - { name: Base colour (+ map), type: color, animatable: true }
+    - { name: Roughness (+ map), type: percent, animatable: true }
+    - { name: Metallic (+ map), type: percent, animatable: true }
+    - { name: Specular level, type: percent, animatable: true }
+    - { name: Ambient response, type: percent, animatable: true }
+    - { name: Ambient occlusion map, type: texture, animatable: false }
+  animation: >-
+    All channel values keyframable, expression-linkable and audio-drivable; texture transforms animatable.
+  dependencies: [3d.renderer, 3d.material-texture-source]
+  implementation: >-
+    Materials are project assets compiled to MeshStandardNodeMaterial/MeshPhysicalNodeMaterial TSL graphs; channel
+    uniforms update per frame without recompiling; texture channels sampled with KHR_texture_transform-style UV transforms.
+  io: >-
+    Imported glTF metallic-roughness materials map 1:1; OBJ/FBX materials are approximated.
+  limitations: >-
+    Material appearance on a real wall depends on the wall's colour and ambient light (see color.simulate-output).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Material picker with swatches (Stone, Metal, Glass, Glow) and a "Shiny ↔ Matte" slider.
+    defaults: >-
+      Neutral off-white, roughness 60%, non-metal.
+    automation: >-
+      Material previews render on the selected object in the viewer before applying.
+    usability_check: >-
+      A user makes an object look like brushed metal in under 30 s without numeric input.
+  acceptance: >-
+    Mini scene "pbr-spheres"; AS-3 material change.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: 3d.material-emissive
+  name: Emissive materials
+  sources:
+    - ref: S01
+      item: Emission Color; Emission Intensity (does not cast light onto other objects)
+      category: Create parametric meshes
+      checked: true
+  artist_can: >-
+    Make surfaces glow with a colour or emission map at a chosen intensity, independent of scene lights.
+  projection_example: >-
+    Window frames of a virtual building copy glow neon blue on beat while the rest stays dark.
+  controls:
+    - { name: Emission colour (+ map), type: color, animatable: true }
+    - { name: Emission intensity, type: float, animatable: true }
+    - { name: Light nearby objects (approx.), type: bool, animatable: false }
+  animation: >-
+    Intensity is the most commonly audio-driven property; fully keyframable.
+  dependencies: [3d.material-pbr, audio.drive]
+  implementation: >-
+    TSL emissive node in scene-linear HDR (values above 1.0 survive into bloom effects). Optional approximate
+    illumination places RectAreaLights (LTC) matching large emitters.
+  io: >-
+    glTF KHR_materials_emissive_strength honoured.
+  limitations: >-
+    Emission does not light other objects unless the approximation is enabled (same as AE Advanced 3D).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Glow" material swatch; "Brightness" slider.
+    defaults: >-
+      Emission colour = base colour, intensity 2.
+    automation: >-
+      Adds a glow effect suggestion after making something emissive.
+    usability_check: >-
+      A user makes window frames glow and pulse to music in three actions.
+  acceptance: >-
+    AS-1/AS-3 neon accents; HDR emission survives to export without clipping before the output transform.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-normal
+  name: Normal, bump and displacement maps
+  sources:
+    - ref: brief
+      item: §9 normal and texture controls
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Add surface relief with normal or bump maps and true geometric displacement from a height map.
+  projection_example: >-
+    A flat virtual wall gains deep brick relief that catches a moving light, exaggerating the real masonry.
+  controls:
+    - { name: Normal map, type: texture, animatable: false }
+    - { name: Normal strength, type: float, animatable: true }
+    - { name: Bump map / height, type: texture, animatable: false }
+    - { name: Displacement amount, type: float, animatable: true }
+    - { name: Subdivision for displacement, type: int, animatable: false }
+  animation: >-
+    Strength and displacement keyframable; height source may be an animated comp (breathing walls).
+  dependencies: [3d.material-pbr, 3d.material-texture-source]
+  implementation: >-
+    TSL normalMap(), bumpMap() and vertex displacement via positionNode on subdivided geometry.
+  io: >-
+    glTF normal maps (tangent-space) map directly.
+  limitations: >-
+    Displacement requires dense meshes; normal maps only change shading, not silhouettes.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Surface relief" slider in the material picker.
+    defaults: >-
+      Relief from the material preset's map.
+    automation: >-
+      Generates a normal map from a height/greyscale image automatically.
+    usability_check: >-
+      A user adds visible relief to a surface in under 30 s.
+  acceptance: >-
+    Mini scene "relief-sweep": light sweep over normal-mapped wall matches in preview and export.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-transparency
+  name: Opacity, transmission and glass
+  sources:
+    - ref: S01
+      item: Use layers as material sources — Opacity material stream
+      category: Work with materials
+      checked: true
+    - ref: brief
+      item: §9 transparency
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Make surfaces transparent, cut-out or glass-like with index of refraction and thickness.
+  projection_example: >-
+    A wall section turns to glass, revealing virtual machinery behind it.
+  controls:
+    - { name: Opacity (+ map), type: percent, animatable: true }
+    - { name: Alpha mode, type: enum(blend|mask|opaque), animatable: false }
+    - { name: Transmission, type: percent, animatable: true }
+    - { name: IOR, type: float, animatable: true }
+    - { name: Thickness, type: float, animatable: true }
+    - { name: Double-sided, type: bool, animatable: false }
+  animation: >-
+    Opacity and transmission keyframable (material dissolves).
+  dependencies: [3d.material-pbr, 3d.renderer]
+  implementation: >-
+    MeshPhysicalNodeMaterial transmission/IOR/thickness (screen-space transmission); alpha blending with sorted
+    transparent objects; alpha-mask via alphaTest.
+  io: >-
+    glTF KHR_materials_transmission/volume/ior honoured.
+  limitations: >-
+    No order-independent transparency; intersecting transparent objects can sort wrongly. Transmission is screen-space.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Glass" swatch; "See-through" slider.
+    defaults: >-
+      Transmission 100%, IOR 1.5, roughness 5%.
+    automation: >-
+      Enables double-sided and sorting hints automatically for glass presets.
+    usability_check: >-
+      A user turns a box into glass in one click.
+  acceptance: >-
+    Mini scene "glass-wall": transmission stable across seeks; no sort flicker in the starter scene.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-texture-source
+  name: Video and compositions as material textures
+  sources:
+    - ref: S01
+      item: Use layers as material sources — precomp, solid, image or video; Offset, Rotation, Scale
+      category: Work with materials
+      checked: true
+    - ref: brief
+      item: §9 images, videos and animated compositions as material sources
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Use any image, video or animated composition as a live texture on a 3D object, positioned with offset, rotation and scale.
+  projection_example: >-
+    The tunnel walls play a looping animated graffiti composition that updates live as it is edited.
+  controls:
+    - { name: Source, type: layer-ref, animatable: false }
+    - { name: Channel, type: enum(base|emission|roughness|metallic|opacity|normal|height), animatable: false }
+    - { name: Offset / Rotation / Scale, type: transform2d, animatable: true }
+    - { name: Wrap, type: enum(repeat|clamp|mirror), animatable: false }
+    - { name: Source time offset / loop, type: time, animatable: true }
+  animation: >-
+    UV transform keyframable; source time is remappable (anim.time-remap).
+  dependencies: [3d.material-pbr, proj.precompose, anim.time-remap]
+  implementation: >-
+    The render graph renders the source comp to an rgba16float texture first (sized to its on-screen footprint, capped
+    by budget) and binds it to a TSL texture node; mipmaps generated per frame for minification.
+  io: >-
+    none
+  limitations: >-
+    Very large sources are resampled to fit VRAM budgets; the inspector shows the effective texture resolution.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Drag a clip or composition onto a 3D object.
+    defaults: >-
+      Fit to the object's UVs; loop the source.
+    automation: >-
+      Picks texture resolution from on-screen size automatically.
+    usability_check: >-
+      A user puts a video on a 3D wall by drag-and-drop in under 15 s.
+  acceptance: >-
+    AS-2 tunnel walls textured with an animated comp; frame-exact source time in export.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-assign
+  name: Material assignment, extraction and replacement on models
+  sources:
+    - ref: S01
+      item: Model Settings — Extract all materials; Material Assignment
+      category: Import and add 3D models / Work with materials
+      checked: true
+  artist_can: >-
+    Pull a model's materials out as editable project materials and assign or swap materials per part.
+  projection_example: >-
+    Swap the stone material on every column of a facade model to animated marble in one step.
+  controls:
+    - { name: Extract materials, type: action, animatable: false }
+    - { name: Material slot per part, type: material-ref, animatable: false }
+    - { name: Replace everywhere, type: action, animatable: false }
+  animation: >-
+    Material switches can be timed by hold keyframes or crossfades.
+  dependencies: [3d.material-pbr, 3d.model-import, 3d.hierarchy]
+  implementation: >-
+    Imported materials become project material assets keyed by model node path and slot; assignments stored as overrides.
+  io: >-
+    Extracted textures copied into the project asset store for collect/relink.
+  limitations: >-
+    OBJ/FBX material approximations may need manual touch-up after extraction.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drag a material swatch onto any part; "Apply to all similar parts".
+    defaults: >-
+      Embedded materials kept.
+    automation: >-
+      Groups parts sharing a source material for one-step replacement.
+    usability_check: >-
+      A user re-materials all columns of a model in under 30 s.
+  acceptance: >-
+    Mini scene "marble-columns": assignment survives reopen and model reimport.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-library
+  name: Procedural material library
+  sources:
+    - ref: S01
+      item: Apply Substance 3D materials (material library outcome)
+      category: Work with materials
+      checked: false
+    - ref: brief
+      item: §0.5 visual library of editable outcomes; §1 brick to water/metal/glass
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Pick editable procedural materials (brick, concrete, metal, glass, water, marble, wood, neon, lava) whose patterns
+    and colours can be adjusted and animated.
+  projection_example: >-
+    Brick transforms into flowing water by crossfading two procedural materials over the wall copy.
+  controls:
+    - { name: Preset, type: enum(library), animatable: false }
+    - { name: Scale, type: float, animatable: true }
+    - { name: Colour variation, type: float, animatable: true }
+    - { name: Evolution, type: float, animatable: true }
+    - { name: Seed, type: int, animatable: false }
+  animation: >-
+    Evolution and parameters keyframable; seeded so preview and export match.
+  dependencies: [3d.material-pbr, ux.effect-library, ux.recipe-engine]
+  implementation: >-
+    TSL node graphs using three.js MaterialX noise functions (mx_noise, mx_worley/voronoi), seeded via the stateless RNG;
+    thumbnails rendered on a sphere and on the selected region.
+  io: >-
+    Materials saved as reusable assets/presets.
+  limitations: >-
+    Procedural looks are approximations, not scanned materials.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Change the material" → animated thumbnail grid; search "make it look like water".
+    defaults: >-
+      Scale fitted to the target object's real size.
+    automation: >-
+      Auto-scales patterns to metres so bricks are brick-sized.
+    usability_check: >-
+      A user finds and applies a water look by typing an everyday phrase, in under 30 s.
+  acceptance: >-
+    AS-3 material transformation; seeded patterns identical after reopen.
+  status: not-started
+  evidence: []
+
+- id: 3d.material-sbsar
+  name: Substance 3D (.sbsar) materials
+  sources:
+    - ref: S01
+      item: Apply Substance 3D materials
+      category: Work with materials
+      checked: false
+  artist_can: >-
+    Load Substance .sbsar materials and adjust their exposed parameters.
+  projection_example: >-
+    Use a purchased weathered-metal .sbsar and adjust its rust amount over the show.
+  controls:
+    - { name: SBSAR file, type: file, animatable: false }
+    - { name: Exposed parameters, type: dynamic, animatable: true }
+  animation: >-
+    Exposed parameters keyframable if supported.
+  dependencies: [3d.material-pbr]
+  implementation: >-
+    Would need the proprietary Adobe Substance Engine SDK. Fallback: import baked texture sets exported from Substance
+    tools, which 3d.material-pbr already covers.
+  io: >-
+    .sbsar import (if resolved); baked PBR texture sets today.
+  limitations: >-
+    Decision 2026-10-02 (reversible default): import baked PBR texture sets exported from Substance tools now; live .sbsar editing only if the Substance Automation Toolkit is available. Does not block other work.
+
+    Open question: is live .sbsar parameter editing needed, and can the Substance Engine be licensed for personal
+    use in this app? Until then, baked textures are the path.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Live .sbsar editing is a niche material route. Baked PBR texture sets are already importable. Revisit if live .sbsar editing is wanted."
+  milestone: F
+  beginner:
+    action: >-
+      Drag a texture folder exported from Substance onto an object.
+    defaults: >-
+      Auto-detects map types from file names.
+    automation: >-
+      Matches _basecolor/_roughness/_normal suffixes to channels.
+    usability_check: >-
+      A user applies a Substance-exported texture set in under 30 s.
+  acceptance: >-
+    Decision recorded; if adopted, mini scene "rust-sbsar".
+  status: not-started
+  evidence: []
+
+- id: 3d.model-import
+  name: 3D model import
+  sources:
+    - ref: S01
+      item: Import and add 3D models — GLB, GLTF, OBJ, FBX; Model Settings (Object Scale, Make Comp Size, Model Units, Up Axis, Flip Z Axis, Extract all materials)
+      category: Import and add 3D models
+      checked: true
+    - ref: S10
+      item: Imported 3D models in GLTF, GLB, OBJ and FBX
+      category: Advanced 3D renderer
+      checked: true
+  artist_can: >-
+    Import glTF, GLB, OBJ and FBX models with a preview of scale, units and up-axis settings, then drop them into a composition.
+  projection_example: >-
+    Import a GLB statue and stand it life-size in a real niche of the building.
+  controls:
+    - { name: Object scale, type: float, animatable: false }
+    - { name: Fit to composition / real size, type: enum(fit-comp|real-size), animatable: false }
+    - { name: Model units, type: enum(m|cm|mm|in|ft|unitless), animatable: false }
+    - { name: Up axis, type: enum(y|z), animatable: false }
+    - { name: Flip Z, type: bool, animatable: false }
+    - { name: Extract materials, type: bool, animatable: false }
+  animation: >-
+    Model transforms animate as a layer; embedded animation via 3d.model-animation.
+  dependencies: [3d.scene, 3d.units-scale, proj.project-model, 3d.model-format-gltf, 3d.model-format-obj, 3d.model-format-fbx]
+  implementation: >-
+    Loaders run in a worker (GLTFLoader with DRACOLoader/KTX2Loader/MeshoptDecoder, OBJLoader+MTLLoader, FBXLoader),
+    normalise to metres and Y-up, compute a content hash and cache a processed GLB; dependent files tracked as hidden
+    asset dependencies (decluttered, collected by proj collect).
+  io: >-
+    Dependencies (textures, .bin, .mtl) recorded for relink and collect; missing textures reported by name.
+  limitations: >-
+    Format-specific limits in 3d.model-format-*; no geometry editing beyond node overrides.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag a model file into the app; a preview card shows its size against a person silhouette.
+    defaults: >-
+      Real size from declared units; Y-up; materials kept.
+    automation: >-
+      Detects Z-up and wrong units heuristically and proposes the fix in the preview.
+    usability_check: >-
+      A novice imports a GLB and places it on the ground at plausible size in under 60 s.
+  acceptance: >-
+    Mini scene "statue-niche": GLB, OBJ and FBX versions of one asset import at the same size and orientation.
+  status: not-started
+  evidence: []
+
+- id: 3d.model-format-gltf
+  name: glTF 2.0 / GLB import limits
+  sources:
+    - ref: S01
+      item: GLTF and GLB (scene cameras and lights, compression, model animation, PBR materials); GLB preferred
+      category: Import and add 3D models
+      checked: true
+  artist_can: >-
+    Import glTF/GLB with PBR materials, textures, node hierarchy, cameras, lights, skins, morph targets and animations.
+  projection_example: >-
+    A downloaded animated GLB bird flies across the facade with its own wing animation.
+  controls:
+    - { name: Animation clip, type: enum(dynamic), animatable: false }
+    - { name: Import cameras/lights, type: bool, animatable: false }
+  animation: >-
+    Embedded clips via 3d.model-animation.
+  dependencies: [3d.model-import]
+  implementation: >-
+    three.js GLTFLoader: metallic-roughness PBR, KHR_texture_transform, KHR_materials_emissive_strength/transmission/
+    volume/ior/clearcoat/specular, KHR_draco_mesh_compression, EXT_meshopt_compression, KHR_texture_basisu (KTX2),
+    KHR_mesh_quantization, KHR_lights_punctual, skins and morph targets.
+  io: >-
+    Preferred interchange format; Blender bridge (3d.dcc-import) converts other formats to GLB.
+  limitations: >-
+    Unsupported extensions are listed in an import report; deprecated KHR_materials_pbrSpecularGlossiness is
+    approximated. Limits must be re-verified per three.js release.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Same drag-and-drop import; report shown only if something was skipped.
+    defaults: >-
+      All supported features imported.
+    automation: >-
+      Decompresses Draco/meshopt/KTX2 transparently.
+    usability_check: >-
+      Import report wording is understood by 8 of 10 users (they can say what was skipped).
+  acceptance: >-
+    Khronos glTF-Sample-Assets subset renders within tolerance of reference images.
+  status: not-started
+  evidence: []
+
+- id: 3d.model-format-obj
+  name: OBJ/MTL import limits
+  sources:
+    - ref: S01
+      item: OBJ (Wavefront Object)
+      category: Import and add 3D models
+      checked: true
+  artist_can: >-
+    Import static OBJ meshes with MTL materials and textures.
+  projection_example: >-
+    Import a photogrammetry scan of a statue as OBJ with its texture.
+  controls:
+    - { name: Units (OBJ is unitless), type: enum(m|cm|mm|in|ft), animatable: false }
+    - { name: Smooth normals, type: bool, animatable: false }
+  animation: >-
+    Transform only; no embedded animation.
+  dependencies: [3d.model-import]
+  implementation: >-
+    three.js OBJLoader + MTLLoader; MTL Phong terms (Kd/Ks/Ns/d/map_Kd/map_Bump) converted to PBR approximations.
+  io: >-
+    Large scans: decimation is out of scope (use the DCC path).
+  limitations: >-
+    No hierarchy beyond groups, no animation, no units; materials approximate.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Drag-and-drop; asked once "How big is this?" with a guess.
+    defaults: >-
+      Guess units from bounding box size.
+    automation: >-
+      Finds textures referenced by MTL in nearby folders.
+    usability_check: >-
+      A user imports an OBJ scan at correct size in under 60 s.
+  acceptance: >-
+    Mini scene "statue-niche" OBJ variant.
+  status: not-started
+  evidence: []
+
+- id: 3d.model-format-fbx
+  name: FBX import limits
+  sources:
+    - ref: S01
+      item: FBX (Filmbox) with embedded animations
+      category: Import and add 3D models
+      checked: true
+  artist_can: >-
+    Import FBX models including skinned characters and their animations (e.g. from character-animation libraries).
+  projection_example: >-
+    A dancing character FBX performs on a virtual ledge in time with the music.
+  controls:
+    - { name: Animation clip, type: enum(dynamic), animatable: false }
+    - { name: Convert via Blender, type: bool, animatable: false }
+  animation: >-
+    Embedded clips via 3d.model-animation.
+  dependencies: [3d.model-import, 3d.dcc-import]
+  implementation: >-
+    three.js FBXLoader (FBX 7.x binary and ASCII; skinning, morphs, animation; Phong/Lambert materials approximated).
+    If loading fails or materials look wrong, the Blender headless bridge converts FBX → GLB.
+  io: >-
+    Embedded textures extracted to the asset store.
+  limitations: >-
+    FBX before 7.0 is unsupported by FBXLoader (Blender path may work). Material fidelity is lower than glTF. The
+    Autodesk FBX SDK is not used.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drag-and-drop; "Fix this model" button if import looks wrong.
+    defaults: >-
+      Direct load first, Blender conversion on failure.
+    automation: >-
+      Retries via Blender automatically when FBXLoader throws.
+    usability_check: >-
+      Users import a Mixamo-style character and see it animate in under 90 s.
+  acceptance: >-
+    Mini scene "dancer": FBX animation frames match the Blender-converted GLB within tolerance.
+  status: not-started
+  evidence: []
+
+- id: 3d.model-animation
+  name: Embedded model animation
+  sources:
+    - ref: S01
+      item: Animate embedded 3D model; Animation Options
+      category: Work with 3D composition
+      checked: false
+    - ref: brief
+      item: §9 embedded model animation
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Choose which animation clip a model plays, retime it, offset it, loop it and blend between clips.
+  projection_example: >-
+    A flock of imported birds plays its flap cycle at different offsets so they do not move in lockstep.
+  controls:
+    - { name: Clip, type: enum(dynamic), animatable: true }
+    - { name: Speed, type: percent, animatable: true }
+    - { name: Time offset, type: time, animatable: false }
+    - { name: Loop mode, type: enum(once|loop|ping-pong|hold), animatable: false }
+    - { name: Clip time (remap), type: time, animatable: true }
+  animation: >-
+    Clip time remappable with keyframes (freeze, reverse) and offset per instance by expressions.
+  dependencies: [3d.model-import, anim.time-remap, expr.engine]
+  implementation: >-
+    three.js AnimationMixer evaluated statelessly with mixer.setTime(clipTime(t)) at exact flick times, never by
+    accumulated deltas, so random-access seek and parallel export match.
+  io: >-
+    none
+  limitations: >-
+    No IK or retargeting; cloth/fluid caches go through 3d.dcc-alembic.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Model inspector: clip dropdown with thumbnails and a speed slider.
+    defaults: >-
+      First clip, looping, 100%.
+    automation: >-
+      Duplicated instances get automatic random offsets (seeded) when "Vary" is on.
+    usability_check: >-
+      A user picks a different clip and slows it in under 20 s.
+  acceptance: >-
+    Mini scene "flock": seek to random frames equals sequential playback, frame hash identical.
+  status: not-started
+  evidence: []
+
+- id: 3d.model-lights-cameras
+  name: Extract lights and cameras from models
+  sources:
+    - ref: S01
+      item: Extract and animate lights and cameras
+      category: Work with 3D composition
+      checked: false
+  artist_can: >-
+    Turn cameras and lights embedded in a model file into editable camera and light layers, keeping their animation.
+  projection_example: >-
+    A camera move authored in Blender drives the tunnel fly-through exactly.
+  controls:
+    - { name: Extract cameras, type: action, animatable: false }
+    - { name: Extract lights, type: action, animatable: false }
+    - { name: Keep linked to model, type: bool, animatable: false }
+  animation: >-
+    Extracted animation becomes keyframes (baked per frame or as curves where available).
+  dependencies: [3d.model-import, 3d.camera, 3d.light]
+  implementation: >-
+    glTF cameras and KHR_lights_punctual (and FBX cameras/lights) become native layers; animation sampled into keyframes
+    at the composition frame rate or kept as linked curves.
+  io: >-
+    none
+  limitations: >-
+    Light intensity units differ between tools; mapping is approximate and reported.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Not needed for projection workflows now: After Effects 3D/DCC parity item. Revisit if a show needs it."
+  milestone: D
+  beginner:
+    action: >-
+      Prompt after import: "This model contains a camera — use it?"
+    defaults: >-
+      Linked, so reimporting updates the camera.
+    automation: >-
+      Detects embedded cameras/lights on import.
+    usability_check: >-
+      A user adopts an embedded camera with one click.
+  acceptance: >-
+    Mini scene "blender-camera": extracted camera matches Blender render framing within 1 px.
+  status: not-started
+  evidence: []
+
+- id: 3d.mesh-primitives
+  name: Mesh primitives (parametric meshes)
+  sources:
+    - ref: S01
+      item: Create parametric meshes — Cube, Sphere, Cylinder, Cone, Torus, Plane; Mesh Options, Bevel Options; drawing behaviours
+      category: Create parametric meshes
+      checked: true
+    - ref: S01
+      item: Cinema 4D renderer curved footage layers (Curvature, Segments)
+      category: Work with compositions
+      checked: false
+  artist_can: >-
+    Draw or add cubes, spheres, cylinders, cones, tori, planes and curved panels with editable dimensions and segments.
+  projection_example: >-
+    Build a tunnel from a stretched open cylinder and boxes, and a curved panel that wraps video around a rounded tower.
+  controls:
+    - { name: Shape, type: enum(cube|sphere|cylinder|cone|torus|plane|curved-panel), animatable: false }
+    - { name: Dimensions, type: vector3, animatable: true }
+    - { name: Segments, type: int, animatable: true }
+    - { name: Top/bottom radius, type: float, animatable: true }
+    - { name: Ring/pipe radius, type: float, animatable: true }
+    - { name: Curvature (curved panel), type: angle, animatable: true }
+    - { name: Bevel size / segments (cube), type: float, animatable: true }
+  animation: >-
+    All dimensions keyframable; geometry regenerates per frame when animated.
+  dependencies: [3d.scene, 3d.material-pbr, 3d.gizmo]
+  implementation: >-
+    three.js Box/Sphere/Cylinder/Cone/Torus/PlaneGeometry plus a custom curved-panel and rounded-box generator;
+    geometry rebuilt only when parameters change (cached by parameter hash).
+  io: >-
+    Primitives export to GLB with the project for reuse.
+  limitations: >-
+    Not a polygon modeller; no vertex editing.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Add shape" → Box/Ball/Tube…, then drag on the canvas to size it.
+    defaults: >-
+      Placed on the ground or the surface under the cursor at a sensible real size.
+    automation: >-
+      Shift constrains proportions; dropping on a venue surface aligns to it.
+    usability_check: >-
+      A novice builds a three-piece tunnel from primitives in under 3 minutes.
+  acceptance: >-
+    AS-2 tunnel built from primitives; mini scene "c4d-outcomes" curved panel.
+  status: not-started
+  evidence: []
+
+- id: 3d.extrude
+  name: Extruded text and shapes with bevel
+  sources:
+    - ref: S01
+      item: Extruding text and shape layers — Extrusion Depth, Bevel Style, Bevel Depth, Hole Bevel Depth
+      category: Work with 3D composition
+      checked: false
+    - ref: S10
+      item: Extruded text and shape layers
+      category: Advanced 3D renderer
+      checked: true
+  artist_can: >-
+    Give text and shape layers real depth with front, bevel, side and back faces, each with its own material.
+  projection_example: >-
+    The show title extrudes out of the facade with a gold bevel, then rotates to reveal its depth.
+  controls:
+    - { name: Extrusion depth, type: float, animatable: true }
+    - { name: Bevel style, type: enum(none|angular|concave|convex|stepped), animatable: false }
+    - { name: Bevel depth, type: float, animatable: true }
+    - { name: Hole bevel depth, type: percent, animatable: true }
+    - { name: Front / bevel / side / back materials, type: material-ref, animatable: false }
+  animation: >-
+    Depth and bevel keyframable; per-character extrusion with text animators.
+  dependencies: [text.layer, text.animator, shape.path, shape.layer, 3d.material-pbr, 3d.renderer]
+  implementation: >-
+    Glyph outlines from HarfBuzz and shape paths from Skia CanvasKit; bevel profiles via Skia path offset; triangulated
+    caps (earcut) and swept sides in a custom generator; cached by path hash.
+  io: >-
+    Extruded geometry exportable as GLB.
+  limitations: >-
+    Self-intersecting or very thin paths may produce bevel artefacts; the app reports affected glyphs.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Make it solid" on a text or shape layer, with Depth and Bevel sliders.
+    defaults: >-
+      Depth 10% of text height, small convex bevel, metal side material.
+    automation: >-
+      Adds a camera and key light if the scene has none.
+    usability_check: >-
+      A novice turns a title into a bevelled 3D title in under 45 s.
+  acceptance: >-
+    Mini scene "c4d-outcomes" title; per-character extrusion animates without cracks.
+  status: not-started
+  evidence: []
+
+- id: 3d.dcc-import
+  name: External DCC import path (Blender bridge)
+  sources:
+    - ref: brief
+      item: §9 retain paths for importing externally authored complex geometry, rigs, simulations and animation
+      category: Product requirement
+      checked: true
+    - ref: S01
+      item: FAQ — "Will more 3D model formats be supported, such as USDZ, FBX, Alembic"
+      category: Import and add 3D models
+      checked: true
+  artist_can: >-
+    Bring in work from other 3D tools (.blend, .fbx, .dae, .ply, .stl and others) through an automatic conversion, and
+    send a model to Blender and back.
+  projection_example: >-
+    A rigged creature animated in Blender is converted to GLB on import and plays in the show.
+  controls:
+    - { name: Source file, type: file, animatable: false }
+    - { name: Bake animation, type: bool, animatable: false }
+    - { name: Open in Blender / reimport, type: action, animatable: false }
+  animation: >-
+    Animation baked to glTF clips (skins, morphs, node TRS).
+  dependencies: [3d.model-import, 3d.model-format-gltf]
+  implementation: >-
+    Blender headless (bpy, GPL acceptable for personal use) run as a job: import with Blender's importers, export GLB
+    with baked animation; watched-file reimport preserves node-path overrides.
+  io: >-
+    Requires a local Blender install (detected or user-pointed); conversions cached by source hash.
+  limitations: >-
+    Procedural rigs, constraints and modifiers not baked by Blender's glTF exporter are lost; the import report lists them.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drag any supported 3D file in; conversion is automatic.
+    defaults: >-
+      Bake all animation, Y-up, metres.
+    automation: >-
+      Finds Blender, converts, imports, and reports what could not be carried over.
+    usability_check: >-
+      A user imports a .blend without knowing a conversion happened (task success 9 of 10).
+  acceptance: >-
+    Mini scene "blend-creature": converted animation matches Blender's viewport playback within tolerance.
+  status: not-started
+  evidence: []
+
+- id: 3d.dcc-alembic
+  name: Alembic cache import
+  sources:
+    - ref: S01
+      item: FAQ — Alembic support question
+      category: Import and add 3D models
+      checked: true
+    - ref: brief
+      item: §9 externally authored simulations and animation
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Bring in baked cloth, fluid or destruction caches from other tools as animated meshes.
+  projection_example: >-
+    A cloth banner simulated in Blender unfurls down the facade.
+  controls:
+    - { name: Cache file, type: file, animatable: false }
+    - { name: Playback mode, type: enum(morph-targets|vertex-texture|point-sprite), animatable: false }
+  animation: >-
+    Cache time remappable.
+  dependencies: [3d.dcc-import, 3d.model-animation]
+  implementation: >-
+    Candidate: Blender headless reads .abc and bakes to glTF morph targets (constant topology) or a vertex-animation
+    texture (changing topology). No maintained three.js Alembic loader exists.
+  io: >-
+    Large caches may exceed VRAM; streaming would be required.
+  limitations: >-
+    Decision 2026-10-02: import Alembic through headless Blender conversion to glTF / point caches, needed for content originating in other 3D tools and simulations.
+
+    Open question: are in-app animated caches needed, or are pre-rendered EXR passes (pass.exr-read) enough for the
+    shows planned? Topology-changing fluid meshes are the hard case.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drag an .abc file in (if adopted).
+    defaults: >-
+      Auto-select playback mode by topology.
+    automation: >-
+      Conversion via Blender.
+    usability_check: >-
+      A user imports a cloth cache and scrubs it smoothly.
+  acceptance: >-
+    Decision recorded; if adopted, mini scene "cloth-banner".
+  status: not-started
+  evidence: []
+
+- id: 3d.dcc-usd
+  name: USD / USDZ import
+  sources:
+    - ref: S01
+      item: FAQ — USDZ support question
+      category: Import and add 3D models
+      checked: true
+  artist_can: >-
+    Import USD/USDZ scenes and assets from other tools.
+  projection_example: >-
+    A venue-adjacent stage set authored as USD is reused in the creative scene.
+  controls:
+    - { name: USD file, type: file, animatable: false }
+  animation: >-
+    Baked to glTF clips if adopted.
+  dependencies: [3d.dcc-import]
+  implementation: >-
+    Candidates: Blender headless USD importer → GLB, or three.js USDZLoader (limited). OpenUSD Python in the sidecar is possible but heavy.
+  io: >-
+    none
+  limitations: >-
+    Decision 2026-10-02: import USD/USDZ through headless Blender conversion to glTF.
+
+    Open question: will any assets arrive only as USD? Until a real need appears, convert via Blender manually.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "Not needed for projection workflows now: After Effects 3D/DCC parity item. Revisit if a show needs it."
+  milestone: D
+  beginner:
+    action: >-
+      Drag a .usd/.usdz file in (if adopted).
+    defaults: >-
+      Convert via Blender.
+    automation: >-
+      Conversion and import report.
+    usability_check: >-
+      A user imports a USDZ product model at correct size.
+  acceptance: >-
+    Decision recorded.
+  status: not-started
+  evidence: []
+
+- id: 3d.physical-vs-creative
+  name: Physical installation geometry vs animated creative geometry
+  sources:
+    - ref: brief
+      item: §9 distinct objects for physical installation geometry and animated creative geometry
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Animate virtual geometry freely (bricks, panels, objects) knowing the measured building, its regions and its
+    calibration can never be moved by creative edits.
+  projection_example: >-
+    A virtual brick falls out of the wall; the surveyed wall and the projector calibration stay exactly where they were.
+  controls:
+    - { name: Venue geometry (read-only reference), type: venue-ref, animatable: false }
+    - { name: Creative geometry, type: layers, animatable: true }
+    - { name: Edit venue…, type: action, animatable: false }
+  animation: >-
+    Only creative geometry is animatable; venue geometry has no animatable properties in the show.
+  dependencies: [map.venue, map.model-3d, map.calibration, ux.operation-system, 3d.scene]
+  implementation: >-
+    Venue meshes are referenced from map.venue as read-only scene instances (holdout, snapping target, shadow catcher,
+    ghost). The operation system rejects any show-scope op targeting venue IDs; venue edits happen only in venue setup,
+    versioned separately.
+  io: >-
+    Shows reference venue roles, not venue geometry copies, so a show can rebind to another venue.
+  limitations: >-
+    Creative copies of venue pieces (3d.creative-copy) are new objects; changing the survey later does not update
+    existing copies automatically (the app flags stale copies).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      The building appears locked (padlock) in creative mode; "Edit venue" switches to setup.
+    defaults: >-
+      Venue locked while animating.
+    automation: >-
+      Dragging the building in creative mode offers "Make a movable copy of this piece?" instead of moving it.
+    usability_check: >-
+      In a test, no participant moves the measured building by accident while animating a collapse.
+  acceptance: >-
+    AS-3: collapse animation leaves calibration hash and venue geometry hash unchanged; AS-7 rebinding.
+  status: not-started
+  evidence: []
+
+- id: 3d.creative-copy
+  name: Detach a piece of the building as creative geometry
+  sources:
+    - ref: brief
+      item: §19 crack, fragment, disassembly and rebuilding; §9 creative vs physical geometry
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Select a wall, window or region and make a movable 3D copy of it whose surface content stays aligned until it moves,
+    with what is "behind" it filled in.
+  projection_example: >-
+    A block of the facade slides forward and tilts, revealing a dark cavity with glowing machinery behind.
+  controls:
+    - { name: Source regions, type: region-refs, animatable: false }
+    - { name: Thickness, type: float, animatable: true }
+    - { name: Surface content, type: enum(live-show-content|frozen-frame|material), animatable: false }
+    - { name: Revealed cavity, type: enum(black|material|comp), animatable: false }
+  animation: >-
+    Copy transforms keyframable; fracture/collapse via the simulation tools.
+  dependencies: [3d.physical-vs-creative, map.region, map.model-3d, 3d.material-texture-source, 3d.extrude]
+  implementation: >-
+    Extracts the region's mesh piece from the venue model (with its UVs), extrudes it by thickness, binds the region's
+    show content as a live texture, and adds a cavity mesh behind; Rapier fracture can consume the copy.
+  io: >-
+    Copies stored in the show with a reference to the venue version they came from.
+  limitations: >-
+    The illusion holds from the audience viewpoint only; revealed cavities are projected light on a flat wall.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Select a region → "Pull out" / "Break apart" recipe.
+    defaults: >-
+      20 cm thickness, dark cavity, content follows the moving piece.
+    automation: >-
+      Builds the copy, cavity and lighting automatically from the venue region.
+    usability_check: >-
+      A novice makes a wall block slide out in under 2 minutes using supplied venue data.
+  acceptance: >-
+    AS-3 transformation; piece at rest is pixel-aligned with the un-detached projection.
+  status: not-started
+  evidence: []
+
+- id: 3d.stereo
+  name: Stereoscopic 3D rig
+  sources:
+    - ref: S01
+      item: Stereoscopic 3D (3D Glasses effect, stereo camera rig)
+      category: Work with 3D composition
+      checked: false
+  artist_can: >-
+    Render left/right eye views for 3D-glasses or anaglyph presentation.
+  projection_example: >-
+    An anaglyph segment for an audience handed red/cyan glasses.
+  controls:
+    - { name: Interaxial distance, type: float, animatable: true }
+    - { name: Convergence, type: float, animatable: true }
+    - { name: Output, type: enum(side-by-side|over-under|anaglyph), animatable: false }
+  animation: >-
+    Interaxial and convergence keyframable.
+  dependencies: [3d.camera, render.encode]
+  implementation: >-
+    Two cameras from a rig, rendered as separate passes and packed; anaglyph via a WGSL colour matrix.
+  io: >-
+    Side-by-side/over-under outputs.
+  limitations: >-
+    User 2026-10-02: stereoscopic left/right-eye video is UNCONFIRMED and recorded as a possible future capability. It must not complicate the normal build or setup; ordinary 3D and dimensional illusions proceed independently.
+
+    Open question: will any show use stereo projection or glasses? Audience-viewpoint illusions already give monocular depth.
+  disposition: unresolved
+  superseded_by: null
+  exclusion_reason: null
+  milestone: F
+  beginner:
+    action: >-
+      "3D glasses version" export option (if adopted).
+    defaults: >-
+      Convergence at the venue surface.
+    automation: >-
+      Sets interaxial from audience distance.
+    usability_check: >-
+      A user exports an anaglyph test without opening rig settings.
+  acceptance: >-
+    Decision recorded.
+  status: not-started
+  evidence: []
+
+- id: 3d.scene-model
+  name: Project-stored 3D scene
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Project-stored 3D scene with meshes, materials, lights, cameras, transforms, animation and physical properties"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Everything in the 3D scene (objects, meshes, materials, lights, cameras, transforms, animation and physical
+    properties) is saved in the project and reopens exactly, so a scene stays editable data and not baked output.
+  projection_example: >-
+    Reopen the show next week and the falling-bricks scene still has its brick bodies, masses, sun light and camera
+    move, ready to edit.
+  controls:
+    - { name: "Scene objects", type: "list", animatable: false }
+    - { name: "Object kind (mesh, primitive, model instance, light, camera, null)", type: "enum", animatable: false }
+    - { name: "Physical properties", type: "group", animatable: false }
+  animation: >-
+    Transforms, light and camera properties and material parameters are keyframable.
+  dependencies: [3d.scene, 3d.physical-vs-creative, proj.project-model, proj.format-migration, 3d.model-import, 3d.material-pbr, 3d.light, 3d.camera]
+  implementation: >-
+    Scene-graph nodes in the core project model: {id, kind, parent, transform, materialRef, meshRef or primitive
+    parameters, physics {bodyType, mass, friction, restitution, collider}, role}. Meshes are referenced assets (glTF
+    or geometry file with a hash) or parametric primitives. Materials and textures are asset references. The scene is
+    versioned and migrated with the project, and venue geometry is referenced read-only (3d.physical-vs-creative).
+  io: >-
+    Creative scene exports to glTF/GLB for Blender (3d.blender-link).
+  limitations: >-
+    Imported mesh files are referenced, so moving or replacing them goes through relink.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Nothing to learn: the 3D scene is saved with the project.
+    defaults: >-
+      New scenes start empty with a default camera and light.
+    automation: >-
+      Saves and migrates all scene data on every project save.
+    usability_check: >-
+      Close and reopen a project with a 3D scene and compare the viewport and an export frame: identical.
+  acceptance: >-
+    Mini scene "bricks-3d": save, close, reopen; scene graph, physics settings and render match.
+  status: not-started
+  evidence: []
+
+- id: 3d.object-editing
+  name: Create, select and edit 3D objects
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Create, select and edit 3D objects"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Add primitives (box, plane, sphere, cylinder) or imported models to the scene, select them in the viewport or an
+    outline list, and edit position, rotation, scale, material, light and camera settings, grouping and physical
+    properties in an inspector.
+  projection_example: >-
+    Add 40 boxes, group them as "Bricks", set one material and mass for the group, and move the camera.
+  controls:
+    - { name: "Add object", type: "action", animatable: false }
+    - { name: "Outline list (select, rename, group, hide, lock)", type: "list", animatable: false }
+    - { name: "Transform gizmo", type: "gizmo", animatable: true }
+    - { name: "Inspector sections (transform, material, physics)", type: "panel", animatable: false }
+    - { name: "Duplicate or array", type: "action", animatable: false }
+  animation: >-
+    Every inspector value can be keyframed.
+  dependencies: [3d.scene-model, 3d.gizmo, 3d.mesh-primitives, 3d.model-import, 3d.material-assign, 3d.hierarchy, ux.inspector, ux.operation-system, ux.canvas-direct]
+  implementation: >-
+    A React outliner and viewport picking (three.js raycast or a GPU id pass) emit typed operations (add-object,
+    set-transform, set-material, set-physics). Every edit is undoable and available to external agents. Inspector
+    sections are progressive: three to five controls, then more.
+  io: >-
+    None.
+  limitations: >-
+    Not a modelling package. Mesh editing is limited to primitives and imported models.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Add 3D object" then drag it on the canvas; click it to edit in the inspector.
+    defaults: >-
+      Objects drop onto the venue ground plane, at real-world size, with a default material.
+    automation: >-
+      Snaps to the venue, keeps units in metres and groups duplicates automatically.
+    usability_check: >-
+      A first-time user adds, moves and recolours a 3D object in under 1 minute.
+  acceptance: >-
+    Mini scene "object-edit": add, select, edit, group and undo objects; saved scene and export match.
+  status: not-started
+  evidence: []
+
+- id: 3d.physics-world
+  name: "Rigid-body physics world (Rapier): gravity"
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Rapier rigid-body physics: gravity strength and direction"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Turn on physics for a scene and set gravity: its strength (including zero or very weak for floaty looks) and its
+    direction (down, sideways, up toward the roof). Objects marked as physics objects then move under real rigid-body
+    physics.
+  projection_example: >-
+    Gravity 9.8 m/s2 down for falling bricks. Gravity 0.5 m/s2 upward for rising debris.
+  controls:
+    - { name: "Gravity strength", type: "float", animatable: true }
+    - { name: "Gravity direction", type: "vector", animatable: true }
+    - { name: "Time scale", type: "float", animatable: false }
+    - { name: "Quality (substeps)", type: "int", animatable: false }
+    - { name: "Ground plane (none, flat, venue)", type: "enum", animatable: false }
+    - { name: "Seed", type: "int", animatable: false }
+  animation: >-
+    Gravity can change over time. The bake applies each change at its exact step.
+  dependencies: [3d.scene-model, fx.simulation.deterministic-seeds, fx.simulation.cache-checkpoints, 3d.units-scale]
+  implementation: >-
+    A Rapier world (deterministic WASM build) owned by the scene and stepped at a fixed dt in a worker, with an
+    explicit solver configuration (substeps, iterations). World settings are stored in the project. Units are scene
+    metres (3d.units-scale).
+  io: >-
+    World settings are saved with the scene.
+  limitations: >-
+    Determinism holds for the same Rapier version, insertion order and inputs, so a Rapier upgrade can change results
+    and needs hash tests.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Scene settings, Physics: one switch and a gravity dial with an arrow.
+    defaults: >-
+      Earth gravity pointing down, venue floor as the ground.
+    automation: >-
+      Chooses sensible substeps for the object count.
+    usability_check: >-
+      A first-time user turns on physics and lets objects fall in under 30 s.
+  acceptance: >-
+    Mini scene "gravity-tests": down, sideways and weak gravity with the same objects; seek and export agree.
+  status: not-started
+  evidence: []
+
+- id: 3d.physics-body
+  name: Mass, friction and bounce on 3D objects
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Rapier rigid-body physics: mass, friction, bounce"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Make any object a physics object (moves), a fixed obstacle (does not move) or a keyframe-driven mover, and set its
+    mass, friction, bounciness and damping, with simple presets (brick, glass, rubber, feather).
+  projection_example: >-
+    Bricks weigh 2 kg with friction 0.8 and bounce 0.1. A rubber ball bounces at 0.9.
+  controls:
+    - { name: "Body type (dynamic, static, kinematic)", type: "enum", animatable: false }
+    - { name: "Mass or density", type: "float", animatable: false }
+    - { name: "Friction", type: "float", animatable: false }
+    - { name: "Bounce", type: "float", animatable: false }
+    - { name: "Linear and angular damping", type: "float[2]", animatable: false }
+    - { name: "Initial velocity", type: "vector", animatable: false }
+    - { name: "Material preset", type: "enum", animatable: false }
+  animation: >-
+    Kinematic bodies follow the keyframes, so an animator can push an object. Other values are constant per bake.
+  dependencies: [3d.physics-world, 3d.object-editing, 3d.scene-model, expr.presets]
+  implementation: >-
+    The values map directly to Rapier rigid-body and collider parameters (mass or density, friction, restitution,
+    damping, locked axes, initial velocities). Presets are saved looks. Kinematic bodies follow the evaluated
+    transforms.
+  io: >-
+    Saved with the object in the scene.
+  limitations: >-
+    Rigid bodies only: no bending, cloth or soft bodies (Blender simulation covers those).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select an object, then Physics: Moves, Fixed or Animated, and pick a material preset.
+    defaults: >-
+      Dynamic body with the Brick preset.
+    automation: >-
+      Sets mass from size and material density.
+    usability_check: >-
+      A first-time user makes a ball bounce on the ground in under 45 s.
+  acceptance: >-
+    Mini scene "body-properties": heavy, light, sticky and bouncy objects behave as expected.
+  status: not-started
+  evidence: []
+
+- id: 3d.physics-forces
+  name: Forces and impulses
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Rapier rigid-body physics: forces and impulses"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Push things around: constant forces (wind), one-off impulses (a kick at a moment, at a point on an object), radial
+    blasts, and torque, timed on the timeline or on a music beat.
+  projection_example: >-
+    An impulse on the beat sends the bricks flying outward, and a constant sideways wind pushes them across the
+    facade.
+  controls:
+    - { name: "Force type (constant, impulse, radial, torque)", type: "enum", animatable: false }
+    - { name: "Strength and direction", type: "vector", animatable: true }
+    - { name: "Application point", type: "point3d", animatable: false }
+    - { name: "Start time and duration", type: "time[2]", animatable: true }
+    - { name: "Falloff for radial", type: "curve", animatable: false }
+    - { name: "Trigger (marker, beat)", type: "enum", animatable: false }
+  animation: >-
+    Strength and direction are keyframable. Beat-triggered events resolve from the cached beat grid.
+  dependencies: [3d.physics-body, anim.keyframe.core, audio.beat-markers, tool.beat-sync, fx.simulation.deterministic-seeds]
+  implementation: >-
+    Force events are a time-ordered list in the project (time in flicks). The bake applies them at the exact step with
+    Rapier add-force, apply-impulse and add-torque calls. Beat-triggered events resolve against the cached beat grid,
+    so seek and export see the same sequence.
+  io: >-
+    Saved in the scene.
+  limitations: >-
+    Very strong impulses on small objects can tunnel through thin colliders. The bake uses continuous collision
+    detection where needed and reports it.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Select objects, then "Add a push": pick Kick, Wind or Blast and place it on the timeline or on a beat.
+    defaults: >-
+      A single impulse at the playhead with a visible arrow.
+    automation: >-
+      Fits strength to the object mass.
+    usability_check: >-
+      A first-time user kicks an object on a beat in under 1 minute.
+  acceptance: >-
+    Mini scene "beat-kick": impulses on beats, wind and a blast; consistent in preview and export.
+  status: not-started
+  evidence: []
+
+- id: 3d.physics-colliders
+  name: Collision geometry and object-to-object collisions
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Rapier rigid-body physics: collision geometry and object collisions"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Choose each object's collision shape (box, sphere, capsule, convex hull, or exact mesh for fixed things), switch
+    object-to-object collisions on or off by group, and let objects hit the building's real ledges, sills and floor
+    taken from the venue geometry.
+  projection_example: >-
+    Falling fragments land on the first-floor ledge, slide off and knock into each other. The audience barrier ignores
+    them.
+  controls:
+    - { name: "Collider shape (auto, box, sphere, capsule, convex hull, mesh)", type: "enum", animatable: false }
+    - { name: "Collision group and filter", type: "bitmask", animatable: false }
+    - { name: "Collide with the venue (on, off, which parts)", type: "enum", animatable: false }
+    - { name: "Show colliders", type: "bool", animatable: false }
+    - { name: "Margin", type: "float", animatable: false }
+  animation: >-
+    None.
+  dependencies: [3d.physics-body, 3d.physics-world, 3d.physical-vs-creative, map.model-3d, map.venue-proxy]
+  implementation: >-
+    Rapier colliders generated from render meshes (convex decomposition for moving objects, triangle meshes or
+    heightfields for fixed venue parts), cached by mesh hash. Venue geometry enters as read-only fixed colliders, so
+    creative edits cannot move it. Groups map to Rapier interaction groups. A collider overlay shows what will
+    collide.
+  io: >-
+    Collider caches are in the project cache folder.
+  limitations: >-
+    Exact-mesh colliders are for fixed bodies only. The venue proxy is an approximation, so ledge contacts are only as
+    accurate as the survey.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Physics, Collisions: "Hit the building" and "Hit each other" switches, with an overlay to check.
+    defaults: >-
+      Auto shape, collide with the building and with each other.
+    automation: >-
+      Builds shapes from the meshes and the venue ledges automatically.
+    usability_check: >-
+      A first-time user makes objects land on a ledge in under 1 minute.
+  acceptance: >-
+    Mini scene "ledge-landing": objects land on a surveyed ledge and collide with each other; seek-stable.
+  status: not-started
+  evidence: []
+
+- id: 3d.physics-bake
+  name: Physics baked through prepare and cache
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Rapier physics baked through the prepare and cache workflow for consistent seek and export"
+      category: "3D scene and physics"
+      checked: true
+  artist_can: >-
+    Press "Prepare physics" and the app simulates the scene once in the background and saves the result. Scrubbing,
+    preview, seeking and export then all show the identical motion, and editing a physics setting marks the bake out
+    of date and re-prepares it.
+  projection_example: >-
+    Jump to 0:42 and see the same pile of bricks that export renders.
+  controls:
+    - { name: "Prepare or re-prepare", type: "action", animatable: false }
+    - { name: "Range", type: "time[2]", animatable: false }
+    - { name: "Quality (steps per frame)", type: "int", animatable: false }
+    - { name: "Cache status (up to date, stale)", type: "view", animatable: false }
+    - { name: "Clear cache", type: "action", animatable: false }
+  animation: >-
+    Baked per-frame transforms are read for any time, so seeking is random access after the first run.
+  dependencies: [fx.simulation.prepare-workflow, fx.simulation.cache-checkpoints, 3d.physics-world, render.snapshot, preview.cache-invalidation, render.determinism]
+  implementation: >-
+    Reuses the simulation Prepare workflow: sequential Rapier stepping at a fixed dt in a worker, per-frame transforms
+    recorded to a transform cache, with world snapshots as checkpoints. Both are keyed by a hash of the scene's
+    physics inputs and the Rapier version. Preview and export read the same cache, and render snapshots include the
+    cache key.
+  io: >-
+    Cache files in the project cache folder, keyed by hash.
+  limitations: >-
+    Bakes cost time and disk in proportion to object count and duration. Hash mismatch after a Rapier upgrade forces a
+    re-prepare.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      A "Prepare physics" bar appears when physics settings change, with progress.
+    defaults: >-
+      Prepares automatically after edits when idle, and the viewport shows the last good bake until then.
+    automation: >-
+      Hashes inputs, bakes in the background and tells you when the preview is current.
+    usability_check: >-
+      After editing a mass and preparing, scrub and export show identical piles.
+  acceptance: >-
+    Mini scene "bake-seek": random seeks and export frames from the bake match bit-for-bit on this machine.
+  status: not-started
+  evidence: []
+
+- id: 3d.blender-link
+  name: Blender link (linked scenes and round trip)
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Deep optional Blender integration: linked scenes"
+      category: "Blender integration"
+      checked: true
+  artist_can: >-
+    Link a .blend file as a scene: edit it in Blender and Before Effects updates (objects, materials, lights, cameras,
+    animation), or send the creative scene or the venue model to Blender and bring the result back. The link is
+    optional and everything else works without Blender.
+  projection_example: >-
+    A modeller builds a collapsing tower in Blender and saves, and the show updates with the new tower animation.
+  controls:
+    - { name: "Link a .blend file", type: "file", animatable: false }
+    - { name: "Reload on save", type: "bool", animatable: false }
+    - { name: "Import (objects, animation, cameras, lights)", type: "flags", animatable: false }
+    - { name: "Unlink and keep as glTF", type: "action", animatable: false }
+    - { name: "Send to Blender", type: "action", animatable: false }
+  animation: >-
+    Baked animation from Blender plays as the model animation (3d.model-animation).
+  dependencies: [3d.dcc-import, 3d.model-format-gltf, 3d.scene-model, 3d.model-animation, render.queue]
+  implementation: >-
+    Headless Blender (bpy) runs a job that exports glTF/GLB with baked animation plus a JSON side-car for lights,
+    cameras and custom properties. A file watcher re-runs the job on save. Overrides made in Before Effects
+    (materials, area assignment, physics) are keyed by node path and survive reimport. Send to Blender writes the
+    creative scene as GLB and opens Blender.
+  io: >-
+    Reads .blend. Writes GLB and JSON. Keeps the original .blend untouched.
+  limitations: >-
+    Procedural rigs and modifiers that Blender's glTF exporter cannot bake are lost, and the import report lists them.
+    Blender is GPL and stays behind an integration boundary. Blender versions are tested per release.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Drag a .blend file in, or Scene, "Send to Blender".
+    defaults: >-
+      Imports objects, animation, cameras and lights and reloads on save.
+    automation: >-
+      Finds Blender, converts in the background and reports what could not be converted.
+    usability_check: >-
+      A first-time user links a .blend and sees an edit appear after saving in Blender.
+  acceptance: >-
+    Mini scene "blender-tower": edit in Blender, saved, scene updates with overrides kept.
+  status: not-started
+  evidence: []
+
+- id: 3d.blender-simulation
+  name: Advanced simulation in Blender, baked into the show
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Deep optional Blender integration: advanced simulation"
+      category: "Blender integration"
+      checked: true
+  artist_can: >-
+    Run cloth, destruction, fluid, smoke and particle simulations in Blender and bring the baked result back as
+    animated objects or a cache, placed and timed from Before Effects.
+  projection_example: >-
+    A cloth curtain falls over a window in Blender and plays in the show in time with the music.
+  controls:
+    - { name: "Simulation file or collection", type: "ref", animatable: false }
+    - { name: "Bake range", type: "time[2]", animatable: false }
+    - { name: "Start time and speed", type: "time + percent", animatable: true }
+    - { name: "Area placement", type: "region-ref", animatable: false }
+  animation: >-
+    Start time and speed are keyframable. The baked frames are fixed.
+  dependencies: [fx.simulation.mantaflow-offline, 3d.dcc-alembic, 3d.blender-link, fx.simulation.prepare-workflow, fx.simulation.cache-checkpoints]
+  implementation: >-
+    Blender headless bakes to Alembic or glTF vertex caches (and EXR volumes for smoke and liquids). The result is
+    imported as a cache object read by frame. The Prepare workflow tracks bake status and hashes inputs so preview and
+    export read the same cache.
+  io: >-
+    Alembic, glTF with vertex caches, EXR volumes, from Blender.
+  limitations: >-
+    Offline only. Bake times range from minutes to hours. Results depend on the Blender version.
+  disposition: required-integration
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      Link a Blender simulation, press "Bake in Blender", then place the result on an area.
+    defaults: >-
+      Whole simulation, full range, starts at the playhead.
+    automation: >-
+      Runs Blender in the background and re-bakes only when the file changes.
+    usability_check: >-
+      A first-time user bakes and plays a Blender simulation on a facade without opening Blender again.
+  acceptance: >-
+    Mini scene "blender-cloth": a baked simulation plays on an area; preview and export match.
+  status: not-started
+  evidence: []

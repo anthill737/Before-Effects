@@ -1,0 +1,746 @@
+# Immersive Video effects — Before Effects capability register
+# Sources: S01 user guide page "Apply immersive video effects" (helpx .../immersive-video-and-vr/immersive-video-effects/vr-effects.html), S02 effect list + support matrix (Immersive Video rows), brief §15 (curved, dome and panoramic surfaces), §9, §16. Live pages read 2026-10-01 through a browser session (WebFetch was blocked with HTTP 403).
+# Shared Adobe controls (S01): Frame Layout (Monoscopic, Stereoscopic Over/Under, Stereoscopic Side-by-Side) and Horizontal/Vertical Field of View (360x180 by default; 180x180 for VR180). Adobe renders these effects on the GPU only.
+# Why this matters here: dome, panoramic-room, cylinder and sphere installations take content in spherical layouts (equirectangular, fisheye domemaster, cubemap). These effects edit that content without seams or pole distortion.
+
+- id: fx.immersive.curved-surface-content-mapping
+  name: Map 360, dome and panoramic content onto curved surfaces
+  sources:
+    - ref: brief
+      item: "§15 — advanced mapping scope: curved/dome/panoramic surfaces with separate hardware and mathematical validation"
+      category: Projection design, surfaces and calibration (product requirement)
+      checked: true
+    - ref: S01
+      item: VR Converter input/output layouts (Fisheye FullDome, Equirectangular, Cube-map)
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Use equirectangular, fisheye domemaster, cylindrical panorama or cubemap content directly on a dome, curved wall, cylindrical room or sphere in the venue, so it looks correct from the chosen audience sweet spot.
+  projection_example: >-
+    A 4K fisheye domemaster plays on a 6 m inflatable dome from two projectors, and a 360 panorama wraps around a four-wall immersive room.
+  controls:
+    - { name: "Content layout (Equirectangular, Fisheye dome, Cylindrical, Cubemap)", type: "enum", animatable: false }
+    - { name: "Projection origin (sweet spot)", type: "point3d", animatable: true }
+    - { name: "Content orientation (Tilt, Pan, Roll)", type: "angle[3]", animatable: true }
+    - { name: "Fisheye field of view", type: "angle (90-360)", animatable: false }
+    - { name: "Cylinder vertical field of view / height", type: "float", animatable: false }
+  animation: >-
+    Orientation and origin keyframable and expression-linkable (for example, a slow sky rotation).
+  dependencies: [map.venue, map.model-3d, map.calibration, map.projector, out.projector-output, out.edge-blend, 3d.scene, fx.immersive.vr-converter]
+  implementation: >-
+    Spherical content is treated as a projective texture from a spherical (non-pinhole) projector placed at the audience origin. A three.js TSL node material computes dir = normalize(worldPos - origin), applies the orientation matrix, converts it to the layout's UV (equirectangular, angular fisheye, cylindrical or cube face) and samples with mips and anisotropic filtering. The venue geometry (measured model, or analytic dome, cylinder and sphere primitives) is then rendered from each calibrated projector, as in normal mapping. Alternatively, the result is baked into the surface UV atlas for export. Temporal: none. Precision: rgba16float; oblique angles use anisotropic sampling.
+  io: >-
+    Imports equirectangular, fisheye and cubemap media, reading spherical metadata where present. Exports per-projector files or surface-atlas masters, and a dome master in fisheye layout.
+  limitations: >-
+    Correct only from the chosen origin; the brief requires previewing other viewpoints to show this. Accuracy depends on measured dome geometry and calibration, which need separate hardware validation; no automatic calibration is implied. Stereo domes are out of scope for now.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: E
+  beginner:
+    action: >-
+      In "Set up the space", choose "This surface is a dome / curved wall / round room". In "Add content", choose "Add 360 or dome video".
+    defaults: >-
+      Layout detected from aspect ratio and metadata (2:1 = equirectangular, 1:1 circle = fisheye 180°); origin at the dome centre or room centre at eye height.
+    automation: >-
+      Detects the content layout. Places the origin. Shows an audience-view preview and a coverage map. Converts unsupported layouts automatically through VR Converter.
+    usability_check: >-
+      With a supplied dome model and fisheye clip, a first-time user gets correct-looking dome playback in the venue preview in under 3 minutes, without entering a projection formula or field of view.
+  acceptance: >-
+    Mini scene "dome-grid": a lat-long test grid shows straight meridians from the origin, preview equals per-projector export, and residuals are reported on hardware when available.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.sphere-aware-processing
+  name: 360-aware processing for any effect
+  sources:
+    - ref: S01
+      item: Spherically aware immersive effects that compensate for equirectangular distortion with no seams
+      category: Immersive Video
+      checked: true
+    - ref: brief
+      item: "§15 — curved/dome/panoramic content"
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Apply ordinary effects such as blur, glow, noise reduction or stylise to 360 and dome footage without a visible seam at the wrap-around edge or pinching at the poles.
+  projection_example: >-
+    A standard Glow on a 360 room panorama glows evenly across the seam where the left and right edges of the panorama meet on the back wall.
+  controls:
+    - { name: "Process as 360 (auto, on, off)", type: "enum", animatable: false }
+    - { name: "Quality (face supersampling)", type: "enum", animatable: false }
+  animation: >-
+    Not animatable; it wraps the inner effect, whose controls stay animatable.
+  dependencies: [proj.effect-stack, fx.immersive.vr-converter, fx.blur-sharpen.edge-overscan-policy]
+  implementation: >-
+    Pass-graph transform. The equirectangular or fisheye input is converted to a cubemap (6 faces, face size = width/4) with gutters equal to the wrapped pass's declared bounds expansion, filled from neighbouring faces. The unmodified pass runs per face as one texture-array dispatch, and the faces are resampled back with bicubic or EWA filtering. Effects declare themselves sphere-safe (isotropic), sphere-adjusted (directional parameters converted per face from a global direction) or unsafe (the user is warned). Temporal: inherits the wrapped pass. Precision: rgba16float; Final quality supersamples faces 1.25× to offset the two resamples.
+  io: >-
+    none
+  limitations: >-
+    Two resampling steps add slight softening. Effects with screen-space directions (Directional Blur, Venetian Blinds) cannot be exactly sphere-consistent; they are flagged.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      No action needed. Effects added to a layer tagged as 360 or dome are processed 360-aware automatically, shown by a small "360" badge.
+    defaults: >-
+      Auto (on for layers tagged 360 or dome).
+    automation: >-
+      Tags 360 layers on import, wraps eligible effects, and warns about unsafe ones.
+    usability_check: >-
+      A first-time user applies Glow to a 360 clip, and no seam is visible at the wrap edge in the dome preview, without the user changing anything.
+  acceptance: >-
+    Mini scene "seam-glow": the difference across the wrap seam stays under tolerance for Gaussian, Glow and Unsharp Mask.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.spherical-render-camera
+  name: Render a composition as a 360 or dome master
+  sources:
+    - ref: S01
+      item: Construct VR environments (immersive video and VR section)
+      category: Immersive video and VR
+      checked: false
+    - ref: brief
+      item: "§15 — curved/dome/panoramic surfaces; §17 — reusable content masters"
+      category: Product requirement
+      checked: true
+  artist_can: >-
+    Render a whole composition, including 2D layers and 3D scenes, as an equirectangular, fisheye dome or cubemap master that covers every direction.
+  projection_example: >-
+    A 3D underwater scene is rendered as a 4K fisheye domemaster for a planetarium-style dome show.
+  controls:
+    - { name: "Output layout (Equirectangular 2:1, Fisheye dome, Cubemap)", type: "enum", animatable: false }
+    - { name: "Output resolution", type: "int", animatable: false }
+    - { name: "Camera position / orientation", type: "point3d + angle[3]", animatable: true }
+    - { name: "Fisheye field of view / dome tilt", type: "angle", animatable: false }
+  animation: >-
+    Camera position and orientation keyframable (fly-throughs).
+  dependencies: [3d.scene, 3d.camera, fx.immersive.vr-converter, fx.immersive.vr-plane-to-sphere, render.queue]
+  implementation: >-
+    Six 90° renders (three.js cube-camera style) from the content camera, with a 1-2 px overlap, assembled into the target layout by the VR Converter remap. 2D layers are placed on a virtual sphere or cylinder via Plane to Sphere. Temporal: none. Precision: rgba16float; face resolution is chosen so the output texel density is at least the target, with EWA resampling.
+  io: >-
+    Exports equirectangular, fisheye and cubemap masters and can inject spherical-video metadata on encode.
+  limitations: >-
+    Not checked against the live "Construct VR environments" page; only its link was confirmed. Screen-space effects on the composition must be sphere-aware to avoid seams. Very high resolutions (8K fisheye) are VRAM-heavy and render in tiles.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      Export → "For a dome or 360 room" picks the right layout and resolution, or in the canvas choose "View as 360".
+    defaults: >-
+      Fisheye 180° 4096² for domes, equirectangular 2:1 for rooms.
+    automation: >-
+      Chooses the layout from the venue type and sets the face resolution.
+    usability_check: >-
+      A first-time user exports a dome master of a supplied 3D scene in at most 4 actions, without choosing a projection format manually.
+  acceptance: >-
+    Mini scene "dome-fly": seams invisible under a grid test; the export plays correctly in fx.immersive.curved-surface-content-mapping.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-blur
+  name: VR Blur
+  sources:
+    - ref: S02
+      item: VR Blur
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Blur
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Blur 360 and dome footage evenly in every direction, compensating for equirectangular stretching, with no seam.
+  projection_example: >-
+    Softens the sky dome of a planetarium background so the sharp foreground fly-through stands out.
+  controls:
+    - { name: "Blurriness", type: "float", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    Blurriness keyframable and expression-linkable.
+  dependencies: [fx.immersive.sphere-aware-processing, fx.blur-sharpen.gaussian-blur]
+  implementation: >-
+    Gaussian blur run through sphere-aware processing (cubemap with gutters). A fast path for small radii blurs equirectangular directly with a latitude-dependent horizontal σ (σx = σ / cos φ) and wrap addressing in longitude, switching to the cubemap path near the poles. Temporal: none. Bounds: wraps, no expansion. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Stereo layouts are processed per eye; stereo projection itself is out of scope.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Soften" on a 360 or dome layer uses this automatically.
+    defaults: >-
+      As Soften; frame layout and FOV from the layer's 360 tag.
+    automation: >-
+      Chooses VR Blur instead of Gaussian for 360-tagged layers.
+    usability_check: >-
+      A first-time user softens a 360 clip with no visible seam in at most 3 actions.
+  acceptance: >-
+    Mini scene "dome-soft": blur radius in degrees is uniform within 5% from equator to pole.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-chromatic-aberrations
+  name: VR Chromatic Aberrations
+  sources:
+    - ref: S02
+      item: VR Chromatic Aberrations
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Chromatic Aberrations
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Split red, green and blue around a point of interest on the sphere for a lens-fringe or glitchy look that stays correct in 360.
+  projection_example: >-
+    RGB fringing ripples out from the dome zenith during a "time warp" moment.
+  controls:
+    - { name: "Point of Interest", type: "point2d (on sphere)", animatable: true }
+    - { name: "Aberration (Red, Green, Blue)", type: "float[3]", animatable: true }
+    - { name: "Falloff Distance", type: "float", animatable: true }
+    - { name: "Falloff Invert", type: "bool", animatable: false }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable.
+  dependencies: [fx.immersive.vr-rotate-sphere]
+  implementation: >-
+    Per output pixel: get the direction, rotate so the POI is at the pole, scale the angular distance per channel (geodesic scaling) weighted by falloff, rotate back, and sample each channel with wrap addressing. Temporal: none. Bounds: wraps. Precision: f32 directions, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Glitch" and "Lens fringe" looks on 360 layers.
+    defaults: >-
+      POI at the view centre, Red 1.0, Green 0, Blue -1.0.
+    automation: >-
+      Places the POI where the user clicks in the dome preview.
+    usability_check: >-
+      A first-time user adds fringing centred on a clicked spot in the dome preview in at most 3 actions.
+  acceptance: >-
+    Mini scene "zenith-fringe": no seam at the wrap edge.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-color-gradients
+  name: VR Color Gradients
+  sources:
+    - ref: S02
+      item: VR Color Gradients
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Color Gradients
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Paint smooth multi-point colour gradients over the whole sphere, with movable colour points that blend seamlessly.
+  projection_example: >-
+    A dawn sky gradient sweeps across a 360 room, warm at the "sunrise" wall and cool behind the audience.
+  controls:
+    - { name: "Points Number", type: "int", animatable: false }
+    - { name: "Points (Color, Point of Interest)", type: "color + point2d (per point)", animatable: true }
+    - { name: "Gradient Power", type: "float", animatable: true }
+    - { name: "Gradient Blend", type: "float", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Blending Mode", type: "enum", animatable: false }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    Point colours and positions keyframable and expression-linkable.
+  dependencies: [fx.generate.4-color-gradient, mask.blend-modes, color.management]
+  implementation: >-
+    Per output pixel: get the direction, compute inverse-power weights from the great-circle distance to each point (Gradient Power), smooth with Gradient Blend, mix the colours in linear light, and composite with the blend mode and opacity. Temporal: none. Bounds: wraps. Precision: f32 weights, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Sky colours" look on 360 or dome layers; drag the colour points in the dome preview.
+    defaults: >-
+      4 points from the show palette.
+    automation: >-
+      Seeds point colours from the show palette.
+    usability_check: >-
+      A first-time user creates a sunrise gradient around a 360 room in at most 3 actions and under 60 s.
+  acceptance: >-
+    Mini scene "dawn-room": no seam or pole artefact.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-converter
+  name: VR Converter
+  sources:
+    - ref: S02
+      item: VR Converter
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Converter
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Convert footage between spherical layouts (fisheye dome, equirectangular, several cubemap layouts, sphere-map, or a flat 2D source) and re-orient the view (tilt, pan, roll) without re-stitching.
+  projection_example: >-
+    Converts a client's equirectangular 360 clip into a 180° fisheye domemaster tilted 30° for an inclined dome.
+  controls:
+    - { name: "Input layout (Fisheye FullDome, Cube-map Facebook 3:2, Cube-map Pano2VR 3:2, Cube-map GearVR 6:1, Equirectangular 16:9, 2D Source, Cube-map 4:3, Sphere-map, Equirectangular 2:1)", type: "enum", animatable: false }
+    - { name: "Output layout (Cube-map Pano2VR 3:2, Cube-map GearVR 6:1, Fisheye FullDome, Equirectangular 16:9, Cube-map Facebook 3:2, Equirectangular 2:1)", type: "enum", animatable: false }
+    - { name: "Re-orient Camera View (Tilt X, Pan Y, Roll Z)", type: "angle[3]", animatable: true }
+    - { name: "Input/output field of view and frame layout", type: "group", animatable: false }
+  animation: >-
+    Tilt, pan and roll keyframable (camera moves inside 360 footage).
+  dependencies: [proj.layer, render.encode]
+  implementation: >-
+    Generic projection remap pass. For each output pixel: inverse output projection gives a direction, the 3×3 orientation is applied, and the forward input projection gives a source UV. Sampling uses mip-level EWA for heavy minification (poles, fisheye rim) and bicubic otherwise, with wrap or edge handling per layout. Projections are shared WGSL functions also used by mapping and the other VR effects. Temporal: none. Bounds: replaced by the output layout size. Precision: f32 math, rgba16float output.
+  io: >-
+    Reads and writes spherical layouts. Optionally writes spherical-video metadata through FFmpeg on export.
+  limitations: >-
+    Converting from a flat 2D source only covers that source's field of view. Repeated conversions soften the image; the app warns when chaining converters.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      Automatic: "Add 360 or dome video" converts as needed. Manual: "Change 360 format" on a layer.
+    defaults: >-
+      Output layout = the venue's surface type (fisheye for domes, equirectangular for rooms).
+    automation: >-
+      Detects the input layout and chooses the output layout from the venue.
+    usability_check: >-
+      A first-time user plays an equirectangular clip on a dome venue without ever choosing a format.
+  acceptance: >-
+    Mini scene "format-roundtrip": equirectangular → fisheye → equirectangular round trip stays within PSNR tolerance on a test chart.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-de-noise
+  name: VR De-Noise
+  sources:
+    - ref: S02
+      item: VR De-Noise
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR De-Noise
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Remove random or salt-and-pepper noise from 360 footage without creating seams.
+  projection_example: >-
+    Cleans grain from a low-light 360 capture of the venue's interior before it is projected around a room.
+  controls:
+    - { name: "Noise Type (Random Valued, Salt-and-Pepper)", type: "enum", animatable: false }
+    - { name: "Noise Level", type: "float", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    Noise Level keyframable.
+  dependencies: [fx.immersive.sphere-aware-processing, fx.noise-grain.remove-grain]
+  implementation: >-
+    Spatial denoise run per cube face via sphere-aware processing: an adaptive median for salt-and-pepper, and an edge-aware bilateral or non-local-means approximation for random noise, with strength set by Noise Level. Temporal: none (spatial only). Bounds: wraps. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Spatial only, so it cannot match temporal denoisers on heavy noise; heavy cases can use the sidecar.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Clean up grain" on 360 layers.
+    defaults: >-
+      Random Valued, auto-estimated level.
+    automation: >-
+      Estimates the noise level from flat areas.
+    usability_check: >-
+      A first-time user reduces visible grain on a 360 clip in at most 2 actions.
+  acceptance: >-
+    Mini scene "dark-360": noise sigma reduced by at least 40% in flat regions with no seam.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-digital-glitch
+  name: VR Digital Glitch
+  sources:
+    - ref: S02
+      item: VR Digital Glitch
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Digital Glitch
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Add digital glitch effects (blocky geometric displacement, RGB split, noise) to 360 content, focused around a point of interest or covering everything.
+  projection_example: >-
+    The whole dome glitches and tears for a second as the show "malfunctions" before the finale.
+  controls:
+    - { name: "Point of Interest / POI Scale / POI Aspect Ratio", type: "point2d + float[2]", animatable: true }
+    - { name: "Master Amplitude", type: "float", animatable: true }
+    - { name: "Distortion (Color Distortion, Geometry Distortion X/Y/Z, Distortion Complexity, Distortion Rate, Distortion Evolution, Color Evolution)", type: "group", animatable: true }
+    - { name: "Transform (Scale X/Y/Z, Translate X/Y/Z)", type: "group", animatable: true }
+    - { name: "Sub settings (Sub Influence, Sub Scaling)", type: "group", animatable: true }
+    - { name: "Noise (Strength, Quantity, Scale, Evolution, Color Noise)", type: "group", animatable: true }
+    - { name: "Random Speed", type: "float", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    All numeric controls keyframable, expression-linkable and audio-drivable (glitch on transients).
+  dependencies: [fx.noise-grain.fractal-noise, fx.immersive.vr-chromatic-aberrations, audio.to-keyframes]
+  implementation: >-
+    Glitch cells are defined on the sphere by quantising the direction in a rotated, scaled 3D cell lattice (seeded hash, evolving with time). Each cell gets a displacement and RGB split, sampled with wrap addressing, plus seeded noise, masked by a POI ellipse on the sphere. All randomness is stateless (seed, cell, time). Temporal: none. Bounds: wraps. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Glitch" look on 360 or dome layers, with Intensity, Blockiness and Speed.
+    defaults: >-
+      Master Amplitude 50, full-sphere.
+    automation: >-
+      Offers "glitch on the beat" using audio analysis.
+    usability_check: >-
+      A first-time user adds a one-second dome glitch synced to a beat in at most 4 actions.
+  acceptance: >-
+    Mini scene "dome-glitch": identical frames after reopening and seeking.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-fractal-noise
+  name: VR Fractal Noise
+  sources:
+    - ref: S02
+      item: VR Fractal Noise
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Fractal Noise
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Generate seamless animated fractal noise (clouds, smoke, energy) covering the whole sphere, without stretching at the poles.
+  projection_example: >-
+    Drifting nebula clouds fill a planetarium dome as a backdrop.
+  controls:
+    - { name: "Fractal Type (Basic, Turbulent Sharp, Max, Strings)", type: "enum", animatable: false }
+    - { name: "Contrast / Brightness / Invert", type: "float[2] + bool", animatable: true }
+    - { name: "Complexity", type: "float", animatable: true }
+    - { name: "Evolution", type: "angle", animatable: true }
+    - { name: "Transform (Scale, Tilt X, Pan Y, Roll Z)", type: "group", animatable: true }
+    - { name: "Sub settings (Sub Influence, Sub Scaling, Sub Tilt/Pan/Roll)", type: "group", animatable: true }
+    - { name: "Random Speed", type: "float", animatable: true }
+    - { name: "Opacity / Blend Mode", type: "percent + enum", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    All numeric controls keyframable and expression-linkable; Evolution supports looping.
+  dependencies: [fx.noise-grain.fractal-noise, mask.blend-modes]
+  implementation: >-
+    Shares the Fractal Noise WGSL noise library, but samples 3D (or 4D, for looping evolution) noise at unit-sphere direction vectors, rotated by tilt, pan and roll. There is no 2D mapping, so no seam or pole pinch. Octaves follow Complexity and Sub settings. Temporal: none (evolution is a function of time). Bounds: wraps. Precision: f32 noise, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Clouds / smoke / energy" looks automatically use the 360 version on 360 or dome layers.
+    defaults: >-
+      Basic, Complexity 6, slow evolution, seamless loop to the show length.
+    automation: >-
+      Chooses the 360 variant by layer tag and sets the loop length to the composition.
+    usability_check: >-
+      A first-time user fills a dome with drifting clouds in at most 3 actions, with no visible seam.
+  acceptance: >-
+    Mini scene "nebula-dome": loop seam identical frames at 0 and the loop length.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-glow
+  name: VR Glow
+  sources:
+    - ref: S02
+      item: VR Glow
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Glow
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Make bright areas of 360 footage glow, with tint, without seams.
+  projection_example: >-
+    Stars and city lights in a 360 night panorama bloom softly around the room.
+  controls:
+    - { name: "Luma Threshold", type: "float (0-1)", animatable: true }
+    - { name: "Glow Radius", type: "float", animatable: true }
+    - { name: "Glow Brightness", type: "float", animatable: true }
+    - { name: "Glow Saturation", type: "float", animatable: true }
+    - { name: "Use Tint Color / Tint Color", type: "bool + color", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    All numeric controls keyframable, expression-linkable and audio-drivable.
+  dependencies: [fx.stylize.glow, fx.immersive.sphere-aware-processing, fx.blur-sharpen.gaussian-blur]
+  implementation: >-
+    Threshold pre-pass, then the pyramid Gaussian through sphere-aware processing, then additive composite in linear light with saturation and tint. Temporal: none. Bounds: wraps. Precision: rgba16float, so values above 1.0 are kept.
+  io: >-
+    none
+  limitations: >-
+    none
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Make it glow" on 360 or dome layers uses this automatically.
+    defaults: >-
+      Threshold 0.8, Radius 20, Brightness 1.5.
+    automation: >-
+      Chooses the VR variant by layer tag.
+    usability_check: >-
+      A first-time user makes a 360 clip glow in at most 3 actions, with no seam.
+  acceptance: >-
+    Mini scene "night-bloom": seam tolerance as for sphere-aware processing.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-plane-to-sphere
+  name: VR Plane to Sphere
+  sources:
+    - ref: S02
+      item: VR Plane to Sphere
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Plane to Sphere
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Place flat elements (text, logos, graphics, video) into 360 or dome content so they appear undistorted when seen from the centre.
+  projection_example: >-
+    Places a title so it reads correctly on the front of the dome, then glides it around to the side.
+  controls:
+    - { name: "Scale (Degrees)", type: "angle", animatable: true }
+    - { name: "Rotate Source (X, Y, Z)", type: "angle[3]", animatable: true }
+    - { name: "Rotate Projection (X, Y, Z)", type: "angle[3]", animatable: true }
+    - { name: "Feather", type: "float", animatable: true }
+    - { name: "Stereo Disparity (Degrees)", type: "angle", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    All controls keyframable and expression-linkable (titles moving around the dome).
+  dependencies: [text.layer, shape.layer, fx.immersive.vr-converter]
+  implementation: >-
+    Inverse gnomonic placement. For each output pixel: get the direction, rotate into the plane's frame (Rotate Projection, then Rotate Source), intersect with a plane whose angular size is Scale, and sample the layer with bicubic filtering and feathered edges. Directions behind the plane are skipped. Temporal: none. Bounds: output equals the spherical frame. Precision: f32 math, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    Stereo disparity is supported for interop only; stereo projection is out of scope.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      Dragging any flat layer onto a 360 or dome composition places it with this automatically; move it by dragging in the dome preview.
+    defaults: >-
+      Scale 40°, facing the audience's main direction.
+    automation: >-
+      Wraps flat layers automatically. Converts canvas drags into projection rotation.
+    usability_check: >-
+      A first-time user places a readable title on the dome front in at most 2 actions without seeing a degree control.
+  acceptance: >-
+    Mini scene "dome-title": the title edge stays straight in the audience-view preview.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-rotate-sphere
+  name: VR Rotate Sphere
+  sources:
+    - ref: S02
+      item: VR Rotate Sphere
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Rotate Sphere
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Rotate 360 content to straighten the horizon, re-centre the main view, or add camera-like tilt, pan and roll moves.
+  projection_example: >-
+    Re-centres a 360 clip so the action faces the room's main wall, then slowly rotates it during the show.
+  controls:
+    - { name: "Tilt (X), Pan (Y), Roll (Z)", type: "angle[3]", animatable: true }
+    - { name: "Invert Rotation", type: "bool", animatable: false }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    Tilt, Pan and Roll keyframable and expression-linkable.
+  dependencies: [fx.immersive.vr-converter, anim.keyframe.core]
+  implementation: >-
+    The VR Converter remap with identical input and output layouts and a 3×3 rotation, using EWA near the poles and wrap addressing. Temporal: none. Bounds: wraps. Precision: f32 rotation, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    Each rotation resamples the image; consecutive rotations are fused into one matrix to avoid repeated softening.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Turn the 360 view": drag in the dome preview to rotate; a "Level the horizon" button handles tilt.
+    defaults: >-
+      All 0.
+    automation: >-
+      "Level the horizon" estimates the horizon tilt from vertical lines.
+    usability_check: >-
+      A first-time user re-centres a 360 clip onto the main wall in under 20 s by dragging.
+  acceptance: >-
+    Mini scene "recentre": rotation fusion keeps PSNR within tolerance after 5 stacked rotations.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-sharpen
+  name: VR Sharpen
+  sources:
+    - ref: S02
+      item: VR Sharpen
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Sharpen
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Sharpen 360 footage evenly in all directions without seams.
+  projection_example: >-
+    Crisps up a slightly soft 360 capture before it is projected around a room.
+  controls:
+    - { name: "Sharpen Amount (0-100)", type: "float", animatable: true }
+    - { name: "Frame Layout + Horizontal/Vertical Field of View", type: "enum + angle[2]", animatable: false }
+  animation: >-
+    Keyframable.
+  dependencies: [fx.immersive.sphere-aware-processing, fx.blur-sharpen.unsharp-mask]
+  implementation: >-
+    Unsharp-mask style sharpening run through sphere-aware processing, with luminance-perceptual encoding as in Sharpen. Temporal: none. Bounds: wraps. Precision: rgba16float.
+  io: >-
+    none
+  limitations: >-
+    Creative only; projector-output sharpening is not done here.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Sharpen" on 360 layers uses this automatically.
+    defaults: >-
+      Amount 20.
+    automation: >-
+      Chooses the VR variant by layer tag.
+    usability_check: >-
+      A first-time user sharpens a 360 clip in at most 2 actions, with no seam.
+  acceptance: >-
+    Mini scene "sharp-360": seam tolerance as for sphere-aware processing.
+  status: not-started
+  evidence: []
+
+- id: fx.immersive.vr-sphere-to-plane
+  name: VR Sphere to Plane
+  sources:
+    - ref: S02
+      item: VR Sphere to Plane
+      category: Immersive Video
+      adobe_support: { gpu: true, bpc: [8, 16, 32], mfr: true }
+      checked: true
+    - ref: S01
+      item: VR Sphere to Plane
+      category: Immersive Video
+      checked: true
+  artist_can: >-
+    Extract a flat, undistorted view in any direction from 360 footage, like pointing a virtual camera inside it.
+  projection_example: >-
+    Pulls a flat view of the sky from 360 drone footage to use as a sky plate on a flat facade.
+  controls:
+    - { name: "Input Format", type: "enum", animatable: false }
+    - { name: "Output Frame Width", type: "int", animatable: false }
+    - { name: "Output Frame Ratio", type: "enum", animatable: false }
+    - { name: "Rotate Projection (Tilt Y, Tilt X, Tilt Z)", type: "angle[3]", animatable: true }
+  animation: >-
+    Rotations keyframable (virtual pan, tilt and roll inside the 360 clip).
+  dependencies: [fx.immersive.vr-converter, proj.layer]
+  implementation: >-
+    Gnomonic (rectilinear) extraction. For each output pixel: compute the ray from the virtual camera's FOV and rotation, convert to an input-layout UV, and sample with mip-level EWA. Temporal: none. Bounds: replaced by the output frame size. Precision: f32 math, rgba16float output.
+  io: >-
+    none
+  limitations: >-
+    Field of view is derived from the output frame settings; very wide views stretch at the edges, as with any rectilinear projection.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "360, VR and dome processing is not part of the building-projection priorities. Revisit if a dome or panoramic venue is requested."
+  milestone: D
+  beginner:
+    action: >-
+      "Take a flat view from 360": drag inside the 360 preview to aim, then confirm.
+    defaults: >-
+      Output = composition size, 90° horizontal view.
+    automation: >-
+      Sizes the output to the target composition or region.
+    usability_check: >-
+      A first-time user extracts a flat view of a chosen direction in at most 3 actions and under 30 s.
+  acceptance: >-
+    Mini scene "sky-plate": straight lines in the source stay straight in the output.
+  status: not-started
+  evidence: []

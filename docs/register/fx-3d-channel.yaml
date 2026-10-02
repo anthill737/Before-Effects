@@ -1,0 +1,464 @@
+# 3D Channel — Before Effects capability register
+# Sources: S02 effect list + support matrix (3D Channel table, checked live 2026-10-01); S11 3D Channel effects (checked live 2026-10-01); brief §9, §10, §11J. Architecture note: every effect here reads auxiliary planes (depth, normals, UV, IDs, coverage) that a layer image must carry alongside RGBA, from EXR import or from our own 3D renderer (pass.depth, pass.object-id).
+
+- id: fx.3d-channel.3d-channel-extract
+  name: 3D Channel Extract
+  sources:
+    - ref: S02
+      item: 3D Channel Extract
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: 3D Channel Extract effect
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Turn a render's hidden information (distance, surface direction, texture coordinates, object or material IDs) into a visible image that can drive other effects.
+  projection_example: >-
+    Turn the depth of a rendered facade model into a grey map that makes only the nearest columns glow or ripple.
+  controls:
+    - { name: 3D Channel (Z-Depth / Object ID / Texture UV / Surface Normals / Coverage / Background RGB / Unclamped RGB / Material ID), type: enum, animatable: false }
+    - { name: Black Point / White Point, type: number, animatable: true }
+    - { name: Anti-alias, type: bool, animatable: false }
+    - { name: Clamp Output, type: bool, animatable: false }
+    - { name: Invert Depth Map, type: bool, animatable: true }
+  animation: >-
+    Black and white points keyframable and expression-linkable to camera near/far.
+  dependencies: [pass.depth, 3d.camera, proj.precompose]
+  implementation: >-
+    WGSL pass that reads a named aux plane of the input layer image and maps it to grey or RGB with black/white remap, clamp and invert. Anti-alias chooses between the MSAA-resolved plane and the nearest-sample plane. Planes come from our renderer's MRT outputs through precomps or from EXR channels decoded by the OpenEXR sidecar.
+  io: >-
+    Reads tagged EXR channels. RLA/RPF, Softimage PIC/ZPIC and Electric Image EI/EIZ readers are an open question (legacy formats).
+  limitations: >-
+    Our depth is in scene units (metres) rather than Adobe's pixels for nested comps. Normals are camera-space, as in S11. Legacy aux formats are not promised.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Use depth to drive…" option in effect inspectors that accept a map layer (glow, blur, displacement); "Show depth" in the layer's check view.
+    defaults: >-
+      Z-Depth, with points auto-set from the scene camera's near and far or the EXR's depth range.
+    automation: >-
+      Creates the extract layer, hides it, and wires it as the control layer of the chosen effect.
+    usability_check: >-
+      A first-time user makes only the nearest columns of the supplied render glow in three actions or fewer and under 60 s.
+  acceptance: >-
+    Mini scene "depth-drive": depth map from an internal 3D scene and from an EXR give the same normalised result for the same camera.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.cryptomatte
+  name: Cryptomatte
+  sources:
+    - ref: S02
+      item: Cryptomatte
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: Cryptomatte (not documented on the 3D Channel page)
+      category: 3D Channel
+      checked: false
+  artist_can: >-
+    Pick any object, material or asset in a rendered EXR by clicking it or choosing its name, and get a clean anti-aliased matte even through motion blur and transparency.
+  projection_example: >-
+    Click the statues in a Cycles render of the facade and give only them a gold glow.
+  controls:
+    - { name: Cryptomatte layer (e.g. CryptoObject / CryptoMaterial / CryptoAsset), type: enum, animatable: false }
+    - { name: Selection (names list with add / remove pickers), type: string-list, animatable: false }
+    - { name: View (Colours / Matte / Final), type: enum, animatable: false }
+    - { name: Invert, type: bool, animatable: true }
+  animation: >-
+    Selection is static; downstream matte use is animatable.
+  dependencies: [fx.3d-channel.exr-pass-explode, pass.object-id, mask.track-matte, proj.effect-stack]
+  implementation: >-
+    The OpenEXR sidecar reads the cryptomatte rank channels (id/coverage pairs) and the manifest from header metadata into planar float32 planes. A WGSL pass sums coverage where the bit-cast id matches the selected hash set, and the Colours view hashes IDs to colours. Our own renderer emits the same id/coverage layout so internal 3D scenes use the identical picker.
+  io: >-
+    Reads Cryptomatte EXRs from Blender, Houdini, Arnold, V-Ray and similar renderers. The internal renderer can export a Cryptomatte EXR in the standard layout.
+  limitations: >-
+    ID planes must stay float32 bit-exact (never rgba16float or filtered), which costs extra memory. S11 does not document Adobe's version, so control names are from the open Cryptomatte spec.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "3D-channel effects serve After Effects render-pass compositing. Projection depth illusions use pass.depth, pass.depth-fog, pass.depth-matte and displacement instead."
+  milestone: D
+  beginner:
+    action: >-
+      "Pick objects from a render": click objects in the preview; the app makes them a selectable region for any effect or recipe.
+    defaults: >-
+      Object layer, Final view with a highlighted selection.
+    automation: >-
+      Detects Cryptomatte layers on import and offers "pick objects" directly on the layer.
+    usability_check: >-
+      A first-time user isolates two named objects from the supplied EXR in under 30 s by clicking them.
+  acceptance: >-
+    Mini scene "crypto-pick": matte of a motion-blurred object matches the reference matte within tolerance; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.depth-matte
+  name: Depth Matte
+  sources:
+    - ref: S02
+      item: Depth Matte
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: Depth Matte effect
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Slice a rendered 3D image at a chosen distance so things can be inserted between its near and far parts.
+  projection_example: >-
+    Slide an animated light layer between the front columns and the back wall of a rendered tunnel illusion.
+  controls:
+    - { name: Depth, type: number, animatable: true }
+    - { name: Feather, type: number, animatable: true }
+    - { name: Invert, type: bool, animatable: true }
+  animation: >-
+    Depth keyframable so the slice can travel through the scene.
+  dependencies: [pass.depth, proj.precompose, fx.3d-channel.3d-channel-extract]
+  implementation: >-
+    WGSL pass that applies a smoothstep around Depth ± Feather on the depth plane and multiplies it into alpha. Clicking in the viewer reads the depth under the cursor into Depth.
+  io: >-
+    none
+  limitations: >-
+    Hard depth edges on anti-aliased pixels produce fringes. Cryptomatte or coverage-aware IDs are preferred for object edges.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Put this between" recipe: choose a layer, then click the point in the render it should sit behind.
+    defaults: >-
+      Depth from the clicked pixel, small feather.
+    automation: >-
+      Duplicates the render, inverts one copy and orders layers as described in S11, all in one action.
+    usability_check: >-
+      A first-time user places a layer between two depths of the supplied render in two actions or fewer and under 30 s.
+  acceptance: >-
+    Mini scene "depth-insert": inserted layer occluded correctly by near geometry; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.depth-of-field
+  name: Depth of Field
+  sources:
+    - ref: S02
+      item: Depth of Field
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: Depth Of Field effect
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Blur a rendered image based on distance so one depth stays sharp and the rest falls out of focus.
+  projection_example: >-
+    Keep the front arch of a rendered tunnel sharp while its far end softens, pulling the audience's eye to the portal.
+  controls:
+    - { name: Focal Plane, type: number, animatable: true }
+    - { name: Maximum Radius, type: number, animatable: true }
+    - { name: Focal Plane Thickness, type: number, animatable: true }
+    - { name: Focal Bias, type: number, animatable: true }
+  animation: >-
+    Focal plane keyframable for focus pulls, and linkable to a 3D point control or camera focus distance.
+  dependencies: [pass.depth, 3d.camera, fx.blur-sharpen.camera-lens-blur, fx.expression-controls.3d-point-control]
+  implementation: >-
+    WGSL variable-radius gather blur. Circle of confusion is computed from |z - focal| with thickness and bias and clamped to Maximum Radius. A depth-aware scatter-as-gather avoids sharp foreground haloing, and the kernel is shared with the lens-blur effect. The pass declares its bounds expansion as Maximum Radius.
+  io: >-
+    none
+  limitations: >-
+    Post-process depth of field cannot see behind foreground objects, so edges are approximate. True defocus comes from the 3D renderer.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "3D-channel effects serve After Effects render-pass compositing. Projection depth illusions use pass.depth, pass.depth-fog, pass.depth-matte and displacement instead."
+  milestone: D
+  beginner:
+    action: >-
+      "Focus on…" recipe: click what should stay sharp; drag one "Blur amount" slider.
+    defaults: >-
+      Focal plane from the clicked depth, moderate radius.
+    automation: >-
+      Reads the focus depth under the cursor and can animate a focus pull between two clicked points.
+    usability_check: >-
+      A first-time user creates a focus pull between two objects of the supplied render in under 60 s.
+  acceptance: >-
+    AS-2 depth illusion variant: focus pull renders identically on scrub and export.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.extractor
+  name: EXtractoR
+  sources:
+    - ref: S02
+      item: Extractor
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: EXtractoR effect (fnord ProEXR)
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Pull any channel or render pass out of a multi-layer EXR into a layer's colour and alpha, with level remapping.
+  projection_example: >-
+    Pull the specular pass out of a multi-layer EXR to boost highlights on rendered glass windows.
+  controls:
+    - { name: Channel info (R / G / B / A source channel pickers), type: channel-ref, animatable: false }
+    - { name: Black Point / White Point, type: number, animatable: true }
+    - { name: UnMult, type: bool, animatable: false }
+  animation: >-
+    Black and white points keyframable.
+  dependencies: [fx.3d-channel.exr-pass-explode, color.management]
+  implementation: >-
+    The OpenEXR sidecar exposes every part, layer and channel as named float32 planes in the layer's aux set. A WGSL pass routes the chosen planes to RGBA with remap and optional un-premultiply.
+  io: >-
+    Reads scanline and tiled EXR, single- and multi-part. Deep EXR is out of scope unless requested.
+  limitations: >-
+    S11 notes a fringe when extracting depth from nested comps with anti-aliased edges; we document the alpha convention per plane instead of guessing.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "3D-channel effects serve After Effects render-pass compositing. Projection depth illusions use pass.depth, pass.depth-fog, pass.depth-matte and displacement instead."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Open render passes" (fx.3d-channel.exr-pass-explode), which creates one layer per pass using this effect; More controls changes the channel.
+    defaults: >-
+      Channels auto-assigned from pass names (for example specular.R/G/B → RGB).
+    automation: >-
+      Recognises common pass naming from Blender, Arnold, V-Ray and Redshift.
+    usability_check: >-
+      A first-time user swaps a layer to show a different pass from a dropdown of plain pass names in under 15 s.
+  acceptance: >-
+    Mini scene "exr-passes": each extracted pass matches the reference values in the EXR exactly at 32-bit.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.fog-3d
+  name: Fog 3D
+  sources:
+    - ref: S02
+      item: Fog 3D
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: Fog 3D effect
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Add fog that thickens with distance in a rendered 3D image, optionally shaped by a texture so it swirls.
+  projection_example: >-
+    Add mist that grows denser deeper into a rendered tunnel opening on the facade.
+  controls:
+    - { name: Fog Color, type: color, animatable: true }
+    - { name: Fog Start Depth / Fog End Depth, type: number, animatable: true }
+    - { name: Fog Opacity, type: number, animatable: true }
+    - { name: Scattering Density, type: number, animatable: true }
+    - { name: Foggy Background, type: bool, animatable: false }
+    - { name: Gradient Layer, type: layer-ref, animatable: false }
+    - { name: Layer Contribution, type: number, animatable: true }
+  animation: >-
+    All values keyframable; Gradient Layer can be an animated noise layer for drifting fog.
+  dependencies: [pass.depth, 3d.camera, fx.noise-grain.turbulent-noise, fx.3d-channel.3d-channel-extract]
+  implementation: >-
+    WGSL pass computing fog factor = 1 - exp(-density × normalised(z, start, end)) × opacity. The factor is modulated by the gradient layer's luminance × contribution, then colour is mixed toward the fog colour. Foggy Background either fills far pixels with fog or leaves them transparent.
+  io: >-
+    none
+  limitations: >-
+    Screen-space fog has no light scattering from projectors or lights. Volumetric fog belongs to the 3D renderer.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: D
+  beginner:
+    action: >-
+      "Add fog behind" recipe: choose density and colour; fog starts behind the selected object.
+    defaults: >-
+      Start at the clicked depth, end at the camera far, light blue-grey, swirling noise on.
+    automation: >-
+      Creates the noise gradient layer and depth links automatically.
+    usability_check: >-
+      A first-time user adds drifting fog behind the front arch of the supplied render in three actions or fewer and under 45 s.
+  acceptance: >-
+    AS-2 and mini scene "tunnel-fog": fog density increases monotonically with depth; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.id-matte
+  name: ID Matte
+  sources:
+    - ref: S02
+      item: ID Matte
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: ID Matte effect
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Isolate one object or material in a rendered image by its ID number.
+  projection_example: >-
+    Recolour only the window frames of a rendered facade using their object ID.
+  controls:
+    - { name: Aux. Channel (Object ID / Material ID), type: enum, animatable: false }
+    - { name: ID Selection, type: integer, animatable: true }
+    - { name: Feather, type: number, animatable: true }
+    - { name: Invert, type: bool, animatable: true }
+    - { name: Use Coverage, type: bool, animatable: false }
+  animation: >-
+    ID Selection and feather keyframable, for example to step a highlight through objects.
+  dependencies: [pass.object-id, fx.3d-channel.cryptomatte]
+  implementation: >-
+    WGSL pass comparing the uint ID plane with ID Selection, with optional coverage-plane edge reconstruction and feather. Clicking in the viewer picks the ID under the cursor.
+  io: >-
+    Reads object and material ID channels from EXR and our renderer.
+  limitations: >-
+    Plain ID passes are aliased; Use Coverage or Cryptomatte is needed for clean edges.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "3D-channel effects serve After Effects render-pass compositing. Projection depth illusions use pass.depth, pass.depth-fog, pass.depth-matte and displacement instead."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through "Pick objects from a render"; ID Matte is used automatically when the file has plain ID passes instead of Cryptomatte.
+    defaults: >-
+      Object ID, feather 0, coverage on when available.
+    automation: >-
+      Chooses Cryptomatte or ID Matte from the passes found.
+    usability_check: >-
+      A first-time user selects one object of the supplied ID-pass render by clicking it in under 15 s.
+  acceptance: >-
+    Mini scene "id-recolour": only the chosen object changes; export matches preview.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.identifier
+  name: IDentifier
+  sources:
+    - ref: S02
+      item: IDentifier
+      category: 3D Channel
+      adobe_support:
+        gpu: false
+        bpc: [8, 16, 32]
+        mfr: true
+      checked: true
+    - ref: S11
+      item: IDentifier effect (fnord ProEXR)
+      category: 3D Channel
+      checked: true
+  artist_can: >-
+    Show a render's ID channel as distinct colours, or output a matte for one chosen ID, to find and isolate objects.
+  projection_example: >-
+    Show all object IDs as colours to find which ID belongs to the rooftop ornaments.
+  controls:
+    - { name: Channel info (ID channel picker), type: channel-ref, animatable: false }
+    - { name: ID, type: integer, animatable: true }
+    - { name: Output (ID colours / Matte), type: enum, animatable: false }
+  animation: >-
+    ID keyframable.
+  dependencies: [fx.3d-channel.exr-pass-explode, fx.3d-channel.id-matte, pass.object-id]
+  implementation: >-
+    WGSL pass that hashes integer IDs to stable distinct colours for display, or outputs an equality matte for the chosen ID, reading any named integer or float ID plane.
+  io: >-
+    none
+  limitations: >-
+    Overlaps ID Matte; kept separate because it addresses arbitrary EXR channels rather than the fixed Object or Material ID planes.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "3D-channel effects serve After Effects render-pass compositing. Projection depth illusions use pass.depth, pass.depth-fog, pass.depth-matte and displacement instead."
+  milestone: D
+  beginner:
+    action: >-
+      "Show object IDs" check view on any render layer; hover shows the ID and name.
+    defaults: >-
+      Colour view of the first ID channel found.
+    automation: >-
+      Lists ID channels found on import.
+    usability_check: >-
+      A first-time user identifies the ID of a named object in the supplied render by hovering it in under 10 s.
+  acceptance: >-
+    Mini scene "id-colours": colour mapping stable across frames and sessions.
+  status: not-started
+  evidence: []
+
+- id: fx.3d-channel.exr-pass-explode
+  name: Open render passes (multi-channel EXR layers)
+  sources:
+    - ref: S11
+      item: ProEXR Comp Creator and OpenEXR_channel_map.txt channel tagging
+      category: 3D Channel
+      checked: true
+    - ref: brief
+      item: §10 multi-channel EXR and Cryptomatte workflows; depth units and alpha conventions
+      category: product requirement
+      checked: true
+  artist_can: >-
+    Open a multi-pass render as one layer per pass, already stacked so it rebuilds the beauty. Each light pass can then be adjusted without re-rendering.
+  projection_example: >-
+    Open a 20-pass Blender EXR of the facade animation and brighten only the emission pass of the windows.
+  controls:
+    - { name: Passes to import, type: string-list, animatable: false }
+    - { name: Channel map preset (Blender / Arnold / V-Ray / Redshift / Octane / custom), type: enum, animatable: false }
+    - { name: Rebuild mode (additive light passes / beauty plus utility passes), type: enum, animatable: false }
+  animation: >-
+    Not animated; generated layers are ordinary animatable layers.
+  dependencies: [proj.precompose, proj.layer, mask.blend-modes, color.management, fx.3d-channel.extractor]
+  implementation: >-
+    The OpenEXR Python sidecar enumerates parts, layers and channels and tags them through an editable channel map (depth, normal, position, UV, IDs, crypto*, light passes), the equivalent of OpenEXR_channel_map.txt. An undoable op creates a precomp with one EXtractoR layer per pass, Add blending for light passes and hidden utility passes. It reports the difference between the rebuild and the beauty, and records depth units and alpha convention per plane.
+  io: >-
+    EXR import (multi-part, tiled). Aux planes travel with the layer through precomps and render to multi-channel EXR on export where requested.
+  limitations: >-
+    Rebuild exactness depends on the renderer's pass set. Missing passes are reported, not invented.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "3D-channel effects serve After Effects render-pass compositing. Projection depth illusions use pass.depth, pass.depth-fog, pass.depth-matte and displacement instead."
+  milestone: D
+  beginner:
+    action: >-
+      Dropping a multi-pass EXR asks "Open as separate passes?"; each pass appears with a plain name such as "Window glow (emission)".
+    defaults: >-
+      Preset detected from channel names; light passes visible, utility passes hidden.
+    automation: >-
+      Detects the renderer, builds the stack, and verifies the rebuild against the beauty.
+    usability_check: >-
+      A first-time user opens the supplied EXR as passes and brightens one pass in under 60 s without knowing EXR channel names.
+  acceptance: >-
+    Mini scene "exr-rebuild": rebuild equals beauty within float tolerance; a pass tweak exports correctly.
+  status: not-started
+  evidence: []

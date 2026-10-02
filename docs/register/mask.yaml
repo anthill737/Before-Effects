@@ -1,0 +1,2141 @@
+# Masks, mattes, compositing and layer styles — Before Effects capability register
+# Sources: S34 (masks), S07 (track mattes and traveling mattes), S33 (blending modes and layer styles), brief §0, §6. Adobe helpx pages returned HTTP 403 on 2026-10-01; Adobe items authored from knowledge (checked: false).
+
+- id: mask.bezier
+  name: Bezier masks
+  sources:
+    - ref: S34
+      item: "Create masks (Pen tool, Rectangle/Rounded Rectangle/Ellipse/Polygon/Star mask tools)"
+      category: "Masks"
+      checked: false
+    - ref: "brief §6"
+      item: "animated Bezier masks"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Draw one or more closed or open Bezier masks on any layer, using a pen or a rectangle, ellipse, polygon or star
+    tool, and edit vertices and tangents directly on the canvas to cut the layer to that shape.
+  projection_example: >-
+    Cut a looping brick-water texture to the outline of an arched doorway traced over the venue photo.
+  controls:
+    - { name: "Mask path", type: "path", animatable: true }
+    - { name: "Drawing tool", type: "enum(pen|rectangle|rounded-rectangle|ellipse|polygon|star)", animatable: false }
+    - { name: "Mask name", type: "string", animatable: false }
+    - { name: "Mask color", type: "color", animatable: false }
+    - { name: "Locked", type: "bool", animatable: false }
+  animation: >-
+    The mask path is a keyframable path property (see mask.path-animation); it can also be driven by an expression or
+    by tracker data.
+  dependencies: [shape.path, proj.layer, ux.operation-system]
+  implementation: >-
+    Masks share the core Bezier path type with shapes. Each mask is rasterized in layer space into an r16float coverage
+    texture by a WGSL analytic-AA fill pass at render resolution. Creating, moving and deleting vertices are typed ops
+    with Immer undo patches.
+  io: >-
+    Saved in the project as path data in layer coordinates. Paths can be pasted from SVG/AI imports (shape.vector-import)
+    and converted to and from shapes (shape.mask-conversion).
+  limitations: >-
+    Masks are creative only and never act as physical output masks (mask.creative-vs-output). Self-intersecting paths use
+    a non-zero fill rule; even-odd is not offered initially.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Cut to a shape": draw on the canvas with click-to-place points or a rectangle or ellipse, or pick a traced region.
+    defaults: >-
+      New masks start in Add mode with a 0 px feather. Masks drawn over a selected region snap to its edges.
+    automation: >-
+      The app creates the mask on the selected layer, names it after the region or tool, and keeps the layer's other
+      masks intact.
+    usability_check: >-
+      A first-time user cuts a video to a drawn window outline in under 60 s, with fewer than 3 undo steps, and without
+      opening a property tree.
+  acceptance: >-
+    Mini scene "window-cutout": a texture masked to a hand-drawn window matches preview after save/reopen and export.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: mask.rotobezier
+  name: RotoBezier masks
+  sources:
+    - ref: S34
+      item: "RotoBezier"
+      category: "Masks"
+      checked: false
+  artist_can: >-
+    Draw masks whose curve tangents are computed automatically from the vertices, so a smooth outline can be placed and
+    animated by moving points only, then converted to an ordinary Bezier when needed.
+  projection_example: >-
+    Quickly outline a rounded sculptural ornament on a facade without fiddling with tangent handles.
+  controls:
+    - { name: "RotoBezier", type: "bool", animatable: false }
+    - { name: "Vertex tension", type: "percent", animatable: true }
+  animation: >-
+    Tension is stored per vertex inside the mask path keyframes, so changing it animates with the path.
+  dependencies: [mask.bezier]
+  implementation: >-
+    Stored as a vertex list plus tension values. Tangents are derived during path evaluation using a Catmull-Rom-style
+    construction matching the RotoBezier look, then cached as a regular Bezier for rasterization.
+  io: >-
+    Saved as RotoBezier vertices. Converting to Bezier bakes the tangents.
+  limitations: >-
+    The tangent formula is a functional equivalent and may not reproduce Adobe's exact curve.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Smooth outline" toggle in the drawing toolbar, so a user can click around a curved object and get a smooth shape.
+    defaults: >-
+      Off for the pen. On when the user picks "Smooth outline", with 33% tension.
+    automation: >-
+      Computes the tangents, and converts to Bezier automatically when the user drags a tangent handle (one undoable op).
+    usability_check: >-
+      A novice outlines a round window with 6 clicks or fewer and gets a visually smooth curve without touching a
+      tangent handle.
+  acceptance: >-
+    Mini scene "smooth-ornament": a RotoBezier outline animates smoothly through 3 keyframes and survives save/reopen.
+  status: not-started
+  evidence: []
+
+- id: mask.modes
+  name: Mask modes and inversion
+  sources:
+    - ref: S34
+      item: "Mask modes (None, Add, Subtract, Intersect, Lighten, Darken, Difference) and Inverted"
+      category: "Masks"
+      checked: false
+    - ref: "brief §6"
+      item: "inversion, and Boolean combinations"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Combine several masks on one layer as Boolean operations: add, subtract, intersect, lighten, darken or difference.
+    Each mask can be inverted, and a mask can be set to None so it only serves as a path for effects.
+  projection_example: >-
+    Add all twelve window masks together, then subtract the mullion bars so the texture shows only in the glass.
+  controls:
+    - { name: "Mode", type: "enum(none|add|subtract|intersect|lighten|darken|difference)", animatable: false }
+    - { name: "Inverted", type: "bool", animatable: false }
+  animation: >-
+    Mode and inversion are not animatable (they match AE). Mask opacity, feather and path animate per mask.
+  dependencies: [mask.bezier]
+  implementation: >-
+    A WGSL combine pass folds the per-mask coverage textures in stack order. With a = accumulated and m = mask
+    coverage × opacity: add = a+m−am, subtract = a·(1−m), intersect = a·m, lighten = max, darken = min, difference = |a−m|.
+    The first mask's mode is applied against an empty accumulator, except that a first Subtract or Intersect starts from
+    full coverage (AE behaviour).
+  io: >-
+    Saved per mask.
+  limitations: >-
+    Parity with AE's edge cases (for example a stack that begins with Subtract) must be verified against reference
+    renders, because the pages could not be checked.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Add area / Cut away / Keep only overlap" buttons on the selected mask, plus "Flip inside and outside".
+    defaults: >-
+      The first mask is Add. A mask drawn while holding the "cut away" modifier becomes Subtract.
+    automation: >-
+      When a user selects excluded regions (for example a door), the app adds them as Subtract masks automatically.
+    usability_check: >-
+      A novice shows a texture in four windows but not in their mullions in under 2 minutes, using visible buttons only.
+  acceptance: >-
+    Mini scene "mask-boolean": a 7-mode test chart renders identically in preview and export, and matches the reference
+    images within tolerance.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: mask.feather
+  name: Mask feather
+  sources:
+    - ref: S34
+      item: "Mask Feather (and Mask Feather Falloff: Smooth / Linear)"
+      category: "Masks"
+      checked: false
+    - ref: "brief §6"
+      item: "animated Bezier masks with feather"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Soften a mask's edge by a uniform amount, separately horizontally and vertically, with a smooth or linear falloff.
+  projection_example: >-
+    Fade a projected glow softly at the edges of a window so the edges do not read as a hard video rectangle.
+  controls:
+    - { name: "Feather", type: "size2d", animatable: true }
+    - { name: "Feather falloff", type: "enum(smooth|linear)", animatable: false }
+    - { name: "Link horizontal/vertical", type: "bool", animatable: false }
+  animation: >-
+    Feather is keyframable and expression-linkable per mask.
+  dependencies: [mask.bezier, anim.keyframe.core]
+  implementation: >-
+    A jump-flood pass builds a signed-distance field from the mask edge. Coverage is then remapped across the feather
+    width using a smoothstep or linear ramp. Anisotropic feather scales the distance field by the x/y ratio. Feather is
+    centred on the path, as in AE.
+  io: >-
+    Saved per mask. The bounds expansion equals half the feather and is declared to the compositor.
+  limitations: >-
+    A distance-field feather differs slightly from AE's blur-based feather at sharp corners; the target is visual
+    equivalence, not bit parity.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Soften the edge" slider shown on the canvas next to the selected mask.
+    defaults: >-
+      Masks created from regions get a feather of 0.5% of the region size, so they do not alias on projection.
+    automation: >-
+      Scales the feather with the region and layer resolution, so a "soft" setting looks the same on a small window and
+      a large wall.
+    usability_check: >-
+      A first-time user softens a window mask edge in 1 drag, without finding a property in the timeline.
+  acceptance: >-
+    Brief §6 acceptance: a texture appears only inside selected windows with animated soft reveals, and the exported
+    alpha shows no dark or bright fringes.
+  status: prototype
+  evidence:
+    - "unit: packages/core/test/core.test.ts (pnpm test)"
+    - "spike: pnpm --filter @be/studio spike → spike-report.json (render, determinism, verified encodes)"
+    - "journey: pnpm --filter @be/studio uitest → ui-test-report.json + step screenshots"
+
+- id: mask.variable-feather
+  name: Variable mask feather
+  sources:
+    - ref: S34
+      item: "Mask Feather tool (variable-width mask feather, feather points)"
+      category: "Masks"
+      checked: false
+  artist_can: >-
+    Place feather points along a mask edge, each with its own radius, tension and direction (inside or outside), so the
+    softness can vary around the outline.
+  projection_example: >-
+    Keep a hard edge where a reveal meets the roofline but let it dissolve softly where it meets the sky.
+  controls:
+    - { name: "Feather point position along path", type: "float", animatable: true }
+    - { name: "Feather point radius", type: "float", animatable: true }
+    - { name: "Feather point tension", type: "percent", animatable: true }
+    - { name: "Feather point side", type: "enum(outer|inner)", animatable: false }
+    - { name: "Corner style", type: "enum(round|sharp)", animatable: false }
+  animation: >-
+    Feather points are keyframed with the mask path. Each point is stored at a fixed proportion of its segment, so it
+    stays in place when the path changes shape.
+  dependencies: [mask.feather, mask.path-animation]
+  implementation: >-
+    Feather radius is interpolated along the path's arc-length parameter. The jump-flood distance field records the
+    nearest-segment parameter, so each pixel looks up the local radius before the coverage remap.
+  io: >-
+    Saved as a feather-point list per mask.
+  limitations: >-
+    Extreme radius changes on tight concave corners can make the falloff look discontinuous, as they can in AE.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Soften the edge" → More controls → "Soften only here", then click on the edge and drag outward.
+    defaults: >-
+      A new feather point copies the mask's current uniform feather.
+    automation: >-
+      Places matching points automatically where the mask meets a selected region boundary that should stay hard.
+    usability_check: >-
+      A novice gives a mask a hard top and a soft bottom in under 90 s, with no help text beyond on-canvas hints.
+  acceptance: >-
+    Mini scene "sky-fade-reveal": a variable-feather reveal animates for 5 s and renders identically after save/reopen.
+  status: not-started
+  evidence: []
+
+- id: mask.expansion
+  name: Mask expansion
+  sources:
+    - ref: S34
+      item: "Mask Expansion"
+      category: "Masks"
+      checked: false
+  artist_can: >-
+    Grow or shrink the area a mask covers by a set number of pixels without editing its path.
+  projection_example: >-
+    Pull a window mask in by 4 px so the texture never touches the stone frame when calibration has a small error.
+  controls:
+    - { name: "Mask expansion", type: "float", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable, for growing or shrinking reveals.
+  dependencies: [mask.bezier, anim.keyframe.core]
+  implementation: >-
+    Applied as a threshold shift on the same signed-distance field used for feathering, then the feather ramp is applied.
+    Positive values extend the declared bounds.
+  io: >-
+    Saved per mask.
+  limitations: >-
+    Corners round under large expansion, matching distance-field offset behaviour. For mitred geometric offsets use
+    shape.offset-paths on a path copy.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Grow / shrink" slider beside "Soften the edge", and the "Keep away from the frame" option on region masks.
+    defaults: >-
+      0 px, or −0.25% of the region size when "Keep away from the frame" is on.
+    automation: >-
+      Suggests a safety inset from the calibration residual reported by map.calibration.
+    usability_check: >-
+      A novice insets every window mask in one action (multi-select, one slider) in under 30 s.
+  acceptance: >-
+    Mini scene "safe-inset": a uniform −4 px expansion across 10 window masks is preserved through export.
+  status: not-started
+  evidence: []
+
+- id: mask.opacity
+  name: Mask opacity
+  sources:
+    - ref: S34
+      item: "Mask Opacity"
+      category: "Masks"
+      checked: false
+  artist_can: >-
+    Set how strongly each mask contributes, so one mask can partially reveal or partially cut away the layer.
+  projection_example: >-
+    Dim one window to 40% while the others stay fully lit during a sequence.
+  controls:
+    - { name: "Mask opacity", type: "percent", animatable: true }
+  animation: >-
+    Keyframable and expression-linkable. Useful with index-driven rigs to fade masks in sequence.
+  dependencies: [mask.bezier, anim.keyframe.core]
+  implementation: >-
+    Multiplies the mask's coverage before the mode combine pass in mask.modes.
+  io: >-
+    Saved per mask.
+  limitations: >-
+    Affects only the mask's own contribution; it is not the same as layer opacity.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Light up one after another" recipe → More controls → per-window strength.
+    defaults: >-
+      100%.
+    automation: >-
+      Recipes animate mask opacity instead of duplicating layers when one layer covers several regions.
+    usability_check: >-
+      A novice dims one of five windows to half strength in under 45 s without opening the timeline.
+  acceptance: >-
+    Mini scene "window-dimmer": mask opacity keyframes produce the expected partial reveals in export.
+  status: not-started
+  evidence: []
+
+- id: mask.path-animation
+  name: Mask path animation
+  sources:
+    - ref: S34
+      item: "Animate a mask path; Set First Vertex"
+      category: "Masks"
+      checked: false
+    - ref: "brief §6"
+      item: "animated Bezier masks"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Keyframe a mask's shape over time so it grows, shifts or morphs, and choose the first vertex that controls how
+    points correspond between keyframes.
+  projection_example: >-
+    A reveal starts as a thin slit at the base of a door and opens to the full arch over two seconds.
+  controls:
+    - { name: "Mask path keyframes", type: "path", animatable: true }
+    - { name: "Set first vertex", type: "action", animatable: false }
+    - { name: "Spatial interpolation of vertices", type: "enum(linear|bezier)", animatable: false }
+  animation: >-
+    Uses the standard keyframe engine with temporal easing. Vertices interpolate in correspondence order from the first
+    vertex. A different vertex count between keyframes triggers automatic resampling.
+  dependencies: [mask.bezier, anim.keyframe.core]
+  implementation: >-
+    Path keyframes store vertex arrays. Evaluation interpolates each vertex and tangent with the keyframe's temporal
+    ease. When vertex counts differ, both paths are resampled to a common count by arc length, aligned to the first
+    vertex.
+  io: >-
+    Saved as path keyframes in flicks.
+  limitations: >-
+    Morphs between very different topologies may twist. mask.smart-interpolation gives finer control.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Reveal from here": drag the mask edge at two moments in the timeline. Also reached through the "Soft reveal" recipe.
+    defaults: >-
+      Easy-ease timing on new path keyframes.
+    automation: >-
+      Records a path keyframe automatically when the user edits a mask after moving the playhead (auto-key in guided
+      mode), and fixes vertex correspondence.
+    usability_check: >-
+      A first-time user makes a door-opening reveal in under 2 minutes with 2 drags, and the motion has no twisting.
+  acceptance: >-
+    AS-3 and mini scene "door-reveal": the mask path animation scrubs and seeks identically after reopen.
+  status: not-started
+  evidence: []
+
+- id: mask.smart-interpolation
+  name: Smart mask interpolation
+  sources:
+    - ref: S34
+      item: "Smart Mask Interpolation keyframe assistant"
+      category: "Masks"
+      checked: false
+  artist_can: >-
+    Generate intermediate mask keyframes between two very different shapes, with control over vertex matching,
+    bending resistance and added vertices, for a clean morph.
+  projection_example: >-
+    Morph a square window outline into a circular rose-window outline without the edge folding over itself.
+  controls:
+    - { name: "Keyframe rate", type: "float", animatable: false }
+    - { name: "Keyframe fields", type: "bool", animatable: false }
+    - { name: "Use linear vertex paths", type: "bool", animatable: false }
+    - { name: "Bending resistance", type: "percent", animatable: false }
+    - { name: "Quality", type: "percent", animatable: false }
+    - { name: "Add mask shape vertices", type: "enum(pixels-between|total-vertices|percent-of-outline)", animatable: false }
+    - { name: "Matching method", type: "enum(auto|curve|polyline)", animatable: false }
+    - { name: "Use 1:1 vertex matches / first vertices match", type: "bool", animatable: false }
+  animation: >-
+    Bakes ordinary mask path keyframes that remain fully editable afterwards.
+  dependencies: [mask.path-animation]
+  implementation: >-
+    A core TS solver resamples both shapes, finds the correspondence by minimizing bending and stretching energy (a
+    dynamic-programming match over the resampled points), and emits path keyframes as a single op. It runs in a worker
+    for responsiveness.
+  io: >-
+    None. The output is ordinary keyframes.
+  limitations: >-
+    The algorithm is a functional equivalent, not Adobe's. Results on self-intersecting shapes are not guaranteed.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Morph smoothly" button shown when two path keyframes have very different shapes.
+    defaults: >-
+      Auto matching, 50% bending resistance, and a keyframe rate equal to the comp frame rate.
+    automation: >-
+      Detects twisting in a plain interpolation and offers smart interpolation as a one-click fix.
+    usability_check: >-
+      A novice fixes a twisting square-to-circle morph with 1 click and judges the result clean in a 3-person test.
+  acceptance: >-
+    Mini scene "square-to-rose": the morph has no self-intersection on any frame (automated check), and the result is
+    editable afterwards.
+  status: not-started
+  evidence: []
+
+- id: mask.tracking
+  name: Mask tracking
+  sources:
+    - ref: S34
+      item: "Mask tracker (Position; Position & Rotation; Position, Scale & Rotation; Position, Scale, Rotation & Skew; Perspective)"
+      category: "Masks"
+      checked: false
+  artist_can: >-
+    Make a mask follow an object moving in footage by tracking the pixels inside it, with a choice of how much of the
+    motion (position, rotation, scale, skew, perspective) the mask inherits.
+  projection_example: >-
+    Isolate a performer's face in filmed footage that is later composited into a window of the facade.
+  controls:
+    - { name: "Track method", type: "enum(position|position-rotation|position-scale-rotation|position-scale-rotation-skew|perspective)", animatable: false }
+    - { name: "Track direction", type: "enum(forward|backward|frame-by-frame)", animatable: false }
+    - { name: "Track range", type: "time", animatable: false }
+  animation: >-
+    Writes mask path keyframes that stay editable. Tracking can be resumed from a corrected keyframe.
+  dependencies: [mask.path-animation, track.planar, track.point]
+  implementation: >-
+    Hands off to the vision sidecar trackers (track.planar for perspective and skew, track.point for the simpler
+    methods). The resulting homography or affine per frame is applied to the mask vertices and committed as one op.
+  io: >-
+    Tracking data is cached per footage item and invalidated when the source or interpretation changes.
+  limitations: >-
+    Footage tracking only; this is not projector calibration. Low-texture or occluded regions need manual correction.
+    AE's face-tracking modes are left to track.roto.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Follow this in the video": with a mask selected on footage, press one button and watch it track.
+    defaults: >-
+      Position, scale and rotation, tracking forward from the current frame.
+    automation: >-
+      Chooses the perspective method automatically when it detects a planar surface. It flags frames with high tracking
+      error for review.
+    usability_check: >-
+      A novice tracks a mask on a 5 s supplied clip with 1 action and corrects 1 flagged frame without help.
+  acceptance: >-
+    AS-4: the tracked mask on supplied footage stays within the tolerance of the ground-truth corners.
+  status: not-started
+  evidence: []
+
+- id: mask.from-region
+  name: Mask to venue regions
+  sources:
+    - ref: "brief §6"
+      item: "a texture appears only inside selected windows"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+    - ref: "brief §0.1"
+      item: "select windows, choose an action; the app creates the necessary masks"
+      category: "User experience"
+      checked: true
+  artist_can: >-
+    Limit any layer to one or more named venue regions (windows, columns, walls), excluding others. The mask stays
+    linked, so it updates when a region's outline is corrected.
+  projection_example: >-
+    Show flowing water only inside the twelve ground-floor windows. After the venue outline is refined on site, the
+    mask follows automatically.
+  controls:
+    - { name: "Regions", type: "region-ref", animatable: false }
+    - { name: "Excluded regions", type: "region-ref", animatable: false }
+    - { name: "Live link to region", type: "bool", animatable: false }
+    - { name: "Edge softness", type: "float", animatable: true }
+    - { name: "Inset", type: "float", animatable: true }
+  animation: >-
+    Feather, inset and per-region opacity are animatable. The path itself comes from the region binding unless it is
+    detached.
+  dependencies: [map.region, mask.bezier, mask.modes, mask.feather, ux.recipe-engine]
+  implementation: >-
+    A linked mask references a region role. Mask evaluation resolves the role through the show's venue bindings and
+    reprojects the region outline into layer space (UV or comp space). Detaching copies the path into a normal mask as
+    one undoable op. A linked mask edited by hand becomes a tracked recipe override.
+  io: >-
+    Saved as a role reference, not a copied path, so a show can be rebound to another venue (AS-7).
+  limitations: >-
+    For true 3D surfaces the linked outline is valid only in the comp space it was projected into. View-dependent
+    illusions need 3D-space masking, which is handled by map.model-3d.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Only inside these windows": select regions on the canvas, then choose the action, or drag content onto a region.
+    defaults: >-
+      Live link on, with a small soft edge and inset scaled to the region size.
+    automation: >-
+      Builds the add and subtract masks, names them by role, and re-fits them whenever region geometry or venue binding
+      changes.
+    usability_check: >-
+      A first-time user restricts a texture to 3 selected windows in no more than 3 deliberate actions, in under 30 s.
+  acceptance: >-
+    Brief §6 acceptance and AS-7: the texture shows only inside the selected windows. After rebinding to a second venue,
+    the masks follow the new regions with no manual edits.
+  status: not-started
+  evidence: []
+
+- id: mask.creative-vs-output
+  name: Creative masks kept separate from output masks
+  sources:
+    - ref: "brief §6"
+      item: "Keep creative masks separate from physical output masks"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Use creative masks freely, for example letting a glow spread beyond a window inside the composition. A separate
+    installation output mask still stops light from reaching areas that must stay dark.
+  projection_example: >-
+    A neon glow spills artistically over the stone around a window in the content, but the projector output mask still
+    blocks light on the neighbour's wall and the street signs.
+  controls:
+    - { name: "Mask kind (creative / output)", type: "enum(creative|output)", animatable: false }
+    - { name: "Show output-mask overlay in preview", type: "bool", animatable: false }
+  animation: >-
+    Creative masks animate normally. Output masks are installation settings, versioned with calibration and not
+    keyframed in content.
+  dependencies: [mask.bezier, out.output-mask, map.region]
+  implementation: >-
+    The two are distinct types in the project model: creative masks live on layers in the show, while output masks live
+    on projector outputs in the venue. No op converts one into the other silently, and "Copy as output mask" creates a
+    new venue object. The output pipeline applies output masks after content rendering, exactly once.
+  io: >-
+    Output masks are exported in projector bundles. Creative masks are baked into content renders.
+  limitations: >-
+    Prevents confusing the two types; it cannot fix projector light that physically spills because of lens or surface
+    scattering.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Preview shows a "Light allowed here" overlay from the installation. Content masks are edited in the Animate step
+      and output masks in the Set up the space step.
+    defaults: >-
+      Masks drawn in the content steps are always creative masks.
+    automation: >-
+      Warns when content is masked to match an output exclusion (a likely misunderstanding), and offers to make it an
+      output mask instead.
+    usability_check: >-
+      In a test, 4 of 5 novices correctly explain why a glow appears in the comp preview but not in the projector
+      preview, using only on-screen labels.
+  acceptance: >-
+    AS-5 and mini scene "glow-spill": a glow crossing an output exclusion appears in the content master and is blocked
+    in the projector export.
+  status: not-started
+  evidence: []
+
+- id: mask.effect-masks
+  name: Effect masks and effect opacity
+  sources:
+    - ref: S34
+      item: "Effect Compositing Options (apply effect through masks, Effect Opacity)"
+      category: "Masks"
+      checked: false
+    - ref: "brief §6"
+      item: "editable effects ordering"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Limit one effect in a layer's stack to chosen masks and blend the effect's result with its input by an opacity,
+    without splitting the layer.
+  projection_example: >-
+    Blur only the top band of a video where the cornice is, and leave the rest of the wall sharp.
+  controls:
+    - { name: "Compositing masks", type: "mask-ref", animatable: false }
+    - { name: "Per-mask opacity", type: "percent", animatable: true }
+    - { name: "Effect opacity", type: "percent", animatable: true }
+  animation: >-
+    Effect opacity and per-mask opacity are keyframable.
+  dependencies: [proj.effect-stack, mask.bezier, mask.modes]
+  implementation: >-
+    After each effect pass, the effect stack runs a lerp pass: output = mix(input, effectOutput, opacity × combined mask
+    coverage). The coverage is cached per mask set.
+  io: >-
+    Saved per effect instance.
+  limitations: >-
+    Effects that read neighbouring pixels may still pull image data from outside the mask, which is expected.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Only here" on any applied effect: paint or pick a region, and the effect applies only there.
+    defaults: >-
+      100% effect opacity, with no masks (the effect applies everywhere).
+    automation: >-
+      Picking a region creates a None-mode mask on the layer and wires it into that effect.
+    usability_check: >-
+      A novice restricts a blur to one region in no more than 3 actions without seeing the word "mask".
+  acceptance: >-
+    Brief §6 acceptance (reordering effects changes the result predictably), and mini scene "partial-blur".
+  status: not-started
+  evidence: []
+
+- id: mask.track-matte
+  name: Track mattes
+  sources:
+    - ref: S07
+      item: "Track mattes and traveling mattes (Track Matte layer selector, any layer as matte)"
+      category: "Transparency and compositing"
+      checked: false
+    - ref: "brief §6"
+      item: "alpha and luminance track mattes, inverted mattes, reusable matte sources"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Use any other layer in the comp as a matte, so the target layer shows only where the matte layer is opaque (alpha)
+    or bright (luma).
+  projection_example: >-
+    Use an animated text layer as a matte so a fire-like texture appears only inside the letters across the facade.
+  controls:
+    - { name: "Matte source layer", type: "layer-ref", animatable: false }
+    - { name: "Matte type", type: "enum(alpha|luma)", animatable: false }
+    - { name: "Invert", type: "bool", animatable: false }
+    - { name: "Hide matte source from output", type: "bool", animatable: false }
+  animation: >-
+    The matte layer animates normally (transforms, masks, effects, keyframes). The matte assignment itself is not
+    keyframed.
+  dependencies: [proj.layer, proj.layer-order]
+  implementation: >-
+    Track matte is a layer property that references a layer ID, not stack adjacency (AE 2023+ behaviour). The compositor
+    renders the matte layer through its full transform and effect stack into a comp-space texture, then multiplies the
+    target layer's premultiplied color by the matte coverage before blending. Cycles (A matting B matting A) are
+    rejected by the op validator.
+  io: >-
+    Saved as a layer reference. Legacy "matte must be the layer above" layouts import with the reference resolved.
+  limitations: >-
+    A matte source in another comp needs nesting, because cross-comp mattes are not referenced directly.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Show through this": drag a layer's matte picker onto another layer, or use the "Reveal through text/shape" recipe.
+    defaults: >-
+      Alpha matte, not inverted, and the matte source hidden from output.
+    automation: >-
+      Picks luma automatically when the chosen source has no alpha (for example a grayscale video). Hides the source and
+      labels both layers as linked.
+    usability_check: >-
+      A novice makes a texture appear inside animated text in under 60 s and no more than 3 actions.
+  acceptance: >-
+    AS-4 and mini scene "texture-in-letters": the matte renders identically in preview and export, with no fringes on
+    the letter edges.
+  status: not-started
+  evidence: []
+
+- id: mask.matte-alpha
+  name: Alpha matte
+  sources:
+    - ref: S07
+      item: "Alpha Matte"
+      category: "Transparency and compositing"
+      checked: false
+  artist_can: >-
+    Reveal a layer only where the matte layer's pixels are opaque, using the matte's transparency as the stencil.
+  projection_example: >-
+    Reveal a starfield only inside an animated circular shape that grows from the centre of a rose window.
+  controls:
+    - { name: "Matte type = Alpha", type: "enum(alpha|luma)", animatable: false }
+  animation: >-
+    Follows the matte layer's animation.
+  dependencies: [mask.track-matte]
+  implementation: >-
+    Coverage = matte premultiplied alpha. Target premultiplied rgba is multiplied by that coverage in the matte stage
+    pass.
+  io: >-
+    None.
+  limitations: >-
+    Matte edges are only as clean as the source alpha. Straight-alpha sources must be interpreted correctly
+    (proj.alpha-interpretation).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Show through this shape", the default whenever the source has transparency.
+    defaults: >-
+      Selected automatically when the matte source has a non-trivial alpha channel.
+    automation: >-
+      Detects alpha presence from source interpretation and chooses alpha or luma.
+    usability_check: >-
+      A novice reveals footage inside a shape without choosing a matte type explicitly, with 100% success across 5 testers.
+  acceptance: >-
+    Mini scene "alpha-matte-chart": a soft-edged matte composites without dark halos in a 16-bit EXR export.
+  status: not-started
+  evidence: []
+
+- id: mask.matte-luma
+  name: Luma matte
+  sources:
+    - ref: S07
+      item: "Luma Matte"
+      category: "Transparency and compositing"
+      checked: false
+  artist_can: >-
+    Reveal a layer according to the brightness of the matte layer, so white shows the layer, black hides it, and gray is
+    partially transparent.
+  projection_example: >-
+    Use a fractal-noise layer as a luma matte so a new material burns through the brick in organic patches.
+  controls:
+    - { name: "Matte type = Luma", type: "enum(alpha|luma)", animatable: false }
+    - { name: "Luma coefficients", type: "enum(rec709|rec2020|working-space)", animatable: false }
+  animation: >-
+    Follows the matte layer's animation. Animated noise or gradient sources give traveling reveals.
+  dependencies: [mask.track-matte, color.management]
+  implementation: >-
+    Coverage = luma(matte rgb) × matte alpha, computed in the working space with the working space's luma coefficients
+    (Rec.709 by default). The result is clamped to 0–1 because scene-linear HDR values can exceed 1.
+  io: >-
+    None.
+  limitations: >-
+    In a linear working space, a mid-gray matte gives a different reveal than in a gamma-encoded AE project. The
+    "Match AE (gamma) mattes" option in mask.blend-color-space resolves this.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Reached through the "Burn through" and "Organic reveal" recipes, or "Show through this" with a grayscale source.
+    defaults: >-
+      Chosen automatically for sources without alpha, using Rec.709 luma.
+    automation: >-
+      The recipe builds the noise or gradient source, sets luma, and animates the source's contrast or offset for the
+      reveal.
+    usability_check: >-
+      A novice applies an organic reveal to a wall and changes its speed in under 2 minutes without touching the
+      matte settings.
+  acceptance: >-
+    Mini scene "noise-burn-through": the luma reveal is deterministic after reopen and seek (AS-3 reproducibility).
+  status: not-started
+  evidence: []
+
+- id: mask.matte-invert
+  name: Inverted mattes
+  sources:
+    - ref: S07
+      item: "Alpha Inverted Matte / Luma Inverted Matte (Invert toggle)"
+      category: "Transparency and compositing"
+      checked: false
+    - ref: "brief §6"
+      item: "inverted mattes"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Flip a matte, so the layer shows everywhere except where the matte is opaque or bright.
+  projection_example: >-
+    Hide content wherever a moving silhouette passes, so a performer's shadow seems to cut a hole in the projection.
+  controls:
+    - { name: "Invert", type: "bool", animatable: false }
+  animation: >-
+    Not animatable; animate the matte source instead.
+  dependencies: [mask.track-matte]
+  implementation: >-
+    Coverage = 1 − coverage before the multiply, in the same matte stage pass.
+  io: >-
+    None.
+  limitations: >-
+    None beyond those of the underlying matte type.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Flip inside and outside" toggle on any "Show through this" link.
+    defaults: >-
+      Off.
+    automation: >-
+      None needed. The toggle is a single undoable op shown on canvas.
+    usability_check: >-
+      A novice inverts an existing matte in 1 click and confirms the effect in the preview without help.
+  acceptance: >-
+    Mini scene "cut-out-silhouette": an inverted luma matte matches an inverted alpha matte made from equivalent sources.
+  status: not-started
+  evidence: []
+
+- id: mask.traveling-matte
+  name: Traveling mattes and animated reveals
+  sources:
+    - ref: S07
+      item: "Traveling mattes"
+      category: "Transparency and compositing"
+      checked: false
+    - ref: "brief §6"
+      item: "traveling reveals"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Animate the matte source (move it, grow it or play a video in it) so the revealed area travels across the target
+    layer.
+  projection_example: >-
+    A soft-edged bar sweeps left to right across the facade, turning brick into glass as it passes.
+  controls:
+    - { name: "Reveal direction", type: "angle", animatable: true }
+    - { name: "Reveal progress", type: "percent", animatable: true }
+    - { name: "Edge softness", type: "float", animatable: true }
+  animation: >-
+    The matte source carries the keyframes. Recipe-level progress and direction controls drive them through expressions
+    or generated keyframes.
+  dependencies: [mask.track-matte, anim.keyframe.core, ux.recipe-engine]
+  implementation: >-
+    A recipe generates a matte source (gradient, shape or noise) with keyframed transforms or parameters and links it to
+    the target as a track matte. Simplified controls write to the generated properties through the recipe-override
+    mechanism (proj.recipe-override).
+  io: >-
+    None beyond the generated layers.
+  limitations: >-
+    Region-following sweeps rely on map.region geometry. A sweep on a non-planar 3D surface follows UV space, not world
+    space, unless a 3D reveal is used.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Soft reveal": pick a direction and duration, and the new look sweeps across the selection.
+    defaults: >-
+      Left-to-right, 2 s, easy-ease, and soft edge at 10% of the target width.
+    automation: >-
+      Builds the matte source, sizes it to the selection's bounds, keys it, and hides it from output.
+    usability_check: >-
+      A first-time user applies a soft reveal to a selected wall in no more than 3 actions and changes its direction in
+      1 more.
+  acceptance: >-
+    Brief §6 acceptance (animated soft reveals), and mini scene "brick-to-glass-sweep".
+  status: not-started
+  evidence: []
+
+- id: mask.shared-matte-source
+  name: Reusable matte sources
+  sources:
+    - ref: S07
+      item: "Use any layer as a track matte (multiple layers can share one matte)"
+      category: "Transparency and compositing"
+      checked: false
+    - ref: "brief §6"
+      item: "reusable matte sources"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Use one matte layer for many target layers at once, so changing the matte changes every reveal together.
+  projection_example: >-
+    One animated "wave" shape reveals separate texture layers on the left wing, centre and right wing in sync.
+  controls:
+    - { name: "Matte source layer", type: "layer-ref", animatable: false }
+    - { name: "Targets using this matte", type: "layer-ref", animatable: false }
+  animation: >-
+    The shared source animates once, and every target follows.
+  dependencies: [mask.track-matte]
+  implementation: >-
+    The matte texture is rendered once per frame and cached in the frame graph. Every referencing layer samples the same
+    texture. The dependency view shows the fan-out.
+  io: >-
+    None.
+  limitations: >-
+    Targets with different transforms see the matte in comp space, not their own layer space. This matches AE.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Use the same reveal for these": select several layers and choose an existing reveal.
+    defaults: >-
+      Same matte type and inversion as the first target.
+    automation: >-
+      Links all selected layers in one op and draws link badges on the timeline.
+    usability_check: >-
+      A novice applies one reveal to 3 layers in no more than 3 actions, then edits the reveal once and sees all 3 change.
+  acceptance: >-
+    Mini scene "shared-wave": 3 targets share one matte; render time scales sublinearly, and the output matches per-layer
+    mattes.
+  status: not-started
+  evidence: []
+
+- id: mask.preserve-transparency
+  name: Preserve underlying transparency
+  sources:
+    - ref: S33
+      item: "Preserve Underlying Transparency"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Make a layer draw only where the layers beneath it already have content, so it paints onto existing shapes without
+    a separate matte.
+  projection_example: >-
+    Sweep a light streak over a set of window shapes; the streak appears only on the windows, not in the gaps.
+  controls:
+    - { name: "Preserve underlying transparency", type: "bool", animatable: false }
+  animation: >-
+    Not animatable. The layer's own content animates normally.
+  dependencies: [proj.layer, mask.blend-modes]
+  implementation: >-
+    In the composite pass the layer's contribution is multiplied by the accumulated alpha below it, before blending.
+    The accumulated alpha is unchanged.
+  io: >-
+    None.
+  limitations: >-
+    Depends on stack order within one comp. Inside a nested comp it refers only to layers in that comp.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Only on what's below", a toggle in the layer's More controls. The "Light sweep across shapes" recipe also uses it.
+    defaults: >-
+      Off.
+    automation: >-
+      Recipes that overlay highlights on existing artwork set it automatically.
+    usability_check: >-
+      A novice limits a light sweep to existing shapes in 1 toggle after reading only the toggle's tooltip.
+  acceptance: >-
+    Mini scene "sweep-on-shapes": output alpha equals the underlying alpha exactly (pixel test).
+  status: not-started
+  evidence: []
+
+- id: mask.stencil-silhouette
+  name: Stencil and silhouette modes
+  sources:
+    - ref: S33
+      item: "Stencil Alpha, Stencil Luma, Silhouette Alpha, Silhouette Luma"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Use a layer to cut through all layers beneath it: a stencil keeps everything below only inside the layer, and a
+    silhouette punches it out.
+  projection_example: >-
+    A large logo stencil cuts every layer below it, so the entire show appears only within the logo shape.
+  controls:
+    - { name: "Mode", type: "enum(stencil-alpha|stencil-luma|silhouette-alpha|silhouette-luma)", animatable: false }
+  animation: >-
+    The stencil layer's transforms, masks and effects animate. The mode is static.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    A WGSL composite variant multiplies the accumulated comp buffer by the layer's alpha or luma (stencil) or by its
+    complement (silhouette). The layer's own color is not drawn.
+  io: >-
+    None.
+  limitations: >-
+    Affects all layers below within the same comp. To limit scope, precompose the affected layers.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Cut everything below to this shape", or "Punch a hole through everything below".
+    defaults: >-
+      Alpha-based.
+    automation: >-
+      Offers to group affected layers into a precomp when the user wants the cut to apply to only some layers.
+    usability_check: >-
+      A novice confines a whole scene to a logo shape in under 45 s and no more than 2 actions.
+  acceptance: >-
+    Mini scene "logo-stencil": all four modes match reference renders.
+  status: not-started
+  evidence: []
+
+- id: mask.blend-modes
+  name: Blend modes (framework and Normal)
+  sources:
+    - ref: S33
+      item: "Blending modes (Normal category: Normal)"
+      category: "Blending modes and layer styles"
+      checked: false
+    - ref: "brief §6"
+      item: "compositing blend modes"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Choose how each layer's colors combine with the layers below it. Normal is the default, and the other families are
+    listed by outcome.
+  projection_example: >-
+    Set a light-sweep layer to a lighten-family mode so it brightens the texture below instead of covering it.
+  controls:
+    - { name: "Blend mode", type: "enum(normal|dissolve|dancing-dissolve|darken|multiply|color-burn|classic-color-burn|linear-burn|darker-color|add|lighten|screen|color-dodge|classic-color-dodge|linear-dodge|lighter-color|overlay|soft-light|hard-light|linear-light|vivid-light|pin-light|hard-mix|difference|classic-difference|exclusion|subtract|divide|hue|saturation|color|luminosity|stencil-alpha|stencil-luma|silhouette-alpha|silhouette-luma|alpha-add|luminescent-premul)", animatable: false }
+    - { name: "Layer opacity", type: "percent", animatable: true }
+  animation: >-
+    Blend mode is not keyframable (as in AE). Opacity is. Mode changes over time are achieved with duplicated layers or
+    crossfades.
+  dependencies: [proj.layer, ux.operation-system]
+  implementation: >-
+    A programmable WGSL composite shader (not fixed-function blending) reads the accumulated premultiplied rgba16float
+    comp buffer and the layer texture, un-premultiplies where the formula needs it, applies the mode, and re-premultiplies.
+    Separable modes use the W3C compositing formulas; AE-specific "classic" variants are separate code paths.
+  io: >-
+    Saved per layer. Exported flattened.
+  limitations: >-
+    Results depend on the blending colour space (mask.blend-color-space). Pixel parity with AE is verified per mode
+    against reference renders, not assumed.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "How it mixes" picker with live thumbnails grouped as Cover, Brighten, Darken, Contrast, Difference, Color and Cut.
+      Mode names appear as secondary labels.
+    defaults: >-
+      Normal. Light-type recipes default to a Brighten mode.
+    automation: >-
+      Recipes set the mode their look requires. Hovering a thumbnail previews the mode on the canvas.
+    usability_check: >-
+      A novice finds a mode that makes a light sweep brighten the wall in under 30 s, using only hover previews.
+  acceptance: >-
+    Mini scene "blend-chart": all modes over a standard gradient and photo pair match reference images within
+    tolerance, in both preview and export.
+  status: not-started
+  evidence: []
+
+- id: mask.blend.darken
+  name: Darken blend modes
+  sources:
+    - ref: S33
+      item: "Darken, Multiply, Color Burn, Classic Color Burn, Linear Burn, Darker Color"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Darken the layers below. Multiply shades like ink, the burn modes deepen and saturate shadows, and Darker Color keeps
+    the darker pixel.
+  projection_example: >-
+    Multiply a grime and crack texture over the facade so cracks appear darker without hiding the projected base color.
+  controls:
+    - { name: "Mode", type: "enum(darken|multiply|color-burn|classic-color-burn|linear-burn|darker-color)", animatable: false }
+  animation: >-
+    Not animatable. Animate opacity.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    Per-mode WGSL formulas in the composite shader. Classic Color Burn reproduces the legacy AE formula. Linear Burn
+    clamps at 0. Darker Color compares luma.
+  io: >-
+    None.
+  limitations: >-
+    On a projector, darkening is limited by surface reflectance and ambient light. Multiply cannot make a lit wall
+    darker than its unlit state.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      "Darken" group in the "How it mixes" picker, with a "Shade it" recipe for cracks and grime.
+    defaults: >-
+      Multiply when picked from the group.
+    automation: >-
+      Crack and grime recipes choose Multiply or Linear Burn.
+    usability_check: >-
+      A novice darkens a texture into the wall with 2 clicks in the picker.
+  acceptance: >-
+    Mini scene "blend-chart" (darken group).
+  status: not-started
+  evidence: []
+
+- id: mask.blend.lighten
+  name: Lighten (additive) blend modes
+  sources:
+    - ref: S33
+      item: "Add, Lighten, Screen, Color Dodge, Classic Color Dodge, Linear Dodge, Lighter Color"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Brighten the layers below. Add and Screen layer light on light, the dodge modes intensify highlights, and Lighten or
+    Lighter Color keep the brighter pixel.
+  projection_example: >-
+    Add a glowing traced outline over the architecture so overlapping light lines get brighter where they cross.
+  controls:
+    - { name: "Mode", type: "enum(add|lighten|screen|color-dodge|classic-color-dodge|linear-dodge|lighter-color)", animatable: false }
+  animation: >-
+    Not animatable. Animate opacity or the layer's intensity.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    Per-mode WGSL formulas. Add works on scene-linear premultiplied values without clamping, so HDR highlights survive
+    until the display or output transform. Screen is defined on 0–1 values and is clamped in its formula.
+  io: >-
+    Unclamped additive values may exceed 1.0. Delivery encodes tone-map or clip them per color.management.
+  limitations: >-
+    Additive light looks different in linear and gamma blending. The default (linear) is closer to physical light
+    addition on a projected surface.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      "Brighten" group in the picker. Applied automatically by the "Trace with light" and "Make it glow" recipes.
+    defaults: >-
+      Add for light recipes; Screen when picked manually from the group.
+    automation: >-
+      Light-type recipes set Add and adjust intensity so the default result does not clip.
+    usability_check: >-
+      In the B guided path, a novice produces a glowing trace that brightens (not covers) the wall without ever seeing a
+      blend-mode control.
+  acceptance: >-
+    AS-1: traced light lines over a texture brighten additively. The export shows no clipping banding at the default
+    intensity.
+  status: not-started
+  evidence: []
+
+- id: mask.blend.contrast
+  name: Contrast blend modes
+  sources:
+    - ref: S33
+      item: "Overlay, Soft Light, Hard Light, Linear Light, Vivid Light, Pin Light, Hard Mix"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Increase contrast against the layers below, lightening where the layer is light and darkening where it is dark.
+    This suits texture overlays and punchy looks.
+  projection_example: >-
+    Overlay a metal texture on a projected base so the facade reads as burnished copper while keeping its shading.
+  controls:
+    - { name: "Mode", type: "enum(overlay|soft-light|hard-light|linear-light|vivid-light|pin-light|hard-mix)", animatable: false }
+  animation: >-
+    Not animatable. Animate opacity.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    Per-mode WGSL formulas. Soft Light uses the AE/Photoshop variant, which is tested against references. Hard Mix
+    thresholds per channel.
+  io: >-
+    None.
+  limitations: >-
+    These formulas assume 0–1 values. HDR inputs are clamped in the formula, and this is documented per mode.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Contrast" group in the picker. Material recipes such as "Turn it to metal" apply it automatically.
+    defaults: >-
+      Overlay when picked from the group.
+    automation: >-
+      Material recipes choose Overlay or Soft Light and set opacity for a balanced look.
+    usability_check: >-
+      A novice applies a texture overlay that keeps the wall's shading in 2 clicks.
+  acceptance: >-
+    Mini scene "blend-chart" (contrast group).
+  status: not-started
+  evidence: []
+
+- id: mask.blend.difference
+  name: Difference blend modes
+  sources:
+    - ref: S33
+      item: "Difference, Classic Difference, Exclusion, Subtract, Divide"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Combine layers by subtracting or dividing colors. This gives inverted, psychedelic or alignment-check looks.
+  projection_example: >-
+    Use Difference to flash an inverted copy of the facade texture on the beat, or to check that two layers line up.
+  controls:
+    - { name: "Mode", type: "enum(difference|classic-difference|exclusion|subtract|divide)", animatable: false }
+  animation: >-
+    Not animatable. Animate opacity.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    Per-mode WGSL formulas. Divide guards division by zero. Subtract clamps at 0. The classic variant is kept for
+    look parity.
+  io: >-
+    None.
+  limitations: >-
+    Subtract and Divide on HDR values can produce extreme results. The preview flags out-of-range pixels with the
+    clipping diagnostic.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Difference" group in the picker. The "Flash inverted" recipe uses it.
+    defaults: >-
+      Difference when picked from the group.
+    automation: >-
+      Beat-driven flash recipes key the opacity to audio.analysis onsets.
+    usability_check: >-
+      A novice creates an inverted flash on a beat in under 2 minutes using the recipe.
+  acceptance: >-
+    Mini scene "blend-chart" (difference group).
+  status: not-started
+  evidence: []
+
+- id: mask.blend.component
+  name: Hue, saturation, color and luminosity blend modes
+  sources:
+    - ref: S33
+      item: "Hue, Saturation, Color, Luminosity"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Take only one component (hue, saturation, color or brightness) from the layer and combine it with the rest of the
+    layers below.
+  projection_example: >-
+    Recolor the whole projected facade by laying a slowly shifting color layer in Color mode over it, keeping all
+    brightness detail.
+  controls:
+    - { name: "Mode", type: "enum(hue|saturation|color|luminosity)", animatable: false }
+  animation: >-
+    Not animatable. Animate the layer's color or opacity.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    WGSL non-separable blend functions (SetLum/SetSat from the W3C spec), computed on display-referred values when
+    gamma blending is on and on linear values otherwise.
+  io: >-
+    None.
+  limitations: >-
+    Hue and saturation are poorly defined for HDR and near-black values. Results there are clamped.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Recolor everything below", available in the "Color" group of the picker and as a recipe.
+    defaults: >-
+      Color mode.
+    automation: >-
+      The recolor recipe creates the solid, sets Color mode, and exposes a hue slider.
+    usability_check: >-
+      A novice recolors a scene while keeping its detail in no more than 3 actions.
+  acceptance: >-
+    Mini scene "blend-chart" (component group).
+  status: not-started
+  evidence: []
+
+- id: mask.blend.dissolve
+  name: Dissolve and Dancing Dissolve
+  sources:
+    - ref: S33
+      item: "Dissolve, Dancing Dissolve"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Turn partial transparency into a random scatter of fully opaque pixels, either static (Dissolve) or changing every
+    frame (Dancing Dissolve).
+  projection_example: >-
+    Make a fading layer break up into glittering pixel dust as it disappears from a wall.
+  controls:
+    - { name: "Mode", type: "enum(dissolve|dancing-dissolve)", animatable: false }
+    - { name: "Seed", type: "seed", animatable: false }
+  animation: >-
+    Driven by layer opacity and feathered edges. Dancing Dissolve re-randomizes per frame.
+  dependencies: [mask.blend-modes, expr.stable-random]
+  implementation: >-
+    A WGSL hash-based threshold per pixel. The hash is seeded from the layer ID and seed, plus the frame index for
+    Dancing Dissolve, so preview and export match exactly.
+  io: >-
+    None.
+  limitations: >-
+    Pixel-scale noise can alias or shimmer once projection-mapped and resampled. The scatter scale is defined in comp
+    pixels, not projector pixels.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Dissolve into dust" transition recipe → More controls.
+    defaults: >-
+      Dancing Dissolve with a seed derived from the layer.
+    automation: >-
+      The recipe animates opacity and feather so the dissolve runs over the chosen duration.
+    usability_check: >-
+      A novice applies a dust dissolve to a layer in no more than 3 actions.
+  acceptance: >-
+    AS-3 reproducibility: identical pixels for the same frame after reopen, seek and export.
+  status: not-started
+  evidence: []
+
+- id: mask.blend.utility
+  name: Alpha Add and Luminescent Premul
+  sources:
+    - ref: S33
+      item: "Alpha Add, Luminescent Premul"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Join adjacent alpha-edged layers without a visible seam (Alpha Add). Composite premultiplied light effects without
+    losing values above white (Luminescent Premul).
+  projection_example: >-
+    Seamlessly join two halves of a cracked-wall layer split along the same edge, so no faint line shows when they meet.
+  controls:
+    - { name: "Mode", type: "enum(alpha-add|luminescent-premul)", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [mask.blend-modes]
+  implementation: >-
+    Alpha Add adds the alpha channels directly (clamped) and composites color normally. Luminescent Premul adds the
+    premultiplied color without dividing by alpha, which is natural in the premultiplied linear pipeline.
+  io: >-
+    None.
+  limitations: >-
+    Mainly a fix-up tool. Most seam problems are better solved by correct alpha interpretation.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Applied automatically by the fragment and split recipes. In advanced tools it appears under "Cut" in the picker.
+    defaults: >-
+      Alpha Add on generated adjoining fragments.
+    automation: >-
+      Fragment recipes set Alpha Add on pieces that share edges, so seams never appear.
+    usability_check: >-
+      In the "Crack and rebuild" recipe, novices observe no seam lines; 0 of 5 testers report seams.
+  acceptance: >-
+    AS-3: reassembled fragments show no seam in the exported frames (pixel test along the shared edges).
+  status: not-started
+  evidence: []
+
+- id: mask.blend-color-space
+  name: Blending color space (linear versus gamma)
+  sources:
+    - ref: S33
+      item: "Blend colors using 1.0 gamma (project setting)"
+      category: "Blending modes and layer styles"
+      checked: false
+    - ref: "brief §14"
+      item: "linear-light compositing where appropriate"
+      category: "Color precision and image quality"
+      checked: true
+  artist_can: >-
+    Choose whether layers blend in linear light, which is physically natural for light-on-light, or in display gamma,
+    which matches the classic AE and Photoshop look. Overrides can be set per comp.
+  projection_example: >-
+    Keep linear blending for glowing light traces, but switch a graphic poster-style comp to gamma blending so its
+    multiply textures look as designed in Photoshop.
+  controls:
+    - { name: "Blending space", type: "enum(linear|gamma-encoded)", animatable: false }
+    - { name: "Per-comp override", type: "bool", animatable: false }
+  animation: >-
+    Not animatable.
+  dependencies: [mask.blend-modes, color.management]
+  implementation: >-
+    The compositor keeps buffers scene-linear. In gamma mode the blend shader encodes both inputs to the working
+    display-referred curve, blends, then decodes. This applies equally to mattes (luma) and to blend modes.
+  io: >-
+    Saved per project and per comp. Recorded in render manifests so exports are reproducible.
+  limitations: >-
+    The two settings give visibly different results for the same project. Switching is a creative change and is
+    flagged as such, not a transparent one.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      Hidden from the common workflow. In comp settings → More: "Mix like light (recommended)" or "Mix like paint
+      (Photoshop look)".
+    defaults: >-
+      Linear (mix like light) for new projects. Gamma for comps created from imported layered PSD/AI files.
+    automation: >-
+      Chooses gamma for imported layered designs, so they match their source app, and shows a note explaining why.
+    usability_check: >-
+      Novices never need to touch it in the common journeys; 0 of 5 testers encounter it unprompted.
+  acceptance: >-
+    Mini scene "blend-chart" rendered in both spaces matches the reference set for each space.
+  status: not-started
+  evidence: []
+
+- id: mask.layer-styles
+  name: Layer styles (framework)
+  sources:
+    - ref: S33
+      item: "Layer styles (add, copy/paste, Convert to Editable Styles from Photoshop)"
+      category: "Blending modes and layer styles"
+      checked: false
+    - ref: "brief §6"
+      item: "shadow, glow, stroke, bevel, and overlay-style layer treatments"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Add editable shadow, glow, bevel, satin, overlay and stroke treatments to a layer's outline. They stay live as the
+    layer animates and can be copied between layers.
+  projection_example: >-
+    Give a projected logo a soft outer glow and a thin stroke that follow it as it flies across the facade.
+  controls:
+    - { name: "Enabled styles", type: "enum(drop-shadow|inner-shadow|outer-glow|inner-glow|bevel-emboss|satin|color-overlay|gradient-overlay|stroke)", animatable: false }
+    - { name: "Style on/off", type: "bool", animatable: false }
+    - { name: "Copy / paste styles", type: "action", animatable: false }
+  animation: >-
+    Every numeric and color parameter of every style is keyframable and expression-linkable.
+  dependencies: [proj.layer, proj.effect-stack, mask.blend-modes]
+  implementation: >-
+    Styles are a fixed-order WGSL pass graph after the layer's effects and transform: shadows and outer glow below the
+    fill, then fill with overlays, then inner effects and bevel, then stroke. Shared jump-flood distance fields of the
+    layer alpha feed every style. Bounds expand by the largest size, spread or distance declared.
+  io: >-
+    Imported PSD layer styles map to equivalent styles (proj.layered-file-import). Exports are flattened.
+  limitations: >-
+    Contour curves, texture and pattern overlays from Photoshop are not supported initially; unmapped attributes are
+    reported on import. AE parity on 3D layers needs a defined rule (styles render in layer space before 3D projection).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Make it glow", "Add a shadow", "Outline it", "Give it depth": one-click treatments with live preview on the
+      selected layer.
+    defaults: >-
+      Sizes scale with the layer's on-screen size, so a treatment looks right on both small and large regions.
+    automation: >-
+      Adds the style, sets proportional sizes, and picks colors that contrast with the layer.
+    usability_check: >-
+      A first-time user adds a glow and an outline to a logo in no more than 3 actions each.
+  acceptance: >-
+    AS-1 (glow on traces) and mini scene "style-stack": all 9 styles on an animated logo render identically in preview
+    and export.
+  status: not-started
+  evidence: []
+
+- id: mask.style.drop-shadow
+  name: Drop shadow style
+  sources:
+    - ref: S33
+      item: "Drop Shadow"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Cast a soft, offset shadow from the layer's outline onto the layers behind it, with control over angle, distance,
+    spread and size.
+  projection_example: >-
+    Give flat letters a shadow on the wall so they seem to float a few centimetres off the facade.
+  controls:
+    - { name: "Blend mode", type: "enum(normal|multiply|linear-burn|darken)", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Use global light", type: "bool", animatable: false }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Distance", type: "float", animatable: true }
+    - { name: "Spread", type: "percent", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Noise", type: "percent", animatable: true }
+    - { name: "Layer knocks out drop shadow", type: "bool", animatable: false }
+  animation: >-
+    All numeric and color controls are keyframable. Angle follows Global Light when linked.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    The alpha distance field is offset by the angle and distance, thresholded by spread, and blurred by size (separable
+    Gaussian). It is composited beneath the layer with the chosen mode, and knockout multiplies by (1 − layer alpha).
+  io: >-
+    Maps from PSD Drop Shadow.
+  limitations: >-
+    This is a 2D illusion. Physically consistent shadows from a 3D light are handled by 3d.light.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Add a shadow", with a drag handle on the canvas to set angle and distance.
+    defaults: >-
+      Black at 60% opacity, angle from Global Light (120°), and distance and size at 2% of the layer height.
+    automation: >-
+      When an audience viewpoint and venue light direction are known, offers a matching angle.
+    usability_check: >-
+      A novice adds a shadow and sets its direction by dragging, in under 30 s.
+  acceptance: >-
+    Mini scene "style-stack": the drop shadow matches a reference at 3 angle/size combinations.
+  status: not-started
+  evidence: []
+
+- id: mask.style.inner-shadow
+  name: Inner shadow style
+  sources:
+    - ref: S33
+      item: "Inner Shadow"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Shade the inside edge of a layer as if it were cut into the surface, with angle, distance, choke and size.
+  projection_example: >-
+    Make projected panels look recessed into the wall by shading their inner top edges.
+  controls:
+    - { name: "Blend mode", type: "enum(normal|multiply|linear-burn|darken)", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Use global light", type: "bool", animatable: false }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Distance", type: "float", animatable: true }
+    - { name: "Choke", type: "percent", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Noise", type: "percent", animatable: true }
+  animation: >-
+    All numeric and color controls are keyframable.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    Uses the inverted alpha distance field, offset and blurred, then clipped to the layer alpha. It composites above the
+    fill.
+  io: >-
+    Maps from PSD Inner Shadow.
+  limitations: >-
+    This is a 2D illusion only.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Give it depth" → "Pressed in".
+    defaults: >-
+      Black at 50% opacity, Global Light angle, and size at 2% of the layer height.
+    automation: >-
+      The "Pressed in" preset pairs an inner shadow with a subtle bevel.
+    usability_check: >-
+      A novice makes a panel look recessed in no more than 2 actions.
+  acceptance: >-
+    Mini scene "style-stack": the inner shadow matches the reference.
+  status: not-started
+  evidence: []
+
+- id: mask.style.outer-glow
+  name: Outer glow style
+  sources:
+    - ref: S33
+      item: "Outer Glow"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Surround the layer's outline with a solid or gradient glow, with control over spread, size, range and jitter.
+  projection_example: >-
+    Make projected neon window frames bloom softly into the surrounding stone.
+  controls:
+    - { name: "Blend mode", type: "enum(screen|add|normal|lighten)", animatable: false }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Noise", type: "percent", animatable: true }
+    - { name: "Color type", type: "enum(color|gradient)", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Gradient", type: "gradient", animatable: true }
+    - { name: "Technique", type: "enum(softer|precise)", animatable: false }
+    - { name: "Spread", type: "percent", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Range", type: "percent", animatable: true }
+    - { name: "Jitter", type: "percent", animatable: true }
+  animation: >-
+    All numeric and color controls are keyframable. Size and opacity are common audio-drive targets (audio.to-keyframes).
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    The outside distance field is mapped through the range into a gradient lookup. Softer uses a blurred falloff and
+    Precise uses the exact distance. It composites below the fill with Screen or Add in linear light.
+  io: >-
+    Maps from PSD Outer Glow.
+  limitations: >-
+    For bloom-style glows from bright pixels inside the image (not the outline), use fx.stylize.glow. Glow that spills
+    onto areas the output mask blocks is still blocked (mask.creative-vs-output).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Make it glow", with size and color shown first.
+    defaults: >-
+      Layer's dominant color, Screen at 75% opacity, softer technique, and size at 3% of the layer height.
+    automation: >-
+      Picks the glow color from the layer's dominant hue and caps the size so the glow stays inside the comp bounds.
+    usability_check: >-
+      A first-time user makes a traced outline glow in 1 action and resizes the glow in 1 drag.
+  acceptance: >-
+    AS-1: traced window outlines with outer glow export with no banding in 10-bit output.
+  status: not-started
+  evidence: []
+
+- id: mask.style.inner-glow
+  name: Inner glow style
+  sources:
+    - ref: S33
+      item: "Inner Glow"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Glow inward from the layer's edges, or outward from its centre, with solid or gradient color.
+  projection_example: >-
+    Make projected glass panes look lit from within, brighter at their edges.
+  controls:
+    - { name: "Blend mode", type: "enum(screen|add|normal|lighten)", animatable: false }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Noise", type: "percent", animatable: true }
+    - { name: "Color type", type: "enum(color|gradient)", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Gradient", type: "gradient", animatable: true }
+    - { name: "Technique", type: "enum(softer|precise)", animatable: false }
+    - { name: "Source", type: "enum(edge|center)", animatable: false }
+    - { name: "Choke", type: "percent", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Range", type: "percent", animatable: true }
+    - { name: "Jitter", type: "percent", animatable: true }
+  animation: >-
+    All numeric and color controls are keyframable.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    The inside distance field (from the edge, or inverted for centre) is mapped through the range into the gradient,
+    clipped to the layer alpha, and composited above the fill.
+  io: >-
+    Maps from PSD Inner Glow.
+  limitations: >-
+    None beyond those of the framework.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      Reached through "Make it glow" → "Glow inside".
+    defaults: >-
+      Edge source, Screen at 75%, and size at 3% of the layer height.
+    automation: >-
+      Picks a color from the layer, as the outer glow does.
+    usability_check: >-
+      A novice switches a glow from outside to inside with 1 click.
+  acceptance: >-
+    Mini scene "style-stack": the inner glow matches the reference.
+  status: not-started
+  evidence: []
+
+- id: mask.style.bevel-emboss
+  name: Bevel and emboss style
+  sources:
+    - ref: S33
+      item: "Bevel and Emboss"
+      category: "Blending modes and layer styles"
+      checked: false
+    - ref: "brief §6"
+      item: "bevel ... layer treatments"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Make a flat layer look raised or carved, using lit and shaded bevelled edges in several styles.
+  projection_example: >-
+    Make flat projected stone blocks look chiselled and raised before they appear to fall out of the wall.
+  controls:
+    - { name: "Style", type: "enum(outer-bevel|inner-bevel|emboss|pillow-emboss|stroke-emboss)", animatable: false }
+    - { name: "Technique", type: "enum(smooth|chisel-hard|chisel-soft)", animatable: false }
+    - { name: "Depth", type: "percent", animatable: true }
+    - { name: "Direction", type: "enum(up|down)", animatable: false }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Soften", type: "float", animatable: true }
+    - { name: "Use global light", type: "bool", animatable: false }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Altitude", type: "angle", animatable: true }
+    - { name: "Highlight mode / color / opacity", type: "color", animatable: true }
+    - { name: "Shadow mode / color / opacity", type: "color", animatable: true }
+  animation: >-
+    All numeric and color controls are keyframable. Animating the angle gives a moving-light sheen.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    A height field is derived from the alpha distance field according to style and technique (smooth = blurred, chisel
+    = linear distance). Normals come from the height gradient and are shaded with a directional light (angle and
+    altitude), giving highlight and shadow layers composited with their modes.
+  io: >-
+    Maps from PSD Bevel and Emboss, without contour or texture sub-options.
+  limitations: >-
+    This is an image-space illusion. True dimensional bevels on text and shapes use 3d.extrude (text.extrusion).
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Give it depth" → Raised / Carved.
+    defaults: >-
+      Inner bevel, smooth, 100% depth, size at 2% of the layer height, and Global Light 120° at 30° altitude.
+    automation: >-
+      Matches the light angle to the venue's chosen virtual light direction when one is set.
+    usability_check: >-
+      A novice makes a panel look raised in 1 action and switches to carved in 1 more.
+  acceptance: >-
+    Mini scene "style-stack": all 5 styles match references; AS-3 bevelled blocks render consistently after reopen.
+  status: not-started
+  evidence: []
+
+- id: mask.style.satin
+  name: Satin style
+  sources:
+    - ref: S33
+      item: "Satin"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Add soft internal shading that follows the layer's shape, giving a silky or liquid sheen.
+  projection_example: >-
+    Give projected ribbon-like shapes a liquid-metal sheen that shifts as their angle animates.
+  controls:
+    - { name: "Blend mode", type: "enum(multiply|screen|normal|overlay)", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Distance", type: "float", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Invert", type: "bool", animatable: false }
+  animation: >-
+    Angle, distance, size, color and opacity are keyframable.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    Two copies of the blurred alpha, offset in opposite directions by angle and distance, are differenced, clipped to
+    the layer alpha, and composited with the mode.
+  io: >-
+    Maps from PSD Satin, without contour.
+  limitations: >-
+    Contour shaping from Photoshop is not supported.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: D
+  beginner:
+    action: >-
+      Reached through the "Turn it to liquid metal" recipe → More controls.
+    defaults: >-
+      Multiply at 50%, angle 19°, and distance and size at 3% of the layer height.
+    automation: >-
+      The recipe animates the angle slowly for a living sheen.
+    usability_check: >-
+      A novice applies the liquid-metal look in no more than 3 actions.
+  acceptance: >-
+    Mini scene "style-stack": the satin style matches the reference.
+  status: not-started
+  evidence: []
+
+- id: mask.style.color-overlay
+  name: Color overlay style
+  sources:
+    - ref: S33
+      item: "Color Overlay"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Fill the layer's visible area with a single color using a chosen blend mode and opacity, without editing its source.
+  projection_example: >-
+    Turn every window silhouette pure white for a flash-on-the-beat moment, then back to its texture.
+  controls:
+    - { name: "Blend mode", type: "enum(normal|multiply|screen|overlay|color)", animatable: false }
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+  animation: >-
+    Color and opacity are keyframable, which suits beat-driven flashes.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    Composites a constant color clipped to the layer alpha onto the fill, using the selected mode.
+  io: >-
+    Maps from PSD Color Overlay.
+  limitations: >-
+    None beyond those of the framework.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Tint it / Flash a color".
+    defaults: >-
+      White, Normal mode, 100% opacity, toggled off at rest.
+    automation: >-
+      Flash recipes key the opacity to beat markers (audio.analysis).
+    usability_check: >-
+      A novice makes shapes flash white on 4 beats in under 2 minutes using the recipe.
+  acceptance: >-
+    Mini scene "beat-flash": overlay flashes land on the same frames in preview and export.
+  status: not-started
+  evidence: []
+
+- id: mask.style.gradient-overlay
+  name: Gradient overlay style
+  sources:
+    - ref: S33
+      item: "Gradient Overlay"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Fill the layer's visible area with a linear, radial, angle, reflected or diamond gradient that can be rotated,
+    scaled and offset.
+  projection_example: >-
+    Wash projected letters with a sunset gradient whose angle slowly turns over the course of the song.
+  controls:
+    - { name: "Blend mode", type: "enum(normal|multiply|screen|overlay|color)", animatable: false }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Colors", type: "gradient", animatable: true }
+    - { name: "Gradient smoothness", type: "percent", animatable: true }
+    - { name: "Angle", type: "angle", animatable: true }
+    - { name: "Style", type: "enum(linear|radial|angle|reflected|diamond)", animatable: false }
+    - { name: "Reverse", type: "bool", animatable: false }
+    - { name: "Align with layer", type: "bool", animatable: false }
+    - { name: "Scale", type: "percent", animatable: true }
+    - { name: "Offset", type: "point2d", animatable: true }
+  animation: >-
+    Colors, angle, scale, offset and opacity are keyframable.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    A WGSL gradient evaluator shared with shape.gradient-fill, interpolating in linear light with optional dithering to
+    avoid banding. The result is clipped to the layer alpha.
+  io: >-
+    Maps from PSD Gradient Overlay.
+  limitations: >-
+    Gradient interpolation in linear light can look different from Photoshop's gamma interpolation. A per-gradient
+    "perceptual" option preserves the designed look.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Color it with a gradient", with on-canvas handles for direction.
+    defaults: >-
+      Two colors sampled from the project palette, linear style, aligned with the layer.
+    automation: >-
+      Adds dithering automatically when the output is 8-bit.
+    usability_check: >-
+      A novice applies and rotates a gradient on text in under 45 s.
+  acceptance: >-
+    Mini scene "style-stack": the gradient overlay shows no visible banding in 8-bit H.264 export.
+  status: not-started
+  evidence: []
+
+- id: mask.style.stroke
+  name: Stroke style
+  sources:
+    - ref: S33
+      item: "Stroke"
+      category: "Blending modes and layer styles"
+      checked: false
+    - ref: "brief §6"
+      item: "stroke ... layer treatments"
+      category: "Masks, mattes, compositing and layer styles"
+      checked: true
+  artist_can: >-
+    Outline the layer's visible shape (of any layer type, including video with alpha) with a colored stroke placed
+    outside, inside or centred on the edge.
+  projection_example: >-
+    Outline a keyed performer composite with a thin bright line so they read clearly against the busy facade.
+  controls:
+    - { name: "Color", type: "color", animatable: true }
+    - { name: "Size", type: "float", animatable: true }
+    - { name: "Opacity", type: "percent", animatable: true }
+    - { name: "Position", type: "enum(outside|inside|center)", animatable: false }
+    - { name: "Blend mode", type: "enum(normal|screen|add|multiply)", animatable: false }
+  animation: >-
+    Color, size and opacity are keyframable.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    Thresholds the signed alpha distance field at the stroke band ([0, size] outside, [−size, 0] inside, or centred).
+    It is antialiased from the SDF gradient and composited on top of the other styles.
+  io: >-
+    Maps from PSD Stroke (color fill type only).
+  limitations: >-
+    Gradient and pattern stroke fills from Photoshop are not mapped. Vector strokes on shapes use shape.stroke and stay
+    sharper at large scale.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: C
+  beginner:
+    action: >-
+      "Outline it".
+    defaults: >-
+      White, outside, size at 1% of the layer height.
+    automation: >-
+      Suggests shape.stroke instead when the layer is already a vector shape, for sharper results.
+    usability_check: >-
+      A novice outlines a keyed figure in 1 action and changes the outline color in 1 more.
+  acceptance: >-
+    AS-4: a stroked keyed composite shows no gaps or fringes along the edge.
+  status: not-started
+  evidence: []
+
+- id: mask.style.blending-options
+  name: Layer style blending options
+  sources:
+    - ref: S33
+      item: "Blending Options (Global Light Angle/Altitude, Advanced Blending: Fill Opacity, Knockout, Blend Interior Styles as Group, Use Blend Ranges from Source)"
+      category: "Blending modes and layer styles"
+      checked: false
+  artist_can: >-
+    Fade the layer's own fill while keeping its styles. Set a comp-wide light angle that every shadow and bevel shares.
+    Control how interior styles group and knock out.
+  projection_example: >-
+    Make letters invisible except for their glowing outline and bevel (Fill Opacity 0%), with all shadows sharing one
+    light direction.
+  controls:
+    - { name: "Global light angle", type: "angle", animatable: true }
+    - { name: "Global light altitude", type: "angle", animatable: true }
+    - { name: "Fill opacity", type: "percent", animatable: true }
+    - { name: "Red / green / blue channels", type: "bool", animatable: false }
+    - { name: "Knockout", type: "enum(none|shallow|deep)", animatable: false }
+    - { name: "Blend interior styles as group", type: "bool", animatable: false }
+    - { name: "Use blend ranges from source", type: "bool", animatable: false }
+  animation: >-
+    Global light and fill opacity are keyframable. Global light lives on the comp and drives every style with
+    "use global light" enabled.
+  dependencies: [mask.layer-styles]
+  implementation: >-
+    Global light is a comp-level property read by style passes. Fill opacity scales the layer fill before interior
+    styles. Knockout and channel options alter which accumulated comp buffer the layer composites against, in the
+    style pass graph.
+  io: >-
+    Maps from PSD blending options where an equivalent exists. Unsupported options are reported.
+  limitations: >-
+    Deep knockout across nested comps is limited to the current comp. Blend-If ranges are honoured only when imported
+    with the source.
+  disposition: deferred
+  superseded_by: null
+  exclusion_reason: null
+  deferred_reason: "After Effects layer-style, roto or blend-mode parity detail. Masks, feather, expansion, mattes, region links, Normal/Add/Multiply blending and colour-space blending stay required."
+  milestone: D
+  beginner:
+    action: >-
+      "Outline only" (fill off, style on) in the style card. Global light appears as "Light direction for all shadows".
+    defaults: >-
+      Fill 100%, global light at 120° angle and 30° altitude, knockout none.
+    automation: >-
+      Changing one shadow's angle with "use global light" on updates every linked style, with an on-canvas note.
+    usability_check: >-
+      A novice makes letters show only their glow and outline in 1 toggle, and turns every shadow together with 1 drag.
+  acceptance: >-
+    Mini scene "style-stack": fill-opacity and global-light changes propagate to all styles in preview and export.
+  status: not-started
+  evidence: []
+
+- id: mask.area-holes
+  name: Holes and cut-outs in a building area
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Building-area holes and cutouts"
+      category: "Building areas"
+      checked: true
+  artist_can: >-
+    Cut holes in an area, such as a door in a wall or a window in a panel, so content appears around them but not in
+    them. Holes are drawn like any outline, can be nested, and stay attached to the area.
+  projection_example: >-
+    A brick wall area has holes for six windows. The brick animation fills the wall but not the windows, and each
+    window plays its own water.
+  controls:
+    - { name: "Hole outlines", type: "path list", animatable: false }
+    - { name: "Cut out another area", type: "action", animatable: false }
+    - { name: "Island inside a hole", type: "bool", animatable: false }
+    - { name: "Hole edge feather and expansion", type: "inherit or override", animatable: true }
+  animation: >-
+    Hole outlines may be animated through mask.path-animation. Holes themselves are static area geometry.
+  dependencies: [map.region, mask.bezier, mask.from-region, mask.feather, mask.expansion, shape.merge-paths, tool.region-link]
+  implementation: >-
+    An area outline is an outer path plus hole paths with even-odd fill. Region-linked masks and mattes
+    (mask.from-region, tool.region-link) use the compound path built with Skia path ops, so feather and expansion
+    apply to the hole edges. "Cut out" subtracts another area and keeps a link, so correcting the window outline also
+    corrects the hole. Holes do not change the identity of the area.
+  io: >-
+    Part of the venue package.
+  limitations: >-
+    Holes are creative coverage. Light that must never reach a window is an output safety mask (out.output-mask).
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select an area, then "Add a hole": draw it, or click another area to cut it out.
+    defaults: >-
+      Holes inherit the area's feather and expansion.
+    automation: >-
+      Detects openings drawn inside an area and offers to turn them into holes.
+    usability_check: >-
+      A first-time user cuts a door out of a wall area in under 30 s.
+  acceptance: >-
+    Mini scene "wall-with-windows": one wall area with holes and separate content in the holes; area edit updates
+    both.
+  status: not-started
+  evidence: []
+
+- id: mask.area-defaults
+  name: Per-area feather and expansion defaults
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Per-area feather and expansion defaults"
+      category: "Building areas"
+      checked: true
+  artist_can: >-
+    Set feather (soft edge) and expansion (grow or shrink) once on an area, a group or the whole building. Every use
+    of the area inherits it, and any single use can override it.
+  projection_example: >-
+    All 24 windows pull in 4 mm and soften 6 mm to hide a small calibration error. The tall arched window overrides to
+    8 mm.
+  controls:
+    - { name: "Feather", type: "length", animatable: true }
+    - { name: "Expansion (negative shrinks)", type: "length", animatable: true }
+    - { name: "Falloff", type: "enum(smooth, linear)", animatable: false }
+    - { name: "Scope (area, group, building)", type: "enum", animatable: false }
+  animation: >-
+    Feather and expansion can be keyframed on the use of an area, not on the default.
+  dependencies: [mask.feather, mask.expansion, mask.variable-feather, map.region, map.region-group, ux.override-indicator]
+  implementation: >-
+    The venue region carries defaultMask {feather, expansion, falloff}. Group and building levels cascade. The
+    evaluator resolves the effective value at use time in physical units (metres on the surface) and converts to
+    pixels at the current content resolution, so changing preview resolution does not change the look. Overrides are
+    tracked recipe overrides.
+  io: >-
+    Part of the venue package.
+  limitations: >-
+    Units on curved or sloped surfaces follow the surface scale at the area centroid.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: B
+  beginner:
+    action: >-
+      Select areas, then "Soften edge" and "Grow / shrink" sliders in the area card.
+    defaults: >-
+      Feather 0.5% of the area width, expansion 0.
+    automation: >-
+      Applies the same defaults to new areas in a group and converts units for any preview resolution.
+    usability_check: >-
+      A first-time user softens every window edge in one action.
+  acceptance: >-
+    Mini scene "area-edges": defaults on a group, one override; preview at Half and Quarter look the same.
+  status: not-started
+  evidence: []
+
+- id: mask.area-scene-adjust
+  name: Scene-specific mask adjustment over a shared outline
+  sources:
+    - ref: "brief 2026-10-02 (projection scope)"
+      item: "Scene-specific mask adjustment versus the shared outline"
+      category: "Building areas"
+      checked: true
+  artist_can: >-
+    In one scene, adjust how an area's mask behaves (more feather, grow, shift, nudge a few points) without changing
+    the outline that every other scene uses. "Reset to area" goes back, and "Apply to area" promotes the change to all
+    scenes.
+  projection_example: >-
+    In the finale the glow spills 20 mm past the windows, while the other scenes keep the tight outline.
+  controls:
+    - { name: "Scene feather override", type: "length", animatable: true }
+    - { name: "Scene expansion override", type: "length", animatable: true }
+    - { name: "Scene offset", type: "point2d", animatable: true }
+    - { name: "Point nudges", type: "point list", animatable: false }
+    - { name: "Reset to area / Apply to area", type: "action", animatable: false }
+  animation: >-
+    Overrides may be keyframed in the scene.
+  dependencies: [mask.area-defaults, map.region, tool.region-link, ux.override-indicator, proj.composition]
+  implementation: >-
+    A scene-level override record on the region reference: the region id plus a delta (feather, expansion, offset,
+    point nudges). Evaluation is the shared outline from the venue plus the scene delta, so later outline corrections
+    still reach every scene. "Apply to area" writes the delta into the area as one undoable operation. Overrides use
+    the existing override indicator.
+  io: >-
+    Stored in the scene, not the venue.
+  limitations: >-
+    Nudged points follow the outline only while the point count is unchanged. If the outline is rebuilt, the nudges
+    are flagged for review.
+  disposition: required-equivalent
+  superseded_by: null
+  exclusion_reason: null
+  milestone: C
+  beginner:
+    action: >-
+      In a scene, edit an area's edge and choose "Only in this scene" or "Everywhere".
+    defaults: >-
+      Edits apply to this scene only until promoted.
+    automation: >-
+      Keeps the shared outline untouched and shows the override badge.
+    usability_check: >-
+      A first-time user widens one glow in one scene and sees the other scenes unchanged.
+  acceptance: >-
+    Mini scene "two-scenes-one-outline": scene override, then outline correction reaches both scenes.
+  status: not-started
+  evidence: []
