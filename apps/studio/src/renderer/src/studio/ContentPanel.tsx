@@ -12,6 +12,7 @@ import { COLLAPSE_EFFECT, makeArea3D } from "./actions3d.ts";
 import { addAssetLayer, importMediaFiles } from "./media.ts";
 import { findMissingInFolder, findOne } from "./relink.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
+import { useThumb } from "./thumbs.ts";
 
 const KIND_ICON: Record<string, string> = { image: "🖼", video: "🎞", audio: "♪", font: "A", model: "⬚", lut: "◐" };
 
@@ -23,6 +24,18 @@ const fmt = (a: Asset) => {
   if (a.meta.duration) parts.push(`${(a.meta.duration / 705_600_000).toFixed(1)} s`);
   if (a.analysis) parts.push(`${Math.round(a.analysis.bpm)} BPM`);
   return parts.join(" · ");
+};
+
+/** The file's picture once it's made; the kind's symbol until then (and for sound). */
+const MediaThumb = ({ a }: { a: Asset }) => {
+  const url = useThumb(a);
+  return url ? (
+    <img className="media-thumb" src={url} alt={`${a.name} thumbnail`} draggable={false} />
+  ) : (
+    <span className="media-icon" aria-hidden="true">
+      {KIND_ICON[a.kind] ?? "•"}
+    </span>
+  );
 };
 
 /** An area as a drop target, with what this scene puts in it. */
@@ -153,9 +166,7 @@ export const ContentPanel = () => {
             onDragStart={(e) => setDragPayload(e, { kind: "asset", id: a.id })}
             title={a.kind !== "audio" ? "Drag onto an area" : undefined}
           >
-            <span className="media-icon" aria-hidden="true">
-              {KIND_ICON[a.kind] ?? "•"}
-            </span>
+            <MediaThumb a={a} />
             <span className="media-text">
               <strong>{a.name}</strong>
               <span className={a.missing ? "warn small" : "muted small"}>{a.missing ? "Missing — not found on this computer" : fmt(a)}</span>

@@ -252,7 +252,6 @@ export interface BeApi {
     openPath(path: string): Promise<void>;
     chooseImage(): Promise<{ path: string; dataUrl: string } | null>;
     chooseFiles(kind: "media" | "image" | "audio" | "aep"): Promise<string[]>;
-    /** Copy a file into the project's media folder (original untouched); returns the new path. */
     /** Copy a file into the show's media folder (original untouched). HEIC/HEIF photos are decoded to a PNG working copy. */
     importAsset(src: string, projectId: string): Promise<ImportedAsset>;
     /** The file path of a file dropped from Explorer. */

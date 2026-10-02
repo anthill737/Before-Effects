@@ -304,8 +304,9 @@ html:has(.identify), html:has(.identify) body, html:has(.identify) #root { backg
 
 /* ---- Media & sound ------------------------------------------------------------------------- */
 .media-list { display: grid; gap: 6px; margin: 10px 0; }
-.media-item { display: grid; grid-template-columns: 26px 1fr; gap: 6px 8px; align-items: center; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
+.media-item { display: grid; grid-template-columns: 48px 1fr; gap: 6px 8px; align-items: center; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
 .media-icon { font-size: 18px; text-align: center; }
+.media-thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; background: #000; display: block; }
 .media-text { display: grid; min-width: 0; }
 .media-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .media-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
