@@ -62,9 +62,11 @@ const send = (m: unknown) => process.send?.(m);
 const progress = (stage: string, fraction: number, text: string) => send({ type: "progress", stage, fraction, text });
 
 /** Download progress across all files of a model, reported as one fraction. */
-const downloadProgress = (label: string, base: number, span: number) => {
+const downloadProgress = (label: string, base: number, span: number, downloading: boolean) => {
   const files = new Map<string, { loaded: number; total: number }>();
   return (p: { status: string; file?: string; loaded?: number; total?: number }) => {
+    // Files already on this computer report progress as they load; only downloads show sizes.
+    if (!downloading) return;
     if (p.status !== "progress" || !p.file) return;
     files.set(p.file, { loaded: p.loaded ?? 0, total: p.total ?? 0 });
     const all = [...files.values()].reduce((a, f) => ({ loaded: a.loaded + f.loaded, total: a.total + f.total }), { loaded: 0, total: 0 });
@@ -138,7 +140,7 @@ const run = async (m: RunMessage) => {
   let device: "gpu" | "cpu" = m.device ?? "gpu";
   progress("load", 0.02, missing.length ? "Downloading the detection models" : "Loading the detector");
   const load = async (dev: "gpu" | "cpu") =>
-    pipeline("zero-shot-object-detection", gdino.id, { dtype: gdino.dtype, device: dev === "gpu" ? "dml" : "cpu", progress_callback: downloadProgress("Detector", 0.02, 0.3) as never });
+    pipeline("zero-shot-object-detection", gdino.id, { dtype: gdino.dtype, device: dev === "gpu" ? "dml" : "cpu", progress_callback: downloadProgress("Downloading the detector", 0.02, 0.3, missing.some((x) => x.id === gdino.id)) as never });
   let detector: Awaited<ReturnType<typeof load>>;
   try {
     detector = await load(device);
@@ -160,7 +162,7 @@ const run = async (m: RunMessage) => {
   notes.push(...sel.notes);
 
   progress("load", 0.66, "Loading the outline model");
-  const samProgress = downloadProgress("Outline model", 0.66, 0.04) as never;
+  const samProgress = downloadProgress("Downloading the outline model", 0.66, 0.04, missing.some((x) => x.id === sam.id)) as never;
   const loadSam = async (dev: "gpu" | "cpu") => (await SamModel.from_pretrained(sam.id, { dtype: sam.dtype, device: dev === "gpu" ? "dml" : "cpu", progress_callback: samProgress })) as unknown as SamLike;
   let model: SamLike;
   try {

@@ -211,9 +211,9 @@ await step("accept the rest", async () => {
 
 await step("make the front door swing open", async () => {
   await ed.click(area("Front door"));
-  await ed.waitFor(`!!${byText(".action-bar button", "Swing open (3D)")}`);
+  await ed.waitFor(`!!${byText(".make-move button", "Swing open")}`);
   await sleep(600);
-  await ed.click(byText(".action-bar button", "Swing open (3D)"));
+  await ed.click(byText(".make-move button", "Swing open"));
   await ed.waitFor(`!!${q(".part-editor")}`);
   await sleep(1500);
   return "front door: swings into the house on its hinge";
