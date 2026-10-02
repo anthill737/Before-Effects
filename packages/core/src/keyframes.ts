@@ -97,3 +97,40 @@ export const keyEase = (p: AnimProp, id: string): EasePreset => {
   const inSlow = next?.in === "bezier";
   return outSlow && inSlow ? "ease" : outSlow ? "ease-in" : inSlow ? "ease-out" : "linear";
 };
+
+/**
+ * A custom curve between a keyframe and the next: how far the slow-down reaches when leaving
+ * (`leave`) and when arriving (`arrive`), each 0..1 of the way (0 = no easing on that side).
+ */
+export const setKeyCurve = <V extends PropValue>(p: AnimProp<V>, id: string, leave: number, arrive: number): AnimProp<V> => {
+  const kfs = p.keyframes;
+  if (!kfs) return p;
+  const i = kfs.findIndex((k) => k.id === id);
+  if (i < 0) return p;
+  const e = (v: PropValue, influence: number) => Array.from({ length: dims(v) }, () => ({ speed: 0, influence: Math.min(1, Math.max(0.01, influence)) }));
+  return {
+    ...p,
+    keyframes: kfs.map((k, j) => {
+      if (j === i) {
+        const { easeOut: _o, ...rest } = k;
+        return leave > 0 ? { ...rest, out: "bezier" as const, easeOut: e(k.v, leave) } : { ...rest, out: "linear" as const };
+      }
+      if (j === i + 1) {
+        const { easeIn: _i, ...rest } = k;
+        return arrive > 0 ? { ...rest, in: "bezier" as const, easeIn: e(k.v, arrive) } : { ...rest, in: "linear" as const };
+      }
+      return k;
+    }),
+  };
+};
+
+/** The current curve after a keyframe as { leave, arrive } influences (0 = no easing on that side). */
+export const keyCurve = (p: AnimProp, id: string): { leave: number; arrive: number } => {
+  const kfs = p.keyframes ?? [];
+  const i = kfs.findIndex((k) => k.id === id);
+  const k = kfs[i], next = kfs[i + 1];
+  return {
+    leave: k?.out === "bezier" ? (k.easeOut?.[0]?.influence ?? EASY_EASE.influence) : 0,
+    arrive: next?.in === "bezier" ? (next.easeIn?.[0]?.influence ?? EASY_EASE.influence) : 0,
+  };
+};

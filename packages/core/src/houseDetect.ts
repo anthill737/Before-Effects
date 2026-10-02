@@ -479,7 +479,7 @@ export const buildProposals = (input: {
     // The house box can take in a neighbour's house; the traced silhouette can't.
     if (silOk && !insidePolygon(sil!.outline, centre(c.box)) && distToPolygon(sil!.outline, centre(c.box)) > 0.03 * (input.house!.box.x1 - input.house!.box.x0)) reasons.push("may not be part of this house");
     if (agrees && RECT_KINDS.has(c.kind)) {
-      points = fitQuad(s.outline);
+      points = fitQuadRobust(s.outline);
       outline = "corners";
       // A fitted quad that lost most of the shape's area isn't a good fit.
       if (Math.abs(polygonArea(points)) < 0.75 * Math.abs(polygonArea(s.outline))) {
@@ -520,4 +520,81 @@ export const buildProposals = (input: {
     out.push({ key: "roofline", kind: "roofline", name: "Roofline", points: simplify(input.roofline, tol * 1.5, false), closed: false, score: input.house?.score ?? 0, outline: "traced", ...(silOk ? {} : { uncertain: "traced from a rough house outline" }) });
   }
   return out;
+};
+
+/** A straight line through points (total least squares): a point on it and its direction. */
+const fitLine = (pts: readonly Vec2[]): { p: Vec2; d: Vec2 } => {
+  const n = pts.length;
+  const mx = pts.reduce((a, q) => a + q[0], 0) / n, my = pts.reduce((a, q) => a + q[1], 0) / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const [x, y] of pts) {
+    sxx += (x - mx) ** 2;
+    syy += (y - my) ** 2;
+    sxy += (x - mx) * (y - my);
+  }
+  const a = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  return { p: [mx, my], d: [Math.cos(a), Math.sin(a)] };
+};
+const lineDist = (l: { p: Vec2; d: Vec2 }, q: Vec2) => Math.abs((q[0] - l.p[0]) * l.d[1] - (q[1] - l.p[1]) * l.d[0]);
+const meet = (a: { p: Vec2; d: Vec2 }, b: { p: Vec2; d: Vec2 }): Vec2 | null => {
+  const den = a.d[0] * b.d[1] - a.d[1] * b.d[0];
+  if (Math.abs(den) < 1e-6) return null;
+  const t = ((b.p[0] - a.p[0]) * b.d[1] - (b.p[1] - a.p[1]) * b.d[0]) / den;
+  return [a.p[0] + a.d[0] * t, a.p[1] + a.d[1] * t];
+};
+
+/**
+ * Four corners of a roughly four-sided outline, robust to bumps: each side is a straight line
+ * through the middle of that side (its ends and stray points left out), and the corners are where
+ * neighbouring sides meet. Falls back to the extreme points when the outline isn't four-sided.
+ */
+export const fitQuadRobust = (pts: readonly Vec2[]): Vec2[] => {
+  const init = fitQuad(pts);
+  const n = pts.length;
+  const idx = init.map((c) => pts.findIndex((p) => p[0] === c[0] && p[1] === c[1]));
+  if (n < 24 || idx.some((i) => i < 0)) return init;
+  const lens = idx.map((a, s) => (idx[(s + 1) % 4]! - a + n) % n);
+  // The corners must come around the outline in order (top-left, top-right, bottom-right, bottom-left).
+  if (lens.some((l) => l < 4) || lens.reduce((a, b) => a + b, 0) !== n) return init;
+  const lines = idx.map((a, s) => {
+    const side: Vec2[] = [];
+    for (let k = Math.floor(lens[s]! * 0.2); k <= Math.ceil(lens[s]! * 0.8); k++) side.push(pts[(a + k) % n]!);
+    // Fit, drop the farthest quarter, refit — a few rounds, so a spill can't tilt the side.
+    let keep = side;
+    let line = fitLine(keep);
+    for (let round = 0; round < 3 && keep.length > 8; round++) {
+      const res = keep.map((q) => lineDist(line, q));
+      const cut = [...res].sort((x, y) => x - y)[Math.floor(res.length * 0.75)]!;
+      keep = keep.filter((_, i) => res[i]! <= cut);
+      line = fitLine(keep);
+    }
+    return line;
+  });
+  const box = pointsBox(pts);
+  const tol = 0.2 * Math.hypot(box.x1 - box.x0, box.y1 - box.y0);
+  return init.map((c, i) => {
+    const m = meet(lines[(i + 3) % 4]!, lines[i]!);
+    return m && Math.hypot(m[0] - c[0], m[1] - c[1]) <= tol ? m : c;
+  });
+};
+
+/** Add a filled polygon to the mask (even-odd, scanline). */
+export const fillPolygon = (m: BitMask, pts: readonly Vec2[]): BitMask => {
+  const data = new Uint8Array(m.data);
+  if (pts.length < 3) return { width: m.width, height: m.height, data };
+  const ys = pts.map((p) => p[1]);
+  for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(m.height - 1, Math.ceil(Math.max(...ys))); y++) {
+    const yc = y + 0.5;
+    const xs: number[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i]!, b = pts[(i + 1) % pts.length]!;
+      if (a[1] > yc !== b[1] > yc) xs.push(a[0] + ((yc - a[1]) / (b[1] - a[1])) * (b[0] - a[0]));
+    }
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const x0 = Math.max(0, Math.round(xs[k]!)), x1 = Math.min(m.width, Math.round(xs[k + 1]!));
+      if (x1 > x0) data.fill(1, y * m.width + x0, y * m.width + x1);
+    }
+  }
+  return { width: m.width, height: m.height, data };
 };

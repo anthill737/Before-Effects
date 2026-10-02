@@ -21,6 +21,8 @@ import {
   closeMask,
   DETECT_LABELS,
   fillBox,
+  fillPolygon,
+  fitQuadRobust,
   type HouseDetection,
   largestComponent,
   maskArea,
@@ -66,6 +68,17 @@ interface SamProcessorLike {
   (image: unknown, opts?: Record<string, unknown>): Promise<{ input_points: unknown; input_labels: unknown; original_sizes: unknown; reshaped_input_sizes: unknown }>;
   post_process_masks(masks: unknown, original: unknown, reshaped: unknown): Promise<Array<{ dims: number[]; data: ArrayLike<number | boolean> }>>;
 }
+
+/** How much of a box the mask covers (0..1). */
+const boxCovered = (m: BitMask, b: { x0: number; y0: number; x1: number; y1: number }) => {
+  let n = 0, all = 0;
+  for (let y = Math.max(0, Math.floor(b.y0)); y < Math.min(m.height, Math.ceil(b.y1)); y += 2)
+    for (let x = Math.max(0, Math.floor(b.x0)); x < Math.min(m.width, Math.ceil(b.x1)); x += 2) {
+      all++;
+      n += m.data[y * m.width + x]!;
+    }
+  return all ? n / all : 0;
+};
 
 const toMask = (data: ArrayLike<number | boolean>, offset: number, width: number, height: number): BitMask => {
   const out = new Uint8Array(width * height);
@@ -161,6 +174,12 @@ const run = async (m: RunMessage) => {
     const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, w = x1 - x0, h = y1 - y0;
     // Several points inside, spread along the longer side (a window's panes, a garage door's width).
     const pts: Array<[number, number, 0 | 1]> = w > h * 1.2 ? [[cx, cy, 1], [x0 + w * 0.25, cy, 1], [x0 + w * 0.75, cy, 1]] : h > w * 1.2 ? [[cx, cy, 1], [cx, y0 + h * 0.25, 1], [cx, y0 + h * 0.75, 1]] : [[cx, cy, 1]];
+    // Openings: points just outside each side say "not this" (the columns beside a garage door,
+    // the siding above), so the outline stops at the part's own edges.
+    if (c.kind === "garage" || c.kind === "door" || c.kind === "window" || c.kind === "vent") {
+      const out: Array<[number, number]> = [[x0 - w * 0.06, cy], [x1 + w * 0.06, cy], [cx, y0 - h * 0.08], [cx, y1 + h * 0.08]];
+      for (const [x, y] of out) if (x >= 0 && y >= 0 && x < image.width && y < image.height) pts.push([x, y, 0]);
+    }
     const r = await segment(pts, grow(c.box, 0.04));
     if (r && (c.kind !== "roof" || r.spill < 0.25)) shapes[c.key] = { outline: traceOutline(r.mask), quality: r.quality };
   }
@@ -179,8 +198,17 @@ const run = async (m: RunMessage) => {
     if (r && boxArea(pointsBox(traceOutline(r.mask))) > 0.3 * boxArea(hb)) {
       // The house includes its doors and windows (white doors can fool the tracing); small notches
       // along the edges (stonework, shadows) are closed.
+      // Parts on the traced house belong to it: anything mostly on it, and structural parts (a
+      // column, a door) that touch it — the tracing can leave out a whole pillar beside a garage.
+      const structural = new Set(["column", "door", "garage", "window"]);
       let m = r.mask;
-      for (const c of sel.candidates) if (!c.uncertain && (c.kind === "door" || c.kind === "garage" || c.kind === "window")) m = fillBox(m, c.box);
+      for (const c of sel.candidates) {
+        const covered = boxCovered(r.mask, c.box);
+        if (c.kind === "roof" || !(covered >= 0.2 || (structural.has(c.kind) && covered >= 0.05))) continue;
+        // Its traced shape when that fits the detection (a column seen in perspective), else its box.
+        const sh = shapes[c.key];
+        m = sh && sh.outline.length >= 24 && boxIou(pointsBox(sh.outline), c.box) >= 0.75 ? fillPolygon(m, fitQuadRobust(sh.outline)) : fillBox(m, c.box);
+      }
       m = largestComponent(closeMask(m, Math.max(3, Math.round(image.width / 240))));
       silhouette = { outline: traceOutline(m), quality: r.quality };
       roofline = topContour(m, hb, 2);

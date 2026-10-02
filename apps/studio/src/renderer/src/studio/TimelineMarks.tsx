@@ -3,26 +3,25 @@
  *   BarEdges     drag a bar's end to change how long it lasts (and a layer's start to trim it).
  *   Scene3DMarks a 3D layer's collapse and rebuild times as draggable flags, and the keyframes of
  *                its objects as diamonds: drag to retime, click for easing (smooth, steady, start
- *                slowly, arrive slowly, jump) or to delete.
+ *                slowly, arrive slowly, jump, or a custom curve) or to delete.
+ *   LayerKeyMarks the keyframes of an ordinary layer (position, size, turn, opacity, text), the same way.
  */
 import {
   type AnimProp,
   type Composition,
-  EASE_PRESETS,
-  type EasePreset,
   type Flicks,
   FLICKS_PER_SECOND,
   getRecipe,
-  keyEase,
   type Layer,
   moveKey,
   type Object3D,
   type RecipeInstance,
-  setKeyEase,
   snapToFrame,
 } from "@be/core";
 import { useState } from "react";
 import { updateObject, use3D } from "./actions3d.ts";
+import { KeyMenu } from "./KeyMenu.tsx";
+import { LAYER_PROPS, storeProp } from "./layerKeys.ts";
 import { useStudio } from "./store.ts";
 
 type TimeAt = (clientX: number) => Flicks;
@@ -210,36 +209,63 @@ export const Scene3DMarks = ({ comp, layer, pct, timeAt }: { comp: Composition; 
     <>
       {marks}
       {menu && mo && mp && mprop && (
-        <div className="popover key-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Keyframe easing">
-          <strong className="small">How it moves from here</strong>
-          {EASE_PRESETS.map((e) => (
-            <button
-              key={e.id}
-              role="menuitemradio"
-              aria-checked={keyEase(mprop, menu.keyId) === e.id}
-              className={`list-item ${keyEase(mprop, menu.keyId) === e.id ? "on" : ""}`}
-              onClick={() => {
-                updateObject(scene.id, mo.id, mp.set(mo, setKeyEase(mprop, menu.keyId, e.id as EasePreset)), "Change easing");
-                setMenu(null);
-              }}
-            >
-              {e.label}
-            </button>
-          ))}
-          <button
-            role="menuitem"
-            className="list-item danger"
-            onClick={() => {
-              const rest = mprop.keyframes!.filter((k) => k.id !== menu.keyId);
-              const next: AnimProp = rest.length ? { ...mprop, keyframes: rest } : { value: mprop.keyframes!.find((k) => k.id === menu.keyId)!.v, ...(mprop.spatial ? { spatial: true } : {}) };
-              updateObject(scene.id, mo.id, mp.set(mo, next), "Delete keyframe");
-              setMenu(null);
-            }}
-          >
-            Delete keyframe
-          </button>
-        </div>
+        <KeyMenu
+          prop={mprop}
+          keyId={menu.keyId}
+          at={menu}
+          onChange={(next, label, key) => updateObject(scene.id, mo.id, mp.set(mo, next), label, key)}
+          onClose={() => setMenu(null)}
+        />
       )}
+    </>
+  );
+};
+
+/** Keyframe diamonds of an ordinary layer, on its bar: drag to retime, click for easing. */
+export const LayerKeyMarks = ({ comp, layer, pct, timeAt }: { comp: Composition; layer: Layer; pct: Pct; timeAt: TimeAt }) => {
+  const [menu, setMenu] = useState<{ path: string; keyId: string; x: number; y: number } | null>(null);
+  const fps = comp.frameRate.num / comp.frameRate.den;
+  const toComp = (local: Flicks): Flicks => layer.startTime + Math.round(local / layer.stretch);
+  const toLocal = (t: Flicks): Flicks => Math.round((t - layer.startTime) * layer.stretch);
+  const snap = (t: Flicks) => Math.max(0, Math.round((t / FLICKS_PER_SECOND) * fps) / fps) * FLICKS_PER_SECOND;
+  const marks: React.ReactNode[] = [];
+  for (const P of LAYER_PROPS) {
+    const prop = P.get(layer);
+    for (const k of prop?.keyframes ?? []) {
+      marks.push(
+        <span
+          key={`${P.path}-${k.id}`}
+          className={`key-diamond ${menu?.keyId === k.id ? "on" : ""}`}
+          style={{ left: pct(toComp(k.t)) }}
+          role="button"
+          aria-label={`${layer.name} ${P.label} keyframe at ${(toComp(k.t) / FLICKS_PER_SECOND).toFixed(2)} s`}
+          title={`${layer.name}: ${P.label} — drag to retime, click for easing`}
+          onPointerDown={(e) => {
+            useStudio.getState().selectLayer(layer.id);
+            drag(
+              e,
+              (ev) => {
+                const cur = useStudio.getState().project!.compositions[comp.id]!.layers[layer.id]!;
+                const p = P.get(cur);
+                if (!p) return;
+                storeProp(comp, cur, P.path, moveKey(p, k.id, snap(toLocal(timeAt(ev.clientX)))), "Move keyframe", `${layer.id}:${k.id}:move`);
+              },
+              (moved) => {
+                const r = (e.target as HTMLElement).getBoundingClientRect();
+                if (!moved) setMenu(menu?.keyId === k.id ? null : { path: P.path, keyId: k.id, x: r.left + r.width / 2, y: r.top });
+              },
+            );
+          }}
+        />,
+      );
+    }
+  }
+  const P = menu ? LAYER_PROPS.find((x) => x.path === menu.path) : undefined;
+  const prop = P?.get(layer);
+  return (
+    <>
+      {marks}
+      {menu && P && prop && <KeyMenu prop={prop} keyId={menu.keyId} at={menu} onChange={(next, label, key) => storeProp(comp, layer, P.path, next, label, key)} onClose={() => setMenu(null)} />}
     </>
   );
 };

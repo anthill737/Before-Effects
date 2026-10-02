@@ -1,7 +1,27 @@
 /** Inspector for a plain layer: pictures and videos, text, and sound. Simple controls first. */
-import { type AnimProp, defaultAudio, evalProp, formatSecondsFriendly, type Layer, secondsToTime } from "@be/core";
+import { type AnimProp, defaultAudio, evalProp, formatSecondsFriendly, keyAt, type Layer, type PropValue, secondsToTime, type Vec3 } from "@be/core";
 import { ColorField, Field, Slider, Toggle } from "./controls.tsx";
+import { layerLocal, setLayerValue, toggleLayerKey } from "./layerKeys.ts";
 import { currentComp, useStudio } from "./store.ts";
+
+/** ◆: add a keyframe at the playhead (starting animation) or remove the one there. */
+const KeyToggle = ({ layer, path, prop, label }: { layer: Layer; path: string; prop: AnimProp; label: string }) => {
+  const time = useStudio((s) => s.time);
+  const comp = currentComp(useStudio.getState())!;
+  const on = !!keyAt(prop, layerLocal(layer, time));
+  const animated = (prop.keyframes?.length ?? 0) > 0;
+  return (
+    <button
+      className={`key-btn ${on ? "on" : animated ? "animated" : ""}`}
+      aria-pressed={on}
+      aria-label={on ? `Remove the ${label} keyframe at the playhead` : `Add a ${label} keyframe at the playhead`}
+      title={on ? "Remove the keyframe here" : animated ? "Add a keyframe here (this value is animated: changing it adds one too)" : "Animate: add a keyframe at the playhead"}
+      onClick={() => toggleLayerKey(comp, layer, path, prop)}
+    >
+      ◆
+    </button>
+  );
+};
 
 export const FONTS = ["Segoe UI", "Arial", "Bahnschrift", "Georgia", "Impact", "Times New Roman", "Trebuchet MS", "Verdana", "Consolas", "Cascadia Code", "Comic Sans MS", "Segoe Script"];
 
@@ -12,8 +32,9 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
   const time = useStudio((s) => s.time);
   const comp = currentComp(useStudio.getState())!;
   const apply = useStudio.getState().apply;
-  const set = (path: string, value: number | number[], label: string) =>
-    apply({ type: "prop.set", args: { compId: comp.id, layerId: layer.id, path, value, ...(layer.transform.opacity.keyframes?.length && path === "transform.opacity" ? { atTime: time } : {}) } }, { label, coalesceKey: `${layer.id}:${path}` });
+  /** Change a value at the playhead (a keyframe there when it's animated). */
+  const set = <V extends PropValue>(path: string, prop: AnimProp<V>, value: V, label: string) => setLayerValue(comp, layer, path, prop, value, label);
+  const lt = layerLocal(layer, time);
   const setField = (path: string, value: unknown, label: string) => apply({ type: "layer.setPath", args: { compId: comp.id, layerId: layer.id, path, value } }, { label, coalesceKey: `${layer.id}:${path}` });
   const asset = layer.source.kind === "footage" || layer.source.kind === "audio" ? project.assets[layer.source.assetId] : undefined;
   const hasSound = layer.source.kind === "audio" || !!asset?.audioPath;
@@ -44,30 +65,76 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
             </select>
           </Field>
           <Field label="Size">
-            <Slider value={staticValue<number>(layer.source.doc.size, time)} min={6} max={600} unit="px" onChange={(v) => set("source.doc.size", v, "Text size")} label="Text size" />
+            <div className="row gap">
+              <Slider value={staticValue<number>(layer.source.doc.size, lt)} min={6} max={600} unit="px" onChange={(v) => layer.source.kind === "text" && set("source.doc.size", layer.source.doc.size, v, "Text size")} label="Text size" />
+              <KeyToggle layer={layer} path="source.doc.size" prop={layer.source.doc.size} label="text size" />
+            </div>
           </Field>
           <Field label="Color">
-            <ColorField value={staticValue<readonly number[]>(layer.source.doc.color, time)} onChange={(v) => set("source.doc.color", v, "Text color")} label="Text color" />
+            <div className="row gap">
+              <ColorField value={staticValue<readonly number[]>(layer.source.doc.color, lt)} onChange={(v) => layer.source.kind === "text" && set("source.doc.color", layer.source.doc.color, v, "Text color")} label="Text color" />
+              <KeyToggle layer={layer} path="source.doc.color" prop={layer.source.doc.color} label="text colour" />
+            </div>
           </Field>
         </>
       )}
 
       {layer.source.kind !== "audio" && (
-        <Field label="Opacity">
-          <Slider value={staticValue<number>(layer.transform.opacity, time)} min={0} max={100} unit="%" onChange={(v) => set("transform.opacity", v, "Opacity")} label="Opacity" />
-        </Field>
+        <>
+          <p className="muted small">◆ animates a value: it adds a keyframe at the playhead; after that, changing the value adds another. Keyframes show on the layer's bar — click one for its easing.</p>
+          <Field label="Opacity">
+            <div className="row gap">
+              <Slider value={staticValue<number>(layer.transform.opacity, lt)} min={0} max={100} unit="%" onChange={(v) => set("transform.opacity", layer.transform.opacity, v, "Opacity")} label="Opacity" />
+              <KeyToggle layer={layer} path="transform.opacity" prop={layer.transform.opacity} label="opacity" />
+            </div>
+          </Field>
+        </>
       )}
       {(layer.source.kind === "footage" || layer.source.kind === "text") && (
-        <Field label="Size on the building">
-          <Slider
-            value={staticValue<readonly number[]>(layer.transform.scale, time)[0]!}
-            min={1}
-            max={400}
-            unit="%"
-            onChange={(v) => set("transform.scale", [v, v, 100], "Resize")}
-            label="Size"
-          />
-        </Field>
+        <>
+          <Field label="Size on the building">
+            <div className="row gap">
+              <Slider value={staticValue<readonly number[]>(layer.transform.scale, lt)[0]!} min={1} max={400} unit="%" onChange={(v) => set("transform.scale", layer.transform.scale, [v, v, 100] as Vec3, "Resize")} label="Size" />
+              <KeyToggle layer={layer} path="transform.scale" prop={layer.transform.scale} label="size" />
+            </div>
+          </Field>
+          {(["left/right", "up/down"] as const).map((axis, i) => (
+            <Field key={axis} label={`Position (${axis})`}>
+              <div className="row gap">
+                <Slider
+                  value={Math.round(staticValue<readonly number[]>(layer.transform.position, lt)[i]!)}
+                  min={-comp.width / 2}
+                  max={comp.width * 1.5}
+                  unit="px"
+                  onChange={(v) => {
+                    const cur = [...staticValue<readonly number[]>(layer.transform.position, lt)] as [number, number, number];
+                    cur[i] = v;
+                    set("transform.position", layer.transform.position, cur as Vec3, "Move");
+                  }}
+                  label={`Position ${axis}`}
+                />
+                {i === 0 && <KeyToggle layer={layer} path="transform.position" prop={layer.transform.position} label="position" />}
+              </div>
+            </Field>
+          ))}
+          <Field label="Turn">
+            <div className="row gap">
+              <Slider
+                value={Math.round(staticValue<readonly number[]>(layer.transform.rotation, lt)[2] ?? 0)}
+                min={-360}
+                max={360}
+                unit="°"
+                onChange={(v) => {
+                  const cur = [...staticValue<readonly number[]>(layer.transform.rotation, lt)] as [number, number, number];
+                  cur[2] = v;
+                  set("transform.rotation", layer.transform.rotation, cur as Vec3, "Turn");
+                }}
+                label="Turn"
+              />
+              <KeyToggle layer={layer} path="transform.rotation" prop={layer.transform.rotation} label="turn" />
+            </div>
+          </Field>
+        </>
       )}
 
       {hasSound && audio && (

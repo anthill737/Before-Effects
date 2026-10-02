@@ -11,7 +11,7 @@ import { toMono, waveformPeaks } from "@be/core";
 import { audioBufferFor } from "./media.ts";
 import { useStudio } from "./store.ts";
 import { ShowArranger } from "./ScenesBar.tsx";
-import { BarEdges, Scene3DMarks } from "./TimelineMarks.tsx";
+import { BarEdges, LayerKeyMarks, Scene3DMarks } from "./TimelineMarks.tsx";
 
 /** Green strip on the ruler: frames ready in the preview cache at the current preview size. */
 const CacheStrip = ({ compId, duration, rate }: { compId: string; duration: number; rate: { num: number; den: number } }) => {
@@ -217,6 +217,7 @@ export const Timeline = () => {
                 <BarEdges comp={comp} inst={r.recipeId ? project.recipes[r.recipeId] : undefined} layer={r.layer} timeAt={timeAt} />
               </div>
               {r.layer?.source.kind === "scene3d" && <Scene3DMarks comp={comp} layer={r.layer} pct={pct} timeAt={timeAt} />}
+              {r.layer && r.layer.source.kind !== "scene3d" && <LayerKeyMarks comp={comp} layer={r.layer} pct={pct} timeAt={timeAt} />}
             </div>
           ))}
           <div className="playhead" style={{ left: pct(time) }} />

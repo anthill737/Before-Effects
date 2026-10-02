@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { convexHull, splitOutline } from "../src/areaShapes.ts";
-import { type Box, buildProposals, closeMask, fillBox, maskArea, fitQuad, largestComponent, type BitMask, pointsBox, type RawDetection, selectCandidates, simplify, topContour, traceOutline } from "../src/houseDetect.ts";
+import { type Box, buildProposals, closeMask, fillBox, fitQuadRobust, maskArea, fitQuad, largestComponent, type BitMask, pointsBox, type RawDetection, selectCandidates, simplify, topContour, traceOutline } from "../src/houseDetect.ts";
 
 const B = (x0: number, y0: number, x1: number, y1: number): Box => ({ x0, y0, x1, y1 });
 const IMG = { width: 1920, height: 1080 };
@@ -176,5 +176,19 @@ describe("area shapes", () => {
   it("finds the hull of separate outlines", () => {
     const h = convexHull([[0, 0], [10, 0], [10, 10], [0, 10], [30, 0], [40, 0], [40, 10], [30, 10], [20, 5]]);
     expect(h).toHaveLength(4);
+  });
+});
+
+describe("four corners, robust to spills", () => {
+  it("keeps a garage door's corner on the door when the trace spills onto the column at a corner", () => {
+    const m = rectMask(200, 140, B(20, 20, 180, 120));
+    // A spill onto the column at the top right.
+    for (let y = 12; y < 40; y++) for (let x = 180; x < 192; x++) m.data[y * 200 + x] = 1;
+    const o = traceOutline(m);
+    const naive = fitQuad(o), robust = fitQuadRobust(o);
+    expect(naive[1]![0]).toBeGreaterThan(185);
+    expect(robust[1]![0]).toBeCloseTo(179, 0);
+    expect(robust[1]![1]).toBeCloseTo(20, 0);
+    expect(robust[3]).toEqual([20, 119]);
   });
 });
