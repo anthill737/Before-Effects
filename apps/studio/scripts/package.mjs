@@ -2,14 +2,16 @@
  * Package the studio as a standalone Windows app in <repo>/build/app ("Before Effects.exe").
  * Run via: pnpm --filter @be/studio package   (the root launcher runs this automatically).
  *
- * The bundles in out/ import only Electron and Node built-ins, so the packaged app needs no
- * node_modules. FFmpeg is copied into resources/bin so exporting works without separate installs.
+ * The bundles in out/ import only Electron and Node built-ins, except house detection, which runs
+ * transformers.js and ONNX Runtime in its own process: just those packages (Windows x64 parts only)
+ * are copied into node_modules, unpacked from the archive. FFmpeg is copied into resources/bin so
+ * exporting works without separate installs.
  */
 import { packager } from "@electron/packager";
 import { execSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 const studio = resolve(import.meta.dirname, "..");
 const root = resolve(studio, "../..");
@@ -33,6 +35,49 @@ writeFileSync(
   JSON.stringify({ name: "before-effects", productName: "Before Effects", version, description: "Before Effects", main: "out/main/index.js", type: "module" }, null, 2),
 );
 
+// House detection's runtime: transformers.js and what it needs at run time (not install-time
+// helpers, not the browser build of ONNX Runtime, which transformers.js already bundles).
+step("staging the house-detection runtime");
+const SKIP = new Set(["onnxruntime-web", "adm-zip", "global-agent"]);
+const findDep = (from, name) => {
+  for (let d = from; ; d = dirname(d)) {
+    const c = join(d, "node_modules", name);
+    if (existsSync(join(c, "package.json"))) return realpathSync(c);
+    if (dirname(d) === d) return null;
+  }
+};
+const runtime = new Map();
+const collect = (name, from) => {
+  if (runtime.has(name) || SKIP.has(name)) return;
+  const dir = findDep(from, name);
+  if (!dir) throw new Error(`House detection needs ${name}, which isn't installed (run pnpm install).`);
+  runtime.set(name, dir);
+  const pj = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+  for (const d of Object.keys(pj.dependencies ?? {})) collect(d, dir);
+  for (const d of Object.keys(pj.optionalDependencies ?? {})) if (/win32-x64/.test(d)) collect(d, dir);
+};
+collect("@huggingface/transformers", studio);
+const unwanted = (name, rel) => {
+  const r = rel.split(sep).join("/");
+  if (/\.(map|d\.ts|d\.mts|d\.cts|md)$/i.test(r) && !/license/i.test(r)) return true;
+  if (name === "onnxruntime-node") return /^(lib|script)\//.test(r) || (/^bin\/napi-v\d+\//.test(r) && !/^bin\/napi-v\d+(\/win32(\/x64(\/.*)?)?)?$/.test(r));
+  if (name === "@huggingface/transformers") return /^(src|types)\//.test(r) || (/^dist\//.test(r) && !/^dist\/transformers\.node\.(mjs|cjs)$/.test(r));
+  return false;
+};
+let runtimeBytes = 0;
+for (const [name, dir] of runtime) {
+  cpSync(dir, join(stage, "node_modules", name), {
+    recursive: true,
+    dereference: true,
+    filter: (src) => {
+      const keep = !unwanted(name, relative(dir, src));
+      if (keep && statSync(src).isFile()) runtimeBytes += statSync(src).size;
+      return keep;
+    },
+  });
+}
+step(`  ${runtime.size} packages, ${(runtimeBytes / 1e6).toFixed(0)} MB: ${[...runtime.keys()].join(", ")}`);
+
 step(`packaging with Electron ${electronVersion}`);
 const [packaged] = await packager({
   dir: stage,
@@ -43,7 +88,8 @@ const [packaged] = await packager({
   out: join(buildDir, ".packager"),
   overwrite: true,
   // The assistant's MCP bridge runs as a separate Node process, so it must be a real file.
-  asar: { unpack: "**/out/main/{mcp-bridge.js,assistant-test-cli.js,agent-mcp.js,agent-cli.js,heic-worker.js,chunks/agent-shared*.js}" },
+  // Scripts run as separate Node processes, and native modules, must be real files.
+  asar: { unpack: "**/out/main/{mcp-bridge.js,assistant-test-cli.js,agent-mcp.js,agent-cli.js,heic-worker.js,detect-host.js,chunks/*.js}", unpackDir: "node_modules" },
   prune: false,
   icon: join(studio, "build", "icon.ico"),
   electronVersion,

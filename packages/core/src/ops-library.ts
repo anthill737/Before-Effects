@@ -603,13 +603,21 @@ export const regionUpdate = defineOp({
         holes: z.custom<NonNullable<Region["holes"]>>((v) => Array.isArray(v)),
         feather: z.number().min(0).max(500),
         expansion: z.number().min(-500).max(500),
+        cutouts: z.array(id),
+        /** null: reviewed, no longer a proposal. */
+        proposal: z.custom<NonNullable<Region["proposal"]>>((v) => typeof v === "object").nullable(),
       })
       .partial(),
   }),
   apply: (d, a) => {
-    const r = venueOf(d, a.venueId).regions[a.regionId];
+    const v = venueOf(d, a.venueId);
+    const r = v.regions[a.regionId];
     if (!r) throw new OpError("That region no longer exists.");
-    Object.assign(r, a.changes);
+    const { proposal, ...rest } = a.changes;
+    if (rest.cutouts?.some((c) => c === a.regionId || !v.regions[c])) throw new OpError("An area can only have other existing areas cut out of it.");
+    Object.assign(r, rest);
+    if (proposal === null) delete r.proposal;
+    else if (proposal) r.proposal = proposal as Draft<NonNullable<Region["proposal"]>>;
   },
 });
 
@@ -623,6 +631,7 @@ export const regionRemove = defineOp({
     delete v.regions[a.regionId];
     v.regionOrder = v.regionOrder.filter((x) => x !== a.regionId);
     for (const g of Object.values(v.groups)) g.regionIds = g.regionIds.filter((x) => x !== a.regionId);
+    for (const r of Object.values(v.regions)) if (r.cutouts?.includes(a.regionId)) r.cutouts = r.cutouts.filter((x) => x !== a.regionId);
     const b = d.bindings[a.venueId];
     if (b) for (const k of Object.keys(b.roles)) b.roles[k] = b.roles[k]!.filter((x) => x !== a.regionId);
   },

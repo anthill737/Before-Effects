@@ -18,6 +18,7 @@
     "@be/core": "workspace:*",
     "@be/engine": "workspace:*",
     "@be/media": "workspace:*",
+    "@huggingface/transformers": "4.3.0",
     "libheif-js": "1.23.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

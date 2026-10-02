@@ -20,6 +20,8 @@ export default defineConfig({
           "agent-cli": resolve(__dirname, "src/main/agent-cli.ts"),
           // HEIC/HEIF decoding (libheif WebAssembly) in a worker thread.
           "heic-worker": resolve(__dirname, "src/main/heic-worker.ts"),
+          // House detection (open models through ONNX Runtime) in its own process.
+          "detect-host": resolve(__dirname, "src/main/detect-host.ts"),
         },
       },
     },

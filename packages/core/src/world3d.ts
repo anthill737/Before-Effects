@@ -19,7 +19,7 @@
  */
 import { z } from "zod";
 import { type AnimProp, evalProp, staticProp } from "./anim.ts";
-import { refRegions } from "./areas.ts";
+import { refRegions, regionHoles } from "./areas.ts";
 import type { Id, Project, RegionRef, RGBA, Vec2, Vec3 } from "./model.ts";
 import { defineOp, OpError } from "./ops.ts";
 import { flattenPath } from "./pathmath.ts";
@@ -34,11 +34,13 @@ export const PHYSICS_ENGINE_VERSION = 3;
 export const PHYSICS_SUBSTEPS = 4;
 export const MAX_FRAGMENTS = 600;
 
-export type MaterialStyle = "photo" | "color" | "shadow";
+export type MaterialStyle = "photo" | "color" | "shadow" | "image";
 
 export interface Material3D {
-  /** "photo": the building photo on the front (sides plain) · "color": plain · "shadow": only shows shadows. */
+  /** "photo": the building photo on the front (sides plain) · "color": plain · "shadow": only shows shadows · "image": a picture (`assetId`) on the front. */
   readonly style: MaterialStyle;
+  /** The picture for "image". */
+  readonly assetId?: Id;
   readonly color: AnimProp<RGBA>;
   readonly roughness: number;
   readonly metalness: number;
@@ -101,6 +103,8 @@ export interface Object3D {
   readonly position: AnimProp<Vec3>;
   readonly rotation: AnimProp<Vec3>;
   readonly scale: AnimProp<Vec3>;
+  /** The point it turns and scales about (metres, in the scene's frame at rest) — a door's hinge. Default: its origin. */
+  readonly pivot?: Vec3;
   readonly geometry?: Geometry3D;
   readonly material?: Material3D;
   readonly castShadow?: boolean;
@@ -109,11 +113,15 @@ export interface Object3D {
   /** Break into pieces that fall (and optionally fly back). Areas only. */
   readonly fracture?: Fracture3D;
   readonly light?: Light3D;
+  /** A moving part of the house made from a traced area (see parts3d.ts). */
+  readonly part?: import("./parts3d.ts").PartInfo;
 }
 
 export interface Scene3D {
   readonly id: Id;
   readonly name: string;
+  /** "parts": the house's moving parts (facade, doors, windows…), one per scene of the show. */
+  readonly purpose?: "parts";
   readonly objectOrder: readonly Id[];
   readonly objects: Readonly<Record<Id, Object3D>>;
   /** m/s² — strength and direction. */
@@ -133,6 +141,15 @@ export const eulerDegToQuat = (r: Vec3): Quat => {
   const c1 = Math.cos(x), c2 = Math.cos(y), c3 = Math.cos(z);
   const s1 = Math.sin(x), s2 = Math.sin(y), s3 = Math.sin(z);
   return [s1 * c2 * c3 + c1 * s2 * s3, c1 * s2 * c3 - s1 * c2 * s3, c1 * c2 * s3 + s1 * s2 * c3, c1 * c2 * c3 - s1 * s2 * s3];
+};
+
+/**
+ * Where a point of an object (`c`, in its rest frame) ends up for a pose: scaled and turned about
+ * the object's pivot, then moved. With no pivot this is position + rotation·(scale·c).
+ */
+export const placePoint = (c: Vec3, pos: Vec3, q: Quat, scale: Vec3, pivot: Vec3 = [0, 0, 0]): Vec3 => {
+  const r = rotateByQuat([(c[0] - pivot[0]) * scale[0], (c[1] - pivot[1]) * scale[1], (c[2] - pivot[2]) * scale[2]], q);
+  return [pos[0] + pivot[0] + r[0], pos[1] + pivot[1] + r[1], pos[2] + pivot[2] + r[2]];
 };
 
 export const rotateByQuat = (v: Vec3, q: Quat): Vec3 => {
@@ -378,11 +395,13 @@ const piecesFor = (project: Project, o: Object3D, canvas: Canvas, venueId: Id | 
 
 const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }>, fr: Fracture3D | undefined, canvas: Canvas, venueId: Id | undefined): ResolvedPiece[] => {
   const regions = refRegions(project, g.ref, venueId).filter((r) => r.path.closed);
+  const vid = venueId ?? project.activeVenueId;
+  const venue = vid ? project.venues[vid] : undefined;
   const depth = Math.max(0.01, g.depth);
   const out: ResolvedPiece[] = [];
   for (const r of regions) {
     const outline = closedPoints(r.path);
-    const holes = (r.holes ?? []).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
+    const holes = regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
     if (outline.length < 3) continue;
     const polys = fr ? fracture(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] })) : [{ outline: ccw(outline), holes }];
     for (const poly of polys) {
@@ -469,10 +488,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
       const q = eulerDegToQuat(evalProp(o.rotation, t0));
       const sc = scaleOf(o, t0);
       const animated = (o.position.keyframes?.length ?? 0) > 0 || (o.rotation.keyframes?.length ?? 0) > 0;
-      const placed = (c: Vec3): Vec3 => {
-        const r = rotateByQuat([c[0] * sc[0], c[1] * sc[1], c[2] * sc[2]], q);
-        return [pos[0] + r[0], pos[1] + r[1], pos[2] + r[2]];
-      };
+      const placed = (c: Vec3): Vec3 => placePoint(c, pos, q, sc, o.pivot);
       const common = { friction: Math.max(0, ph.friction), restitution: Math.min(1, Math.max(0, ph.bounce)) };
       if (fr && ph.body === "dynamic" && pieces.length) {
         poseIndex = movers;
@@ -521,8 +537,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
               const t = frameTime(f);
               const pp = evalProp(o.position, t);
               const qq = eulerDegToQuat(evalProp(o.rotation, t));
-              const r = rotateByQuat([center[0] * sc[0], center[1] * sc[1], center[2] * sc[2]], qq);
-              path.push(pp[0] + r[0], pp[1] + r[1], pp[2] + r[2], ...qq);
+              path.push(...placePoint(center, pp, qq, sc, o.pivot), ...qq);
             }
           }
           bodies.push({

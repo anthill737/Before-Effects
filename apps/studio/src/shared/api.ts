@@ -1,4 +1,5 @@
 /** The bridge between UI windows (renderers) and the desktop process (main). Plain data only. */
+import type { HouseDetection } from "@be/core";
 import type { EncodeResult, EncodeSpec, Preset, ProbeResult, VerifyExpectation, VerifyReport } from "@be/media";
 
 export interface AppPaths {
@@ -284,6 +285,14 @@ export interface BeApi {
     /** Editor: publish an event to connected agents (revision, selection, preparation…). */
     event(type: string, data: unknown): void;
   };
+  /** Automatic house setup: finding the parts of the house in the photo (models run on this computer). */
+  readonly detect: {
+    status(): Promise<DetectStatus>;
+    /** Run on a canvas-sized image. Fails with code "needs-download" when models are missing and downloading wasn't allowed. */
+    run(requestId: string, image: string, opts: { allowDownload: boolean; device?: "gpu" | "cpu" }): Promise<{ ok: true; detection: HouseDetection } | { ok: false; code: string; message: string }>;
+    cancel(requestId: string): Promise<boolean>;
+    onProgress(handler: (p: DetectProgress) => void): () => void;
+  };
   readonly displays: {
     list(): Promise<DisplayInfo[]>;
     identify(): Promise<void>;
@@ -343,4 +352,19 @@ declare global {
   interface Window {
     be: BeApi;
   }
+}
+
+export interface DetectStatus {
+  modelsDir: string;
+  models: Array<{ id: string; role: string; license: string; sizeMB: number; present: boolean }>;
+  /** MB still to download (0 when everything is on this computer). */
+  downloadMB: number;
+  running: string[];
+}
+
+export interface DetectProgress {
+  requestId: string;
+  stage: string;
+  fraction: number;
+  text: string;
 }

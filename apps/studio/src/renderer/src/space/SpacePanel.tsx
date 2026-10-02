@@ -4,13 +4,14 @@
  * throughout the show.
  */
 import { PhotoPlacementPanel } from "./PhotoPlacementPanel.tsx";
-import { type RegionKind } from "@be/core";
+import { HouseSetupPanel } from "./HouseSetupPanel.tsx";
+import { type RegionKind, regionHoles } from "@be/core";
 import { useState } from "react";
 import { usePreview } from "../preview/settings.ts";
 import { KIND_LABEL } from "../studio/actions.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
 import { acceptSuggestions, suggestSimilar } from "./actions.ts";
-import { duplicateAreas, groupAreas, renameGroup, ungroup } from "./areaEdit.ts";
+import { duplicateAreas, groupAreas, mergeAreas, renameGroup, splitArea, ungroup } from "./areaEdit.ts";
 import { type TraceTool, useTrace } from "./traceStore.ts";
 
 const KIND_ORDER: RegionKind[] = ["roofline", "roof", "edge", "window", "door", "garage", "column", "vent", "light", "wall", "custom", "exclusion"];
@@ -51,7 +52,8 @@ const AreaRow = ({ id }: { id: string }) => {
   return (
     <button className={`list-item ${sel.includes(id) ? "on" : ""}`} onClick={(e) => useStudio.getState().selectRegions([id], e.shiftKey || e.ctrlKey)} onDoubleClick={() => setEditing(true)} title="Double-click to rename">
       {r.name}
-      {r.holes?.length ? <span className="muted small"> · {r.holes.length} hole{r.holes.length > 1 ? "s" : ""}</span> : null}
+      {regionHoles(r, venue).length ? <span className="muted small"> · {regionHoles(r, venue).length} hole{regionHoles(r, venue).length > 1 ? "s" : ""}</span> : null}
+      {r.proposal ? <span className={r.proposal.uncertain ? "warn small" : "muted small"}> · found{r.proposal.uncertain ? ", check" : ""}</span> : null}
     </button>
   );
 };
@@ -149,6 +151,7 @@ export const SpacePanel = () => {
         <input type="range" min={0} max={1} step={0.05} value={photoOpacity} onChange={(e) => useTrace.getState().set({ photoOpacity: Number(e.target.value) })} aria-label="Photo visibility" />
       </label>
       <PhotoPlacementPanel />
+      <HouseSetupPanel />
 
       {suggestions && (
         <div className="suggest-box" role="region" aria-label="Suggested areas">
@@ -176,6 +179,21 @@ export const SpacePanel = () => {
         {sel.length > 0 && (
           <button className="ghost" onClick={() => duplicateAreas(sel)} title="Ctrl+D">
             Duplicate {sel.length > 1 ? `${sel.length} areas` : "area"}
+          </button>
+        )}
+        {selectedOne?.path.closed && (
+          <>
+            <button className="ghost" onClick={() => splitArea(selectedOne.id, "side")} title="Split into left and right parts (e.g. a double window into its panes)">
+              Split ⇆
+            </button>
+            <button className="ghost" onClick={() => splitArea(selectedOne.id, "stacked")} title="Split into top and bottom parts">
+              Split ⇅
+            </button>
+          </>
+        )}
+        {sel.length > 1 && (
+          <button className="ghost" onClick={() => mergeAreas(sel)} title="Join the selected areas into one">
+            Join {sel.length} areas
           </button>
         )}
       </div>

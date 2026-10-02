@@ -56,12 +56,12 @@ export const RegionOverlay = ({ size, interactive }: { size: { w: number; h: num
         const sel = overlays.selection && selection.regionIds.includes(r.id);
         const hov = hover === r.id;
         const edge = !r.path.closed;
-        const showOutline = overlays.outlines && (sel || hov || step === "space");
+        const showOutline = overlays.outlines && (sel || hov || step === "space" || !!r.proposal);
         return (
           <path
             key={r.id}
             d={pathD(r.path)}
-            className={`region ${edge ? "edge" : "area"} kind-${r.kind} ${sel ? "selected" : ""} ${hov && overlays.outlines ? "hover" : ""} ${showOutline ? "outlined" : ""}`}
+            className={`region ${edge ? "edge" : "area"} kind-${r.kind} ${sel ? "selected" : ""} ${hov && overlays.outlines ? "hover" : ""} ${showOutline ? "outlined" : ""} ${r.proposal ? "proposed" : ""} ${r.proposal?.uncertain ? "uncertain" : ""}`}
             onPointerEnter={() => interactive && useStudio.getState().setHover(r.id)}
             onPointerLeave={() => interactive && useStudio.getState().setHover(null)}
             onClick={(e) => {
@@ -72,7 +72,7 @@ export const RegionOverlay = ({ size, interactive }: { size: { w: number; h: num
             tabIndex={interactive ? 0 : -1}
             role="button"
             aria-pressed={sel}
-            aria-label={`${r.name}${sel ? ", selected" : ""}`}
+            aria-label={`${r.name}${r.proposal ? (r.proposal.uncertain ? ", found automatically, check it" : ", found automatically") : ""}${sel ? ", selected" : ""}`}
             onKeyDown={(e) => {
               if (interactive && (e.key === "Enter" || e.key === " ")) {
                 e.preventDefault();
@@ -82,10 +82,28 @@ export const RegionOverlay = ({ size, interactive }: { size: { w: number; h: num
           />
         );
       })}
+      {overlays.outlines && <ProposalLabels regions={regions} scale={W / size.w} />}
       {hover && venue.regions[hover] && overlays.outlines && <HoverLabel region={venue.regions[hover]!} scale={W / size.w} />}
     </svg>
   );
 };
+
+/** Names on areas found automatically (with "?" on the ones to check), until they're accepted. */
+const ProposalLabels = ({ regions, scale }: { regions: readonly Region[]; scale: number }) => (
+  <g aria-hidden="true">
+    {regions
+      .filter((r) => r.proposal)
+      .map((r) => {
+        const b = r.path.vertices.reduce((m, v) => ({ x: Math.min(m.x, v.p[0]), y: Math.min(m.y, v.p[1]) }), { x: Infinity, y: Infinity });
+        return (
+          <text key={r.id} x={b.x + 4 * scale} y={b.y + 15 * scale} className={`proposal-label ${r.proposal!.uncertain ? "uncertain" : ""}`} style={{ fontSize: 12 * scale }}>
+            {r.name}
+            {r.proposal!.uncertain ? " ?" : ""}
+          </text>
+        );
+      })}
+  </g>
+);
 
 const HoverLabel = ({ region, scale }: { region: Region; scale: number }) => {
   const b = region.path.vertices.reduce((m, v) => ({ x: Math.min(m.x, v.p[0]), y: Math.min(m.y, v.p[1]) }), { x: Infinity, y: Infinity });

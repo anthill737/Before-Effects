@@ -1,6 +1,6 @@
 /** UI journey test runner: drives the real UI step by step and captures a screenshot after each step. */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { log } from "./log.ts";
 
@@ -14,6 +14,10 @@ export const runUiTest = async (win: BrowserWindow, rendersDir: string) => {
   await win.webContents.executeJavaScript(`window.beLiveAi = ${JSON.stringify(process.env.BE_UITEST_LIVE_AI ?? "")}`);
   // Sample After Effects projects live in the repository (development builds only).
   if (!app.isPackaged) await win.webContents.executeJavaScript(`window.beRepo = ${JSON.stringify(join(app.getAppPath(), "..", ".."))}`);
+  // The house photo for the house-setup journey: BE_HOUSE_PHOTO, else the first photo in <data folder>\Venue.
+  const venueDir = join(dirname(rendersDir), "Venue");
+  const housePhoto = process.env.BE_HOUSE_PHOTO ?? (existsSync(venueDir) ? readdirSync(venueDir).filter((f) => /\.(heic|heif|jpe?g|png)$/i.test(f)).sort((a, b) => Number(/\.hei[cf]$/i.test(b)) - Number(/\.hei[cf]$/i.test(a)))[0] : undefined);
+  if (housePhoto) await win.webContents.executeJavaScript(`window.beHousePhoto = ${JSON.stringify(process.env.BE_HOUSE_PHOTO ? housePhoto : join(venueDir, housePhoto))}`);
   const steps = ((await win.webContents.executeJavaScript("window.__beTest.steps()")) as string[]).filter((s) => !only || only.includes(s));
   const results: Array<{ step: string; ok: boolean; note: string; file: string }> = [];
   for (const [i, step] of steps.entries()) {

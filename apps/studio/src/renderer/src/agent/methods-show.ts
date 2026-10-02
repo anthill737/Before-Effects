@@ -3,6 +3,7 @@
  * scenes, layers and their keyframes. Each one calls the same helpers and operations as the UI.
  */
 import {
+  regionHoles,
   type AnimProp,
   defaultParams,
   describeShow,
@@ -101,7 +102,7 @@ const rect = z.object({ x: z.number(), y: z.number(), w: z.number().positive(), 
 const rectPoints = (r: z.infer<typeof rect>): Vec2[] => [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
 const kinds = z.enum(["window", "door", "garage", "wall", "roof", "roofline", "column", "vent", "light", "edge", "exclusion", "custom"]);
 
-const areaInfo = (r: Region, detail: boolean) => {
+export const areaInfo = (r: Region, detail: boolean) => {
   const pts = flattenPath(r.path, 4);
   const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
   const v = venue();
@@ -112,10 +113,12 @@ const areaInfo = (r: Region, detail: boolean) => {
     closed: r.path.closed,
     bounds: { x: r2(Math.min(...xs)), y: r2(Math.min(...ys)), w: r2(Math.max(...xs) - Math.min(...xs)), h: r2(Math.max(...ys) - Math.min(...ys)) },
     groups: Object.values(v.groups).filter((g) => g.regionIds.includes(r.id)).map((g) => g.name),
-    holes: r.holes?.length ?? 0,
+    holes: regionHoles(r, v).length,
+    ...(r.cutouts?.length ? { cutOut: r.cutouts.map((id) => v.regions[id]?.name ?? id) } : {}),
+    ...(r.proposal ? { proposal: { score: r.proposal.score, outline: r.proposal.outline, ...(r.proposal.uncertain ? { check: r.proposal.uncertain } : {}) } } : {}),
     feather: r.feather ?? 0,
     expansion: r.expansion ?? 0,
-    ...(detail ? { points: r.path.vertices.map((x) => x.p), holePoints: (r.holes ?? []).map((h) => h.vertices.map((x) => x.p)) } : {}),
+    ...(detail ? { points: r.path.vertices.map((x) => x.p), holePoints: regionHoles(r, v).map((h) => h.vertices.map((x) => x.p)) } : {}),
   };
 };
 

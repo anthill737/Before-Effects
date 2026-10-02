@@ -68,6 +68,12 @@ const api: BeApi = {
       }),
     event: (type, data) => ipcRenderer.send("agent:event", type, data),
   },
+  detect: {
+    status: () => ipcRenderer.invoke("detect:status"),
+    run: (requestId, image, opts) => ipcRenderer.invoke("detect:run", requestId, image, opts),
+    cancel: (requestId) => ipcRenderer.invoke("detect:cancel", requestId),
+    onProgress: (handler) => on("detect:progress", handler),
+  },
   displays: {
     list: () => ipcRenderer.invoke("displays:list"),
     identify: () => ipcRenderer.invoke("displays:identify"),

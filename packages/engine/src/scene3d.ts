@@ -24,7 +24,7 @@ import {
   type ResolvedPhysics,
   type ResolvedPiece,
   type ResolvedScene3D,
-  rotateByQuat,
+  placePoint,
   showCamera,
   type Vec3,
 } from "@be/core";
@@ -202,6 +202,12 @@ export class SceneHost implements ExternalSourceRenderer {
       this.photo(r.photoAssetId);
       await this.photoLoading.get(r.photoAssetId);
     }
+    for (const o of r.objects) {
+      const id = o.object.material?.style === "image" ? o.object.material.assetId : undefined;
+      if (!id) continue;
+      this.photo(id);
+      await this.photoLoading.get(id);
+    }
     if (r.physics && src.frame >= SceneHost.firstMoving(r.physics)) {
       if (!this.physics) throw new Error("Physics can't be prepared here.");
       await this.physics.ensure(r.physics);
@@ -279,7 +285,13 @@ export class SceneHost implements ExternalSourceRenderer {
     } else {
       const base = { roughness: m?.roughness ?? 0.8, metalness: m?.metalness ?? 0, transparent: (m?.opacity ?? 1) < 1, opacity: m?.opacity ?? 1 };
       front = new THREE.MeshStandardMaterial(base);
-      if (m?.style === "photo") {
+      if (m?.style === "image" && m.assetId) {
+        // A picture on the front (e.g. what's seen through an opening); the sides stay plain.
+        front.userData.image = m.assetId;
+        side = new THREE.MeshStandardMaterial(base);
+        side.userData.sideOf = true;
+        mats.push(front, side);
+      } else if (m?.style === "photo") {
         front.userData.photo = true;
         side = new THREE.MeshStandardMaterial(base);
         side.userData.sideOf = true;
@@ -301,7 +313,13 @@ export class SceneHost implements ExternalSourceRenderer {
       const g = primitiveGeometry(o);
       if (g) {
         geos.push(g);
-        meshes.push(new THREE.Mesh(g, front));
+        if (m?.style === "image") {
+          // Pictures load top row first (not flipped): turn the face coordinates to match.
+          const uv = g.getAttribute("uv");
+          for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
+          // A box's faces in order: +x, −x, +y, −y, +z (front), −z.
+          meshes.push(new THREE.Mesh(g, g.groups.length === 6 ? [side, side, side, side, front, side] : front));
+        } else meshes.push(new THREE.Mesh(g, front));
       }
     }
     for (const mesh of meshes) {
@@ -377,6 +395,13 @@ export class SceneHost implements ExternalSourceRenderer {
               mat.needsUpdate = true;
             } else if (photo === undefined && r.photoAssetId) pending = true;
           }
+          if (mat.userData.image) {
+            const img = this.photo(mat.userData.image as string);
+            if (img && mat.map !== img) {
+              mat.map = img;
+              mat.needsUpdate = true;
+            } else if (img === undefined) pending = true;
+          }
         }
       }
       // Pieces: from prepared motion once they move, otherwise placed with the object.
@@ -397,8 +422,8 @@ export class SceneHost implements ExternalSourceRenderer {
           mesh.quaternion.set(d[off + 3]!, d[off + 4]!, d[off + 5]!, d[off + 6]!);
         } else {
           const c = piece ? piece.center : ([0, 0, 0] as Vec3);
-          const w = rotateByQuat([c[0] * scl[0], c[1] * scl[1], c[2] * scl[2]], q);
-          mesh.position.set(pos[0] + w[0], pos[1] + w[1], pos[2] + w[2]);
+          const w = placePoint(c, pos, q, scl, o.pivot);
+          mesh.position.set(w[0], w[1], w[2]);
           mesh.quaternion.set(q[0], q[1], q[2], q[3]);
         }
       });
@@ -519,6 +544,7 @@ const sameBuild = (a: Object3D, b: Object3D): boolean =>
   a.castShadow === b.castShadow &&
   a.receiveShadow === b.receiveShadow &&
   a.material?.style === b.material?.style &&
+  a.material?.assetId === b.material?.assetId &&
   a.material?.roughness === b.material?.roughness &&
   a.material?.metalness === b.material?.metalness &&
   a.material?.opacity === b.material?.opacity &&

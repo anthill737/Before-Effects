@@ -10,7 +10,7 @@
  * Points snap to nearby corners of other areas; hold Shift to keep lines straight. Areas are shared
  * by every scene: editing them here updates every scene that uses them.
  */
-import type { PathData, Region, Vec2 } from "@be/core";
+import { type PathData, type Region, regionHoles, type Vec2 } from "@be/core";
 import { useEffect, useRef, useState } from "react";
 import { pathD } from "../preview/overlays.tsx";
 import { activeVenue, useStudio } from "../studio/store.ts";
@@ -254,7 +254,7 @@ export const TracingLayer = ({ size }: { size: { w: number; h: number } }) => {
           />
         ))}
         {/* Holes of the selected area. */}
-        {selected?.holes?.map((h, i) => <path key={`hole${i}`} d={pathD(h)} className="hole-outline" />)}
+        {selected && venue && regionHoles(selected, venue).map((h, i) => <path key={`hole${i}`} d={pathD(h)} className="hole-outline" />)}
         {/* The selected area's body: drag to move the whole area. */}
         {!drawing && selected && selected.path.closed && (
           <path

@@ -93,6 +93,13 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .region.edge.hover { stroke: #ffc56b66; }
 .region.edge.selected { stroke: #74b0ff70; }
 .region:focus-visible { outline: none; stroke: var(--focus) !important; }
+/* Areas found automatically, until they're accepted: dashed; amber when they may be wrong. */
+.region.area.proposed { stroke: #7fd4ffcc; stroke-dasharray: 7 5; }
+.region.area.proposed.uncertain { stroke: #ffb347; }
+.region.edge.proposed { stroke: #7fd4ff55; }
+.region.area.proposed.selected { stroke: var(--select); fill: #74b0ff22; }
+.proposal-label { fill: #a9e3ff; font-weight: 600; paint-order: stroke; stroke: #000c; stroke-width: 3px; pointer-events: none; }
+.proposal-label.uncertain { fill: #ffc06b; }
 .hover-label { fill: #fff; paint-order: stroke; stroke: #000c; stroke-width: 3px; vector-effect: non-scaling-stroke; pointer-events: none; font-weight: 600; }
 
 /* Action bar */
@@ -479,3 +486,13 @@ dialog.ae-import progress { width: 100%; }
 .agent-last { color: #a8f0c6; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .toasts > .toast.passing { pointer-events: none; }
 body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px; border: 3px dashed var(--accent); border-radius: 14px; background: #0b0d12cc; color: var(--accent); display: grid; place-items: center; font-size: 28px; font-weight: 700; pointer-events: none; z-index: 1000; }
+
+/* Automatic house setup (Areas panel) */
+.house-setup { background: #18202c; border: 1px solid #7fd4ff44; border-radius: var(--radius); padding: 10px; display: grid; gap: 8px; margin: 8px 0; }
+.house-setup .models { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.progress-bar { height: 6px; border-radius: 3px; background: #ffffff1a; overflow: hidden; }
+.progress-bar > div { height: 100%; background: var(--accent, #ffc56b); transition: width 0.2s; }
+.proposal-list { display: grid; gap: 4px; max-height: 320px; overflow: auto; }
+.proposal-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 4px; align-items: center; }
+.proposal-row .why { grid-column: 1 / -1; color: #ffc06b; font-size: 12px; margin: -2px 0 4px 8px; }
+.proposal-row .score { font-size: 12px; color: var(--muted); }

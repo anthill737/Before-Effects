@@ -458,7 +458,9 @@ const RegionEditPanel = () => {
             <Slider label="Grow or shrink edge" min={-40} max={40} unit="px" value={one.expansion ?? 0} onChange={(v) => apply({ type: "region.update", args: { venueId: venue.id, regionId: one.id, changes: { expansion: v } } }, { label: "Grow/shrink area edge", coalesceKey: `expand-${one.id}` })} />
           </Field>
           <p className="muted small">
-            {one.holes?.length ? `${one.holes.length} hole${one.holes.length > 1 ? "s" : ""} cut out. ` : "No holes. "}Use “Cut a hole” on the left to cut one (e.g. a window out of a wall).
+            {one.holes?.length ? `${one.holes.length} hole${one.holes.length > 1 ? "s" : ""} cut out. ` : "No holes. "}
+            {one.cutouts?.length ? `${one.cutouts.length} area${one.cutouts.length > 1 ? "s" : ""} (${one.cutouts.map((c) => venue.regions[c]?.name).filter(Boolean).join(", ")}) cut out — the cut follows them when they're reshaped. ` : ""}
+            Use “Cut a hole” on the left to cut one (e.g. a window out of a wall).
             {one.holes?.length ? (
               <>
                 {" "}

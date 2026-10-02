@@ -322,6 +322,21 @@ export interface Region {
   readonly feather?: number;
   /** Default growth (+) or shrink (−) of the edge in px when content is clipped to this area. */
   readonly expansion?: number;
+  /** Areas cut out of this one (a facade's windows and doors); the cut follows them when they're reshaped. */
+  readonly cutouts?: readonly Id[];
+  /** Set while the area is an automatic proposal nobody has reviewed yet. */
+  readonly proposal?: RegionProposal;
+}
+
+/** How an automatically found area came about, kept until it's accepted. */
+export interface RegionProposal {
+  /** The detection run that proposed it. */
+  readonly batch: Id;
+  readonly score: number;
+  /** Why it may be wrong; absent when the detection was confident. */
+  readonly uncertain?: string;
+  /** The detector's box, traced from the photo, or four corners fitted to the traced shape. */
+  readonly outline: "box" | "traced" | "corners";
 }
 
 export interface RegionGroup {

@@ -4,3 +4,7 @@ packages:
 allowBuilds:
   esbuild: true
   electron: true
+  # House detection: the Windows binaries ship in the package; its install script only fetches
+  # GPU add-ons for Linux. protobufjs's script is a version notice.
+  onnxruntime-node: false
+  protobufjs: false

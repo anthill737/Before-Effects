@@ -118,7 +118,11 @@ export interface EvaluateOptions {
 const ev = <V extends PropValue>(p: AnimProp<V>, t: Flicks, o: EvaluateOptions): V => evalProp(p, t, o.props);
 
 /** Resolve a region reference to region outlines through the venue binding. */
-export const resolveRegionPaths = (project: Project, ref: RegionRef, venueId?: Id): PathData[] => refRegions(project, ref, venueId).flatMap(regionFillPaths);
+export const resolveRegionPaths = (project: Project, ref: RegionRef, venueId?: Id): PathData[] => {
+  const vid = venueId ?? project.activeVenueId;
+  const venue = vid ? project.venues[vid] : undefined;
+  return refRegions(project, ref, venueId).flatMap((r) => regionFillPaths(r, venue));
+};
 
 const resolvePath = (
   project: Project,

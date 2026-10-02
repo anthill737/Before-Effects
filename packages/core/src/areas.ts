@@ -3,7 +3,7 @@
  * or by group, so tracing a window once makes it available throughout the show, and reshaping it
  * updates every scene that uses it.
  */
-import type { Id, PathData, Project, Region, RegionRef } from "./model.ts";
+import type { Id, PathData, Project, Region, RegionRef, Venue } from "./model.ts";
 
 /** Region ids a reference points at (group → explicit ids → role binding), in order. */
 export const refRegionIds = (project: Project, ref: RegionRef, venueId?: Id): Id[] => {
@@ -28,5 +28,14 @@ const reversed = (p: PathData): PathData => ({
   vertices: [...p.vertices].reverse().map((v) => ({ p: v.p, ...(v.out ? { in: v.out } : {}), ...(v.in ? { out: v.in } : {}) })),
 });
 
+/** An area's holes: the ones cut by hand plus the current outlines of the areas cut out of it. */
+export const regionHoles = (r: Region, venue?: Venue): PathData[] => [
+  ...(r.holes ?? []),
+  ...(venue ? (r.cutouts ?? []).map((id) => venue.regions[id]?.path).filter((p): p is PathData => !!p && p.closed) : []),
+];
+
+/** The area an area is cut out of (a window's facade), if any. */
+export const cutoutParent = (venue: Venue, id: Id): Region | undefined => Object.values(venue.regions).find((r) => r.cutouts?.includes(id));
+
 /** Outline of an area plus its holes. Holes run the other way round, so non-zero filling cuts them out. */
-export const regionFillPaths = (r: Region): PathData[] => [r.path, ...(r.holes ?? []).filter((h) => h.vertices.length >= 3).map(reversed)];
+export const regionFillPaths = (r: Region, venue?: Venue): PathData[] => [r.path, ...regionHoles(r, venue).filter((h) => h.vertices.length >= 3).map(reversed)];
