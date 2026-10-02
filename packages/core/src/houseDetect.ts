@@ -13,7 +13,7 @@ export interface Box {
   readonly y1: number;
 }
 
-export type DetectLabel = "house" | "garage door" | "door" | "window" | "roof" | "column" | "vent" | "lamp";
+export type DetectLabel = "house" | "garage door" | "door" | "window" | "roof" | "column" | "brick pillar" | "vent" | "lamp" | "steps";
 
 export interface RawDetection {
   readonly label: DetectLabel;
@@ -38,8 +38,12 @@ export const DETECT_LABELS: readonly LabelRule[] = [
   { label: "window", kind: "window", min: 0.3, sure: 0.5 },
   { label: "roof", kind: "roof", min: 0.3, sure: 0.5 },
   { label: "column", kind: "column", min: 0.3, sure: 0.45 },
+  // Brick and stone pillars are often missed as "columns".
+  { label: "brick pillar", kind: "column", min: 0.3, sure: 0.45 },
   { label: "vent", kind: "vent", min: 0.25, sure: 0.4 },
   { label: "lamp", kind: "light", min: 0.3, sure: 0.58 },
+  // Not an area of its own: porches and steps become part of the facade.
+  { label: "steps", kind: null, min: 0.3, sure: 0.5 },
 ];
 
 const RULE = Object.fromEntries(DETECT_LABELS.map((r) => [r.label, r])) as Record<DetectLabel, LabelRule>;
@@ -99,8 +103,14 @@ export const selectCandidates = (dets: readonly RawDetection[], image: { width: 
 
   type Work = { label: DetectLabel; kind: RegionKind; score: number; box: Box; uncertain?: string };
   // Keep parts on the main house that aren't house-sized.
+  // Porches and steps on the house (they join the facade rather than being areas of their own).
+  const extras = dets
+    .filter((d) => d.label === "steps" && d.score >= RULE.steps.min && boxIou(d.box, onHouse) > 0 && containedIn(d.box, expand(onHouse, 0.05)) > 0.6)
+    .sort((a, b) => b.score - a.score)
+    .filter((d, i, all) => !all.slice(0, i).some((o) => containedIn(d.box, o.box) > 0.6))
+    .map((d) => ({ label: d.label, score: d.score, box: d.box }));
   let work: Work[] = dets
-    .filter((d) => d.label !== "house" && d.score >= RULE[d.label].min)
+    .filter((d) => d.label !== "house" && RULE[d.label].kind !== null && d.score >= RULE[d.label].min)
     .filter((d) => {
       const [cx, cy] = centre(d.box);
       return cx >= onHouse.x0 && cx <= onHouse.x1 && cy >= onHouse.y0 && cy <= onHouse.y1;
@@ -118,9 +128,11 @@ export const selectCandidates = (dets: readonly RawDetection[], image: { width: 
     }
     return kept.filter((s) => !kept.some((b) => b !== s && boxArea(b.box) > boxArea(s.box) && containedIn(s.box, b.box) > 0.8 && b.score >= 0.6 * s.score && s.label !== "roof"));
   };
-  const byLabel = new Map<DetectLabel, Work[]>();
-  for (const d of work) byLabel.set(d.label, [...(byLabel.get(d.label) ?? []), d]);
-  work = [...byLabel.values()].flatMap(dedupe);
+  const byKind = new Map<RegionKind, Work[]>();
+  for (const d of work) byKind.set(d.kind, [...(byKind.get(d.kind) ?? []), d]);
+  work = [...byKind.values()].flatMap(dedupe);
+  // Columns are tall and narrow; a wide box found as a "pillar" is a stretch of wall.
+  work = work.filter((d) => d.kind !== "column" || (d.box.y1 - d.box.y0) / Math.max(1, d.box.x1 - d.box.x0) >= 2);
 
   // Doors and garage doors are often found by both prompts: the shape decides.
   const isWide = (b: Box) => aspect(b) >= 1.1;
@@ -167,7 +179,7 @@ export const selectCandidates = (dets: readonly RawDetection[], image: { width: 
     if (d.kind === "column" && 1 / aspect(d.box) < 2.5) reasons.push("not shaped like a column");
     return { key: `p${i + 1}`, kind: d.kind, label: d.label, score: d.score, box: d.box, ...(reasons.length ? { uncertain: reasons.join("; ") } : {}) };
   });
-  return { house, candidates, notes };
+  return { house, candidates, extras, notes };
 };
 
 // ——— Masks → outlines ———
@@ -421,6 +433,8 @@ export interface HouseDetection {
 /** A traced shape for a candidate (from the segmentation model), in image pixels. */
 export interface TracedShape {
   readonly outline: readonly Vec2[];
+  /** Four corners already fitted to the photo (doors, garage doors), used as they are. */
+  readonly corners?: readonly Vec2[];
   /** The segmentation model's own confidence (0..1). */
   readonly quality: number;
 }
@@ -478,8 +492,12 @@ export const buildProposals = (input: {
     const reasons = c.uncertain ? [c.uncertain] : [];
     // The house box can take in a neighbour's house; the traced silhouette can't.
     if (silOk && !insidePolygon(sil!.outline, centre(c.box)) && distToPolygon(sil!.outline, centre(c.box)) > 0.03 * (input.house!.box.x1 - input.house!.box.x0)) reasons.push("may not be part of this house");
-    if (agrees && RECT_KINDS.has(c.kind)) {
-      points = fitQuadRobust(s.outline);
+    if (s?.corners?.length === 4 && RECT_KINDS.has(c.kind)) {
+      // Corners already fitted to the photo's edges.
+      points = [...s.corners];
+      outline = "corners";
+    } else if (agrees && RECT_KINDS.has(c.kind)) {
+      points = s.corners?.length === 4 ? [...s.corners] : fitQuadRobust(s.outline);
       outline = "corners";
       // A fitted quad that lost most of the shape's area isn't a good fit.
       if (Math.abs(polygonArea(points)) < 0.75 * Math.abs(polygonArea(s.outline))) {

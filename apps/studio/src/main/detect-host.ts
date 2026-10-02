@@ -23,6 +23,18 @@ import {
   fillBox,
   fillPolygon,
   fitQuadRobust,
+  extendRoofEnds,
+  fillShortGaps,
+  fitRectsToPhoto,
+  growMask,
+  straightBottomRuns,
+  meanLuma,
+  type Picture,
+  removeDarkTop,
+  setTop,
+  squareBottom,
+  trimBottomSpikes,
+  straightTop,
   type HouseDetection,
   largestComponent,
   maskArea,
@@ -34,6 +46,8 @@ import {
   type TracedShape,
   type Vec2,
 } from "@be/core";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { DETECT_MODELS, modelsMissing } from "./detect-models.ts";
 
 interface RunMessage {
@@ -69,6 +83,23 @@ interface SamProcessorLike {
   post_process_masks(masks: unknown, original: unknown, reshaped: unknown): Promise<Array<{ dims: number[]; data: ArrayLike<number | boolean> }>>;
 }
 
+/** BE_DETECT_DEBUG=<folder>: write the house mask after each stage (development aid). */
+const dump = (name: string, m: BitMask) => {
+  const dir = process.env.BE_DETECT_DEBUG;
+  if (!dir) return;
+  const head = Buffer.from(`P5 ${m.width} ${m.height} 255
+`);
+  const body = Buffer.alloc(m.width * m.height);
+  for (let i = 0; i < body.length; i++) body[i] = m.data[i] ? 255 : 0;
+  writeFileSync(join(dir, `${name}.pgm`), Buffer.concat([head, body]));
+};
+
+const orMask = (a: BitMask, b: BitMask): BitMask => {
+  const data = new Uint8Array(a.data);
+  for (let i = 0; i < data.length; i++) if (b.data[i]) data[i] = 1;
+  return { width: a.width, height: a.height, data };
+};
+
 /** How much of a box the mask covers (0..1). */
 const boxCovered = (m: BitMask, b: { x0: number; y0: number; x1: number; y1: number }) => {
   let n = 0, all = 0;
@@ -100,6 +131,7 @@ const run = async (m: RunMessage) => {
   }
   const notes: string[] = [];
   const image = await RawImage.read(m.image);
+  const picture: Picture = { width: image.width, height: image.height, channels: image.channels, data: image.data };
   const [gdino, sam] = DETECT_MODELS as [(typeof DETECT_MODELS)[0], (typeof DETECT_MODELS)[1]];
 
   // The GPU (DirectML) when it works; the CPU otherwise (several times slower, same results).
@@ -119,7 +151,7 @@ const run = async (m: RunMessage) => {
 
   const raw: RawDetection[] = [];
   for (const [i, rule] of DETECT_LABELS.entries()) {
-    progress("detect", 0.35 + (0.3 * i) / DETECT_LABELS.length, `Looking for ${rule.label === "lamp" ? "light fixtures" : `${rule.label}s`}`);
+    progress("detect", 0.35 + (0.3 * i) / DETECT_LABELS.length, `Looking for ${rule.label === "lamp" ? "light fixtures" : rule.label === "steps" ? "porch steps" : `${rule.label}s`}`);
     const found = (await detector(image, [`${rule.label}.`], { threshold: Math.min(rule.min, 0.25), percentage: false })) as Array<{ score: number; box: { xmin: number; ymin: number; xmax: number; ymax: number } }>;
     for (const d of found) raw.push({ label: rule.label, score: d.score, box: { x0: d.box.xmin, y0: d.box.ymin, x1: d.box.xmax, y1: d.box.ymax } });
   }
@@ -184,9 +216,26 @@ const run = async (m: RunMessage) => {
     if (r && (c.kind !== "roof" || r.spill < 0.25)) shapes[c.key] = { outline: traceOutline(r.mask), quality: r.quality };
   }
 
+  // Rectangular parts fitted to the photo's edges, starting from the detector's box.
+  const RECT = new Set(["window", "door", "garage", "column", "vent"]);
+  const rects = new Map<string, Vec2[]>();
+  const persp: unknown[] = [];
+  // The segmentation model's outline of each part, as a second opinion on its edges.
+  const traced = new Map<string, BitMask>();
+  for (const c of sel.candidates) {
+    const sh = shapes[c.key];
+    if (RECT.has(c.kind) && sh && sh.outline.length >= 8) traced.set(c.key, fillPolygon({ width: image.width, height: image.height, data: new Uint8Array(image.width * image.height) }, sh.outline));
+  }
+  for (const [k, q] of fitRectsToPhoto(picture, sel.candidates.filter((c) => RECT.has(c.kind)), process.env.BE_DETECT_DEBUG ? persp : undefined, traced)) rects.set(k, q);
+  if (process.env.BE_DETECT_DEBUG)
+    writeFileSync(join(process.env.BE_DETECT_DEBUG, "parts.json"), JSON.stringify(sel.candidates.filter((c) => RECT.has(c.kind)).map((c) => ({ key: c.key, kind: c.kind, box: c.box, outline: shapes[c.key]?.outline ?? [] }))));
+  if (process.env.BE_DETECT_DEBUG) writeFileSync(join(process.env.BE_DETECT_DEBUG, "perspective.json"), JSON.stringify(persp, null, 1));
+
   // The whole house: points on the house and its parts, and points on the sky and ground outside it.
   let silhouette: TracedShape | undefined;
   let roofline: Vec2[] | undefined;
+  let house: BitMask | null = null;
+  const darkRoofs = new Set<string>();
   if (sel.house) {
     progress("trace", 0.93, "Tracing the house");
     const hb = sel.house.box;
@@ -196,29 +245,84 @@ const run = async (m: RunMessage) => {
     if (hb.y1 < image.height - 12) outside.push([(hb.x0 + hb.x1) / 2, (hb.y1 + image.height) / 2, 0]);
     const r = await segment([...inside, ...outside], grow(hb, 0.02));
     if (r && boxArea(pointsBox(traceOutline(r.mask))) > 0.3 * boxArea(hb)) {
-      // The house includes its doors and windows (white doors can fool the tracing); small notches
-      // along the edges (stonework, shadows) are closed.
       // Parts on the traced house belong to it: anything mostly on it, and structural parts (a
       // column, a door) that touch it — the tracing can leave out a whole pillar beside a garage.
       const structural = new Set(["column", "door", "garage", "window"]);
       let m = r.mask;
+      dump("1-sam", m);
       for (const c of sel.candidates) {
         const covered = boxCovered(r.mask, c.box);
         if (c.kind === "roof" || !(covered >= 0.2 || (structural.has(c.kind) && covered >= 0.05))) continue;
-        // Its traced shape when that fits the detection (a column seen in perspective), else its box.
-        const sh = shapes[c.key];
-        m = sh && sh.outline.length >= 24 && boxIou(pointsBox(sh.outline), c.box) >= 0.75 ? fillPolygon(m, fitQuadRobust(sh.outline)) : fillBox(m, c.box);
+        // Its outline fitted to the photo (a column seen in perspective), else its box.
+        const q = rects.get(c.key);
+        m = q ? fillPolygon(m, q) : fillBox(m, c.box);
       }
+      // Porches and steps that meet the house are part of what's lit.
+      for (const e of sel.extras) {
+        if (boxCovered(m, grow(e.box, 0.05)) < 0.02) continue;
+        const { x0, y0, x1, y1 } = e.box;
+        const cy = (y0 + y1) / 2;
+        const st = await segment([[(x0 + x1) / 2, cy, 1], [x0 + (x1 - x0) * 0.2, cy, 1], [x0 + (x1 - x0) * 0.8, cy, 1]], grow(e.box, 0.02));
+        m = st && st.spill < 0.4 ? orMask(m, st.mask) : fillBox(m, e.box);
+        notes.push("The porch and steps were included in the facade.");
+      }
+      dump("2-parts", m);
+      const hw = hb.x1 - hb.x0;
       m = largestComponent(closeMask(m, Math.max(3, Math.round(image.width / 240))));
+      // Drawn the way a person would: solid top to bottom, the bottom along the lowest course of
+      // the wall in straight runs, and roof slopes continued to their eave tips.
+      m = fillShortGaps(m, (hb.y1 - hb.y0) * 0.08);
+      dump("3-gaps", m);
+      m = squareBottom(m, hw * 0.1, Math.max(2, image.height / 270));
+      dump("4-square", m);
+      m = straightBottomRuns(m, sel.extras.map((e) => e.box), hw * 0.08, (hb.y1 - hb.y0) * 0.1);
+      dump("5-runs", m);
+      m = trimBottomSpikes(m, hw * 0.03);
+      // Thin spurs (a stray column of pixels) go first.
+      m = largestComponent(growMask(growMask(m, -3), 3));
+      // Dark roof surfaces (shingles) take projected light poorly: they leave the facade.
+      for (const c of sel.candidates) {
+        const sh = c.kind === "roof" ? shapes[c.key] : undefined;
+        if (!sh) continue;
+        const where = fillPolygon({ width: m.width, height: m.height, data: new Uint8Array(m.width * m.height) }, sh.outline);
+        if (meanLuma(picture, where) >= 0.36) continue;
+        const r2 = removeDarkTop(m, picture, where, 0.31);
+        if (!r2.removed) continue;
+        m = r2.mask;
+        darkRoofs.add(c.key);
+      }
+      if (darkRoofs.size) notes.push("Dark roof shingles were left out: projected light barely shows on them.");
+      dump("6-dark", m);
+      // Thin dark lines left in a gutter or trim close up.
+      m = largestComponent(closeMask(m, 3));
+      // The roof edge in straight runs, carried on to the eave tips.
+      const top = straightTop(m, Math.max(6, image.width * 0.006));
+      m = setTop(m, top, 40);
+      const eaves = extendRoofEnds(m, picture, top, hb);
+      m = largestComponent(eaves.mask);
+      dump("7-final", m);
+      house = m;
       silhouette = { outline: traceOutline(m), quality: r.quality };
-      roofline = topContour(m, hb, 2);
+      roofline = eaves.line;
     } else notes.push("The outline of the whole house couldn't be traced; the facade is a box to reshape.");
+  }
+  // Only what's on this house: parts barely touching it (a neighbour's light) are left out.
+  let candidates = sel.candidates.filter((c) => !darkRoofs.has(c.key));
+  if (house) {
+    const off = candidates.filter((c) => boxCovered(house!, c.box) < 0.15);
+    if (off.length) notes.push(`Left out ${off.length} part${off.length > 1 ? "s" : ""} that ${off.length > 1 ? "aren't" : "isn't"} on this house (${off.map((c) => c.kind).join(", ")}).`);
+    candidates = candidates.filter((c) => !off.includes(c));
+  }
+  // Rectangular parts: the corners fitted to the photo.
+  for (const c of candidates) {
+    const q = rects.get(c.key);
+    if (q) shapes[c.key] = { ...(shapes[c.key] ?? { outline: [], quality: 0 }), corners: q };
   }
   await model.dispose();
 
-  if (sel.candidates.some((c) => c.kind === "roof" && !shapes[c.key])) notes.push("Some roof surfaces couldn't be outlined reliably and weren't proposed; trace them by hand if you need them.");
+  if (sel.candidates.some((c) => c.kind === "roof" && !shapes[c.key] && !darkRoofs.has(c.key))) notes.push("Some roof surfaces couldn't be outlined reliably and weren't proposed; trace them by hand if you need them.");
   progress("build", 0.98, "Putting the proposals together");
-  const proposals = buildProposals({ house: sel.house, candidates: sel.candidates, shapes, ...(silhouette ? { silhouette } : {}), ...(roofline ? { roofline } : {}), tolerance: Math.max(1.5, image.width / 800) });
+  const proposals = buildProposals({ house: sel.house, candidates, shapes, ...(silhouette ? { silhouette } : {}), ...(roofline ? { roofline } : {}), tolerance: Math.max(1.5, image.width / 800) });
   const detection: HouseDetection = { image: { width: image.width, height: image.height }, house: sel.house, proposals, notes, device, seconds: (performance.now() - t0) / 1000, models: DETECT_MODELS.map((x) => x.id) };
   send({ type: "result", detection });
 };
