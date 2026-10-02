@@ -11,7 +11,7 @@ import { activeVenue, currentComp, useStudio } from "./store.ts";
 
 type Outcome = "share" | "master" | "transparent" | "projector";
 
-interface OutcomeDef {
+export interface OutcomeDef {
   readonly id: Outcome;
   readonly title: string;
   readonly body: string;
@@ -21,14 +21,14 @@ interface OutcomeDef {
   readonly suffix: string;
 }
 
-const OUTCOMES: OutcomeDef[] = [
+export const OUTCOMES: OutcomeDef[] = [
   { id: "share", title: "A video to share", body: "MP4 that plays on phones, browsers and Google Drive.", preset: "h264", alpha: false, mbps: 12, suffix: "share" },
   { id: "master", title: "A high-quality master", body: "ProRes 422 HQ for editing or archiving. Large files.", preset: "prores-422hq", alpha: false, mbps: 220, suffix: "master" },
   { id: "transparent", title: "A transparent animation", body: "ProRes 4444 with transparency, for layering in other software.", preset: "prores-4444", alpha: true, mbps: 330, suffix: "transparent" },
   { id: "projector", title: "Files for my projector", body: "The show already lined up for your projector — play it full-screen.", preset: "h264", alpha: false, mbps: 12, suffix: "projector-1" },
 ];
 
-const SIZES = [
+export const SIZES = [
   { id: "full", label: "Full size", f: 1 },
   { id: "half", label: "Half size", f: 0.5 },
   { id: "quarter", label: "Quarter size (quick drafts)", f: 0.25 },

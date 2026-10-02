@@ -8,7 +8,7 @@ import { type Composition, newComposition, newId, sceneIds, type ShowEntry, time
 import { useState } from "react";
 import { useStudio } from "./store.ts";
 
-const pickScene = (compId: string) => {
+export const pickScene = (compId: string) => {
   const s = useStudio.getState();
   const c = s.project?.compositions[compId];
   if (!c) return;
@@ -28,7 +28,7 @@ export const newSceneCopy = (): string | null => {
   return id;
 };
 
-const newEmptyScene = (): string | null => {
+export const newEmptyScene = (): string | null => {
   const s = useStudio.getState();
   const cur = s.project && s.compId ? s.project.compositions[s.compId] : undefined;
   if (!s.project || !cur) return null;

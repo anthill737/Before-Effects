@@ -77,6 +77,17 @@ describe("building areas and content assignments", () => {
     expect(f3.kind === "footage" && f3.frame).toBe((30 + 3 * 2 * 30) % 120);
   });
 
+  it("keeps a hand edit (hidden layer) when the content's settings change", () => {
+    const h = setup();
+    assign(h, "c1", "s1", "vid", { regionIds: ["w1"] });
+    const lid = Object.keys(h.project.compositions.s1!.layers)[0]!;
+    h.apply({ type: "layer.update", args: { compId: "s1", layerId: lid, changes: { enabled: false } } });
+    h.apply({ type: "recipe.update", args: { instanceId: "c1", params: { opacity: 50 } } });
+    const l = h.project.compositions.s1!.layers[lid]!;
+    expect(l.enabled).toBe(false);
+    expect(l.transform.opacity.keyframes?.some((k) => k.v === 50) || l.transform.opacity.value === 50).toBe(true);
+  });
+
   it("plays a repeated video's sound once, not once per area", () => {
     const h = setup();
     h.apply({ type: "asset.update", args: { assetId: "vid", changes: { audioPath: "clip.wav" } } });

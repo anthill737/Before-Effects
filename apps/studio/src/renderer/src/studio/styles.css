@@ -226,7 +226,8 @@ progress { width: 100%; height: 12px; accent-color: var(--accent); }
 .checks .bad { color: var(--danger); }
 
 /* Toasts */
-.toasts { position: fixed; bottom: 222px; left: 14px; display: grid; gap: 8px; z-index: 50; width: min(420px, 90vw); }
+.toasts { position: fixed; bottom: 222px; left: 14px; display: grid; gap: 8px; z-index: 50; width: min(420px, 90vw); pointer-events: none; }
+.toasts > .toast { pointer-events: auto; }
 .toast { display: flex; gap: 10px; align-items: flex-start; background: #1d222c; border: 1px solid var(--line); border-left: 4px solid var(--select); padding: 10px 12px; border-radius: var(--radius); box-shadow: 0 8px 30px #000a; }
 .toast > span { flex: 1; }
 .toast.error { border-left-color: var(--danger); }
@@ -463,3 +464,16 @@ dialog.ae-import progress { width: 100%; }
 .object-editor { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
 .make-3d { margin: 8px 0; }
 .physics-status { margin: 6px 0; }
+
+/* Agent access */
+.agent-btn { display: inline-flex; align-items: center; gap: 6px; }
+.agent-dot { width: 8px; height: 8px; border-radius: 50%; background: #5b6372; }
+.agent-btn.on .agent-dot { background: #4fd18b; }
+.agent-btn.active .agent-dot { background: #4fd18b; box-shadow: 0 0 0 3px #4fd18b44; }
+.agent-panel { width: 460px; right: 0; display: flex; flex-direction: column; gap: 8px; }
+.agent-status { padding: 8px 10px; border-radius: 8px; background: var(--panel-2); font-size: 13px; }
+.agent-status.ok { border-left: 3px solid #4fd18b; }
+.agent-status.warn { border-left: 3px solid #ffc56b; }
+.copyable .code { margin: 4px 0 0; padding: 8px; background: #0b0d12; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; user-select: all; }
+.agent-last { color: #a8f0c6; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.toasts > .toast.passing { pointer-events: none; }

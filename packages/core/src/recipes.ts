@@ -172,11 +172,11 @@ const syncGenerated = (d: Draft<Project>, inst: Draft<RecipeInstance>, layers: L
     if (old) {
       const overrides = inst.overrides[fresh.id] ?? [];
       if (overrides.length) {
-        next = structuredClone(fresh);
+        // Generated layers can hold pieces of the draft (e.g. area references), which structuredClone can't copy.
+        next = plainCopy(fresh);
         for (const path of overrides) {
-          const raw = getAt(old, path);
-          const v = isDraft(raw) ? current(raw) : raw;
-          if (v !== undefined && !setAt(next, path, structuredClone(v))) notes.push(`A custom edit (${path}) no longer applies.`);
+          const v = plainCopy(getAt(old, path));
+          if (v !== undefined && !setAt(next, path, v)) notes.push(`A custom edit (${path}) no longer applies.`);
         }
       }
       comp.layers[fresh.id] = next as Draft<Layer>;
@@ -188,6 +188,14 @@ const syncGenerated = (d: Draft<Project>, inst: Draft<RecipeInstance>, layers: L
     inst.generated[next.generatedBy!.role] = fresh.id;
   }
   return notes;
+};
+
+/** A deep, independent copy of plain data that may contain Immer drafts. */
+const plainCopy = <T>(v: T): T => {
+  if (isDraft(v)) return structuredClone(current(v as Draft<T>)) as T;
+  if (Array.isArray(v)) return v.map(plainCopy) as T;
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plainCopy(x)])) as T;
+  return v;
 };
 
 // ---------------------------------------------------------------------------------------------

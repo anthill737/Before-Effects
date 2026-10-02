@@ -15,6 +15,9 @@ export default defineConfig({
           index: resolve(__dirname, "src/main/index.ts"),
           "mcp-bridge": resolve(__dirname, "src/main/mcp-bridge.ts"),
           "assistant-test-cli": resolve(__dirname, "src/main/assistant-test-cli.ts"),
+          // External-agent clients: an MCP server and a command-line tool (plain Node).
+          "agent-mcp": resolve(__dirname, "src/main/agent-mcp.ts"),
+          "agent-cli": resolve(__dirname, "src/main/agent-cli.ts"),
         },
       },
     },

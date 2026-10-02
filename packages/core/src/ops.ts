@@ -18,7 +18,7 @@ import type { Id, Project } from "./model.ts";
 
 enablePatches();
 
-export type OpSource = "user" | "recipe" | "assistant" | "script" | "system";
+export type OpSource = "user" | "recipe" | "assistant" | "agent" | "script" | "system";
 
 export class OpError extends Error {
   /** Plain-language message for the person, naming the affected item and what to do. */

@@ -22,13 +22,15 @@ import { useStudio } from "./store.ts";
 import { Timeline } from "./Timeline.tsx";
 import { TopBar } from "./TopBar.tsx";
 import { Welcome } from "./Welcome.tsx";
+import { startAgentHost } from "../agent/index.ts";
 
 const Toasts = () => {
   const toasts = useStudio((s) => s.toasts);
   return (
     <div className="toasts" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`}>
+        // Passing notices never block clicks underneath; errors and notices with an action stay clickable.
+        <div key={t.id} className={`toast ${t.kind} ${t.kind !== "error" && !t.action && !t.details ? "passing" : ""}`}>
           <span>{t.text}</span>
           {t.details && (
             <details>
@@ -134,6 +136,8 @@ export const App = () => {
   const assistantOpen = useAssistant((s) => s.open);
   useShortcuts();
   useEffect(() => startAutosave(), []);
+  // External agents (when Agent access is on) are served by the editor window, even before a show is open.
+  useEffect(() => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? startAgentHost() : undefined), []);
   useEffect(() => (screen === "studio" ? startEditorSync() : undefined), [screen]);
   useEffect(() => (screen === "studio" ? startAudioSync() : undefined), [screen]);
   useEffect(() => (screen === "studio" ? startAssistant() : undefined), [screen]);

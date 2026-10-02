@@ -12,6 +12,7 @@ import { registerAvCheckIpc } from "./avcheck.ts";
 import { registerDecodeIpc, stopAllDecoders } from "./decode.ts";
 import { cancelAllEncodes, health, paths, registerFileIpc } from "./files.ts";
 import { registerMediaImportIpc } from "./mediaImport.ts";
+import { registerAgentApi, shutdownAgentApi } from "./agentApi.ts";
 import { registerAssistantIpc, shutdownAssistant } from "./assistant.ts";
 import { registerRenderQueue, shutdownRenders } from "./renderQueue.ts";
 import { initLog, log } from "./log.ts";
@@ -100,6 +101,7 @@ const shutdown = () => {
   stopAllDecoders();
   shutdownRenders();
   shutdownAssistant();
+  shutdownAgentApi();
   closeSecondary();
   stopAll();
 };
@@ -107,6 +109,8 @@ const shutdown = () => {
 app.whenReady().then(() => {
   log(`ready (mode ${mode}, packaged ${app.isPackaged}, ffmpeg ${health().ffmpeg.ok ? "ok" : "MISSING"})`);
   const win = createEditor(mode);
+  // The external-agent API starts with the app when it's enabled (Settings → Agent access).
+  if (mode === "studio" || mode === "uitest") void registerAgentApi(mode);
   if (mode === "uitest") win.webContents.once("did-finish-load", () => void runUiTest(win, paths().renders));
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createEditor(mode);

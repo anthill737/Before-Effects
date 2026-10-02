@@ -43,7 +43,7 @@ const [packaged] = await packager({
   out: join(buildDir, ".packager"),
   overwrite: true,
   // The assistant's MCP bridge runs as a separate Node process, so it must be a real file.
-  asar: { unpack: "**/out/main/{mcp-bridge,assistant-test-cli}.js" },
+  asar: { unpack: "**/out/main/{mcp-bridge.js,assistant-test-cli.js,agent-mcp.js,agent-cli.js,chunks/agent-shared*.js}" },
   prune: false,
   icon: join(studio, "build", "icon.ico"),
   electronVersion,

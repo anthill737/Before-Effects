@@ -68,6 +68,36 @@ export interface RenderJob extends RenderJobSpec {
   delivery?: { state: "copying" | "copied" | "failed"; target: string; at?: string; error?: string } | undefined;
 }
 
+/** External-agent API status for the settings panel. */
+export interface AgentStatus {
+  readonly enabled: boolean;
+  readonly listening: boolean;
+  readonly port: number;
+  readonly url: string;
+  readonly error: string;
+  readonly configFile: string;
+  readonly requests: number;
+  readonly lastRequestAt: string;
+  readonly lastMethod: string;
+  readonly clients: ReadonlyArray<{ name: string; at: string }>;
+  readonly streams: number;
+  readonly setup: { claude: string; codex: string; mcpJson: string; cli: string; cliScript: string; exe: string };
+}
+
+/** A call from an external agent, executed in the editor. */
+export interface AgentCall {
+  readonly callId: string;
+  readonly method: string;
+  readonly params: unknown;
+  readonly requestId: string;
+}
+export interface AgentCallResult {
+  readonly ok: boolean;
+  readonly result?: unknown;
+  readonly error?: { readonly code: string; readonly message: string; readonly details?: unknown };
+  readonly revision?: number;
+}
+
 export interface SavedFile {
   readonly path: string;
   readonly savedAt: string;
@@ -225,6 +255,16 @@ export interface BeApi {
     metrics(): Promise<{ cpu: string; threads: number; ramGB: number; processes: Array<{ type: string; name: string; mb: number; privateMb: number }> }>;
     reportSpike(result: unknown): Promise<void>;
     log(message: string): void;
+  };
+  readonly agent: {
+    status(): Promise<AgentStatus>;
+    setEnabled(on: boolean): Promise<AgentStatus>;
+    setPort(port: number): Promise<AgentStatus>;
+    newToken(): Promise<AgentStatus>;
+    /** Editor: execute calls from external agents. */
+    onCall(handler: (call: AgentCall) => Promise<AgentCallResult>): () => void;
+    /** Editor: publish an event to connected agents (revision, selection, preparation…). */
+    event(type: string, data: unknown): void;
   };
   readonly displays: {
     list(): Promise<DisplayInfo[]>;

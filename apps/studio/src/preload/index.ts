@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import type { AssistantToolCall, BeApi, WindowKind } from "../shared/api.ts";
+import type { AgentCall, AssistantToolCall, BeApi, WindowKind } from "../shared/api.ts";
 
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
 const kind = (arg("be-kind") ?? "editor") as WindowKind;
@@ -52,6 +52,20 @@ const api: BeApi = {
     metrics: () => ipcRenderer.invoke("app:metrics"),
     reportSpike: (result) => ipcRenderer.invoke("app:reportSpike", result),
     log: (message) => ipcRenderer.send("app:log", message),
+  },
+  agent: {
+    status: () => ipcRenderer.invoke("agent:status"),
+    setEnabled: (on) => ipcRenderer.invoke("agent:setEnabled", on),
+    setPort: (port) => ipcRenderer.invoke("agent:setPort", port),
+    newToken: () => ipcRenderer.invoke("agent:newToken"),
+    onCall: (handler) =>
+      on("agent:call", (call: AgentCall) => {
+        void handler(call).then(
+          (r) => ipcRenderer.send("agent:result", call.callId, r),
+          (e: unknown) => ipcRenderer.send("agent:result", call.callId, { ok: false, error: { code: "internal", message: String((e as Error)?.message ?? e) } }),
+        );
+      }),
+    event: (type, data) => ipcRenderer.send("agent:event", type, data),
   },
   displays: {
     list: () => ipcRenderer.invoke("displays:list"),

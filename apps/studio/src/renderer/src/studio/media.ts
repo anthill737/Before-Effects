@@ -56,7 +56,7 @@ export const analyseBeats = async (asset: Asset): Promise<AudioAnalysis | null> 
 };
 
 /** Import files and return the new assets (already in the project). */
-export const importMediaFiles = async (paths?: string[]): Promise<Asset[]> => {
+export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean } = {}): Promise<Asset[]> => {
   const s = useStudio.getState();
   const project = s.project;
   if (!project) return [];
@@ -92,7 +92,7 @@ export const importMediaFiles = async (paths?: string[]): Promise<Asset[]> => {
   }
   // Music: find the beat in the background (needed for "Move with the beat").
   for (const a of out) if (a.kind === "audio") void analyseBeats(a);
-  if (out.length) s.toast({ kind: "success", text: `Imported ${out.length} file${out.length > 1 ? "s" : ""}. ${out.some((a) => a.kind === "audio") ? "Finding the beat of your music…" : ""}` });
+  if (out.length && !opts.quiet) s.toast({ kind: "success", text: `Imported ${out.length} file${out.length > 1 ? "s" : ""}. ${out.some((a) => a.kind === "audio") ? "Finding the beat of your music…" : ""}` });
   return out;
 };
 

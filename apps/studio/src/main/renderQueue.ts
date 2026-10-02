@@ -43,9 +43,17 @@ const load = () => {
   }
 };
 
+const queueListeners = new Set<(list: RenderJob[]) => void>();
+/** Notified on every queue change (the agent API streams job progress from here). */
+export const onQueueChange = (fn: (list: RenderJob[]) => void): (() => void) => {
+  queueListeners.add(fn);
+  return () => queueListeners.delete(fn);
+};
+
 const broadcast = () => {
   const list = jobs.map(({ snapshot: _s, ...rest }) => rest);
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w !== worker) w.webContents.send("render:update", list);
+  for (const fn of queueListeners) fn(list as RenderJob[]);
 };
 
 const update = (id: string, changes: Partial<RenderJob>) => {

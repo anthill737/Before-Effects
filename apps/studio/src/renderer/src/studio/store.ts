@@ -37,6 +37,30 @@ export interface Selection {
   readonly layerId: string | null;
 }
 
+/**
+ * While an external agent's call runs, its edits are grouped into one undo step (marked as the
+ * agent's), their transaction ids are kept for rollback, and problems and notices are collected
+ * for the agent instead of appearing as toasts.
+ */
+export interface AgentScope {
+  readonly group: string;
+  readonly errors: string[];
+  readonly notes: string[];
+  readonly txIds: string[];
+}
+let agentScope: AgentScope | null = null;
+/** Run synchronous editing code as part of an agent call. */
+export const inAgentScope = <T>(scope: AgentScope, fn: () => T): T => {
+  const prev = agentScope;
+  agentScope = scope;
+  try {
+    return fn();
+  } finally {
+    agentScope = prev;
+  }
+};
+export const currentAgentScope = (): AgentScope | null => agentScope;
+
 export interface StudioState {
   history: History | null;
   project: Project | null;
@@ -149,11 +173,15 @@ export const useStudio = create<StudioState>((set, get) => {
     apply(ops, opts = {}) {
       const h = get().history;
       if (!h) return null;
+      const scope = agentScope;
       try {
-        return h.apply(ops, opts);
+        const tx = h.apply(ops, scope ? { ...opts, source: "agent", group: scope.group } : opts);
+        if (scope && !scope.txIds.includes(tx.id)) scope.txIds.push(tx.id);
+        return tx;
       } catch (e) {
         const msg = e instanceof OpError ? e.userMessage : "Something went wrong applying that change. Nothing was changed.";
-        if (!opts.quiet) get().toast({ kind: "error", text: msg, details: String((e as Error)?.message ?? e) });
+        if (scope) scope.errors.push(`${msg}${e instanceof OpError && e.message !== e.userMessage ? ` (${e.message})` : ""}`);
+        else if (!opts.quiet) get().toast({ kind: "error", text: msg, details: String((e as Error)?.message ?? e) });
         return null;
       }
     },
@@ -213,6 +241,11 @@ export const useStudio = create<StudioState>((set, get) => {
       if (get().hoverRegionId !== hoverRegionId) set({ hoverRegionId });
     },
     toast(t) {
+      // During an agent call, messages go back to the agent (the call shows one summary toast).
+      if (agentScope) {
+        (t.kind === "error" ? agentScope.errors : agentScope.notes).push(t.text);
+        return;
+      }
       const id = ++toastId;
       set((s) => ({ toasts: [...s.toasts.slice(-3), { ...t, id }] }));
       if (t.kind !== "error") setTimeout(() => get().dismissToast(id), 3200);
