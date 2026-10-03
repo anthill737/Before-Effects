@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   areaScene,
+  BLOCK_PRESETS,
+  blockCells,
+  blockPose,
+  type Blocks3D,
   createRegistry,
   emitterPoint,
   emptyProject,
@@ -189,5 +193,69 @@ describe("breaking apart", () => {
     expect(pane.material?.opacity).toBe(GLASS.opacity);
     const shards = resolveScene3D(h.project, scene, { venueId: "v", canvas, fps: 30, frames: 150 }).physics!.bodies.filter((b) => b.kind === "fragment");
     expect(shards.length).toBeGreaterThan(40);
+  });
+});
+
+describe("blocks", () => {
+  const area = (p: readonly (readonly number[])[]) => Math.abs(p.reduce((s, q, i) => s + q[0]! * p[(i + 1) % p.length]![1]! - p[(i + 1) % p.length]![0]! * q[1]!, 0)) / 2;
+  const wall: [number, number][] = [[0, 0], [400, 0], [400, 200], [0, 200]];
+
+  it("cut the surface into a grid of cubes, full-height columns or full-width rows, with gaps", () => {
+    const cubes = blockCells(wall, [], { shape: "cubes", size: 50, gap: 0 });
+    expect(cubes.length).toBe(8 * 4);
+    expect(Math.abs(cubes.reduce((s, c) => s + area(c), 0) / (400 * 200) - 1)).toBeLessThan(0.001);
+    const gapped = blockCells(wall, [], { shape: "cubes", size: 50, gap: 4 });
+    expect(gapped.reduce((s, c) => s + area(c), 0)).toBeCloseTo(32 * 46 * 46, -1);
+    const cols = blockCells(wall, [], { shape: "columns", size: 50, gap: 0 });
+    expect(cols.length).toBe(8);
+    expect(cols.every((c) => Math.max(...c.map((q) => q[1])) - Math.min(...c.map((q) => q[1])) === 200)).toBe(true);
+    expect(blockCells(wall, [], { shape: "rows", size: 50, gap: 0 }).length).toBe(4);
+    // A window cut out of the wall stays empty.
+    const holed = blockCells(wall, [[[100, 50], [200, 50], [200, 150], [100, 150]]], { shape: "cubes", size: 50, gap: 0 });
+    expect(Math.abs(holed.reduce((s, c) => s + area(c), 0) / (400 * 200 - 100 * 100) - 1)).toBeLessThan(0.001);
+  });
+
+  it("move by rule in time: still before they start, flat again after, never into the wall unless asked", () => {
+    const h = setup();
+    const resolve = (blocks: Blocks3D) => {
+      const scene = areaScene(h.project, { sceneId: "b", idPrefix: "b", name: "b", ref: { role: "areas", regionIds: ["wall"] }, venueId: "v", canvas, blocks });
+      expect(scene.objects["b-area"]!.blocks).toEqual(blocks);
+      return resolveScene3D(h.project, scene, { venueId: "v", canvas, fps: 30, frames: 300 }).objects.find((o) => o.object.id === "b-area")!.pieces;
+    };
+    const b = { ...BLOCK_PRESETS.pulse.blocks, startAt: 1, stopAt: 6, ramp: 1 };
+    const pieces = resolve(b);
+    expect(pieces.length).toBeGreaterThan(20);
+    const at = (t: number, bb: Blocks3D = b) => pieces.map((_, i) => blockPose(bb, pieces, i, t));
+    expect(at(0.5).every((p) => p.dz === 0 && p.angle === 0)).toBe(true);
+    expect(at(6.2).every((p) => p.dz === 0)).toBe(true);
+    const mid = [2, 2.4, 3.1, 3.7, 4.4].flatMap((t) => at(t));
+    expect(mid.every((p) => p.dz >= 0 && p.dz <= b.amount / 100 + 1e-9)).toBe(true);
+    expect(Math.max(...mid.map((p) => p.dz))).toBeGreaterThan(0.2);
+    expect(at(3.3)).toEqual(at(3.3));
+    const both = [2, 2.4, 3.1, 3.7, 4.4].flatMap((t) => at(t, { ...b, bothWays: true }));
+    expect(Math.min(...both.map((p) => p.dz))).toBeLessThan(-0.1);
+  });
+
+  it("ripple from a point; checker moves neighbours opposite; slats turn", () => {
+    const h = setup();
+    const scene = areaScene(h.project, { sceneId: "r", idPrefix: "r", name: "r", ref: { role: "areas", regionIds: ["wall"] }, venueId: "v", canvas, blocks: BLOCK_PRESETS.ripple.blocks });
+    const pieces = resolveScene3D(h.project, scene, { venueId: "v", canvas, fps: 30, frames: 300 }).objects.find((o) => o.object.id === "r-area")!.pieces;
+    // A crest moves outward: the block where the push peaks gets farther from the centre over time.
+    const ripple = { ...BLOCK_PRESETS.ripple.blocks, startAt: 0, ramp: 0, stopAt: null, bothWays: true };
+    const cx = pieces.reduce((s, p) => s + p.center[0], 0) / pieces.length, cy = pieces.reduce((s, p) => s + p.center[1], 0) / pieces.length;
+    const near = pieces.map((p, i) => [Math.hypot(p.center[0] - cx, p.center[1] - cy), i] as const).filter(([d]) => d < (ripple.wavelength / 100) * 0.5);
+    const crestDistance = (t: number) => {
+      const best = near.reduce((a, c) => (blockPose(ripple, pieces, c[1], t).dz > blockPose(ripple, pieces, a[1], t).dz ? c : a));
+      return best[0];
+    };
+    const t0 = 2, dt = 0.25 / ripple.speed;
+    expect(crestDistance(t0 + dt * 0.4)).toBeGreaterThanOrEqual(crestDistance(t0));
+    const checker = { ...ripple, pattern: "checker" as const };
+    const signs = pieces.map((_, i) => Math.sign(blockPose(checker, pieces, i, 2.2).dz));
+    expect(new Set(signs).size).toBe(2);
+    const slats = { ...BLOCK_PRESETS.slats.blocks, startAt: 0, ramp: 0 };
+    const turned = pieces.map((_, i) => blockPose(slats, pieces, i, 2.2));
+    expect(turned.every((p) => p.dz === 0 && p.axis === "y")).toBe(true);
+    expect(Math.max(...turned.map((p) => Math.abs(p.angle)))).toBeGreaterThan(0.3);
   });
 });

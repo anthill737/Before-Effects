@@ -7,6 +7,7 @@ import {
   type AnimProp,
   areaScene,
   ballObject,
+  BLOCK_PRESETS,
   boxObject,
   DEFAULT_FRACTURE,
   DEFAULT_PHYSICS,
@@ -39,12 +40,17 @@ export const COLLAPSE_EFFECT = { id: "collapse-3d", title: FRACTURE_PRESETS.coll
 export type BreakPreset = keyof typeof FRACTURE_PRESETS;
 /** Breaking apart with real physics: collapse & rebuild, explode, crumble, shatter (cards in the effects list). */
 export const BREAK_EFFECTS = (Object.keys(FRACTURE_PRESETS) as BreakPreset[]).map((k) => ({ id: k === "collapse" ? COLLAPSE_EFFECT.id : `${k}-3d`, preset: k, title: FRACTURE_PRESETS[k].title, description: FRACTURE_PRESETS[k].description }));
+export type BlockPreset = keyof typeof BLOCK_PRESETS;
+/** The surface as moving blocks: pulsing cubes, ripples, waves, columns, slats (cards in the effects list). */
+export const BLOCK_EFFECTS = (Object.keys(BLOCK_PRESETS) as BlockPreset[]).map((k) => ({ id: `blocks-${k}`, preset: k, title: BLOCK_PRESETS[k].title, description: BLOCK_PRESETS[k].description }));
 /** Particles drawn by rule in 3D (cards in the effects list). */
 export const PARTICLE_EFFECTS = (Object.keys(PARTICLE_PRESETS) as ParticleKind[]).map((k) => ({ id: `particles-${k}`, kind: k, title: PARTICLE_PRESETS[k].title, description: PARTICLE_PRESETS[k].description }));
 /** Card id → what it makes. */
-export const effect3dFor = (id: string): { break: BreakPreset } | { particles: ParticleKind } | null => {
+export const effect3dFor = (id: string): { break: BreakPreset } | { blocks: BlockPreset } | { particles: ParticleKind } | null => {
   const b = BREAK_EFFECTS.find((e) => e.id === id);
   if (b) return { break: b.preset };
+  const k = BLOCK_EFFECTS.find((e) => e.id === id);
+  if (k) return { blocks: k.preset };
   const p = PARTICLE_EFFECTS.find((e) => e.id === id);
   return p ? { particles: p.kind } : null;
 };
@@ -72,8 +78,8 @@ const refFor = (regionIds: readonly string[]): RegionRef => {
   return g ? { role: g.name, groupId: g.id } : { role: "areas", regionIds: [...regionIds] };
 };
 
-/** Give areas thickness as a 3D solid (optionally breaking apart), shown by a new 3D layer. */
-export const makeArea3D = (regionIds: readonly string[], collapse: boolean, preset: BreakPreset = "collapse"): string | null => {
+/** Give areas thickness as a 3D solid (optionally breaking apart, or as moving blocks), shown by a new 3D layer. */
+export const makeArea3D = (regionIds: readonly string[], collapse: boolean, preset: BreakPreset = "collapse", blocksPreset?: BlockPreset): string | null => {
   const s = useStudio.getState();
   const comp = currentComp(s);
   const venue = activeVenue(s);
@@ -82,7 +88,8 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean, pres
   const sceneId = newId("s3d");
   const name = `${names.length > 2 ? `${names.length} areas` : names.join(" + ")} in 3D`;
   const fracture = FRACTURE_PRESETS[preset].fracture;
-  const scene = areaScene(s.project, { sceneId, idPrefix: sceneId, name, ref: refFor(regionIds), venueId: venue.id, canvas: venue.canvas, collapse, fracture });
+  const blocks = blocksPreset && !collapse ? BLOCK_PRESETS[blocksPreset].blocks : undefined;
+  const scene = areaScene(s.project, { sceneId, idPrefix: sceneId, name, ref: refFor(regionIds), venueId: venue.id, canvas: venue.canvas, collapse, fracture, ...(blocks ? { blocks } : {}) });
   const layerId = newId("layer");
   const start = snapToFrame(Math.min(s.time, Math.max(0, comp.duration - secondsToTime(2))), comp.frameRate);
   const layer: Layer = {
@@ -108,7 +115,7 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean, pres
       { type: "scene3d.add", args: { scene } },
       { type: "layer.add", args: { compId: comp.id, layer } },
     ],
-    { label: collapse ? FRACTURE_PRESETS[preset].title.replace(" (3D)", " in 3D") : "Give the area thickness" },
+    { label: collapse ? FRACTURE_PRESETS[preset].title.replace(" (3D)", " in 3D") : blocks ? BLOCK_PRESETS[blocksPreset!].title.replace(" (3D)", "") : "Give the area thickness" },
   );
   if (!tx) return null;
   // Show the result: the Areas step covers the picture with the tracing photo.
@@ -117,7 +124,9 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean, pres
   use3D.setState({ objectId: `${sceneId}-area` });
   s.toast({
     kind: "success",
-    text: collapse
+    text: blocks
+      ? `“${name}”: ${BLOCK_PRESETS[blocksPreset!].description.charAt(0).toLowerCase()}${BLOCK_PRESETS[blocksPreset!].description.slice(1)} Adjust it on the right; look around it in “3D projection”.`
+      : collapse
       ? preset === "collapse"
         ? `“${name}”: the area breaks apart ${DEFAULT_FRACTURE.collapseAt} s in and flies back at ${DEFAULT_FRACTURE.rebuildAt} s. Adjust it on the right; look around it in “3D projection”.`
         : `“${name}”: the area ${preset === "explode" ? "explodes" : preset === "shatter" ? "shatters like glass" : "crumbles"} ${fracture.collapseAt} s in, with real physics. Adjust it on the right; look around it in “3D projection”.`

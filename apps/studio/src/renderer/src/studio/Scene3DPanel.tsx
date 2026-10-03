@@ -4,7 +4,7 @@
  * animated: click ◆ to add a keyframe at the playhead; once animated, changing the value sets a
  * keyframe at the playhead.
  */
-import { type AnimProp, DEFAULT_FRACTURE, evalProp, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, type RGBA, type Scene3D, timeToSeconds, type Vec3 } from "@be/core";
+import { type AnimProp, type Blocks3D, DEFAULT_BLOCKS, DEFAULT_FRACTURE, evalProp, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, type RGBA, type Scene3D, timeToSeconds, type Vec3 } from "@be/core";
 import { type ReactNode, useState } from "react";
 import { addObject, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
@@ -225,6 +225,8 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
   const m = o.material;
   const ph = o.physics;
   const fr = o.fracture;
+  const bl = o.blocks;
+  const setBl = (c: Partial<Blocks3D>, label: string, key: string) => bl && up({ blocks: { ...bl, ...c } }, label, key);
   const L = o.light;
   const setMat = (c: Partial<Material3D>, label: string, key: string) => m && up({ material: { ...m, ...c } }, label, key);
   const setPhys = (c: Partial<Physics3D>, label: string, key: string) => ph && up({ physics: { ...ph, ...c } }, label, key);
@@ -482,6 +484,84 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
               <button className="ghost" onClick={() => setFr({ seed: fr.seed + 1 }, "Shuffle the pieces", "seed")}>
                 Shuffle the pieces
               </button>
+            </>
+          )}
+        </Section>
+      )}
+
+      {o.geometry?.kind === "area" && !fr && (
+        <Section title="Blocks" open={!!bl}>
+          <Toggle
+            label="Move as blocks"
+            value={!!bl}
+            onChange={(v) => up(v ? { blocks: { ...DEFAULT_BLOCKS, stopAt: Math.max(1.5, lenS - 0.5) } } : { blocks: null }, v ? "Move as blocks" : "Stop moving as blocks", "blocks")}
+          />
+          {bl && (
+            <>
+              <Field label="Shape" help="Cubes: a grid. Columns: tall strips. Rows: wide strips.">
+                <Choice label="Shape" value={bl.shape} choices={[{ value: "cubes", label: "Cubes" }, { value: "columns", label: "Columns" }, { value: "rows", label: "Rows" }]} onChange={(v) => setBl({ shape: v as Blocks3D["shape"] }, "Change the block shape", "shape")} />
+              </Field>
+              <Field label="Size" help="Smaller blocks: more of them (up to 600).">
+                <Slider label="Block size" value={bl.size} min={10} max={300} step={1} unit="cm" onChange={(v) => setBl({ size: v }, "Change block size", "size")} />
+              </Field>
+              <Field label="Gap" help="Space between the blocks, where the dark inside shows.">
+                <Slider label="Gap between blocks" value={bl.gap} min={0} max={30} step={0.5} unit="cm" onChange={(v) => setBl({ gap: v }, "Change the gap", "gap")} />
+              </Field>
+              <Field label="Motion">
+                <Choice label="Motion" value={bl.motion} choices={[{ value: "push", label: "Push out" }, { value: "turn", label: "Turn (slats)" }]} onChange={(v) => setBl({ motion: v as Blocks3D["motion"], amount: v === "turn" ? 75 : 40 }, "Change how blocks move", "motion")} />
+              </Field>
+              <Field label="Pattern" help="Pulse: all together. Ripple: rings from a point. Wave: a band across. Random: each its own. Checker: neighbours opposite.">
+                <Choice
+                  label="Pattern"
+                  value={bl.pattern}
+                  choices={[{ value: "pulse", label: "Pulse" }, { value: "ripple", label: "Ripple" }, { value: "wave", label: "Wave" }, { value: "random", label: "Random" }, { value: "checker", label: "Checker" }]}
+                  onChange={(v) => setBl({ pattern: v as Blocks3D["pattern"] }, "Change the pattern", "pattern")}
+                />
+              </Field>
+              <Field label={bl.motion === "turn" ? "Turns up to" : "Pushes out up to"}>
+                <Slider label={bl.motion === "turn" ? "Turn angle" : "Push distance"} value={bl.amount} min={0} max={bl.motion === "turn" ? 180 : 200} step={1} unit={bl.motion === "turn" ? "°" : "cm"} onChange={(v) => setBl({ amount: v }, "Change how far blocks move", "amount")} />
+              </Field>
+              <Toggle label={bl.motion === "turn" ? "Turn both ways" : "Also sink into the wall"} value={bl.bothWays} onChange={(v) => setBl({ bothWays: v }, v ? "Move both ways" : "Move out only", "both")} />
+              <Field label="Speed">
+                <Slider label="Speed" value={bl.speed} min={0.05} max={4} step={0.05} unit="per s" onChange={(v) => setBl({ speed: v }, "Change speed", "speed")} />
+              </Field>
+              {(bl.pattern === "ripple" || bl.pattern === "wave") && (
+                <Field label="Wavelength" help="Distance between crests.">
+                  <Slider label="Wavelength" value={bl.wavelength} min={40} max={2000} step={10} unit="cm" onChange={(v) => setBl({ wavelength: v }, "Change wavelength", "wavelength")} />
+                </Field>
+              )}
+              {bl.pattern === "wave" && (
+                <Field label="Direction" help="0°: left to right · 90°: upward · 180°: right to left · 270°: downward.">
+                  <Slider label="Wave direction" value={bl.direction} min={0} max={359} step={1} unit="°" onChange={(v) => setBl({ direction: v }, "Change wave direction", "direction")} />
+                </Field>
+              )}
+              {bl.pattern === "ripple" && (
+                <>
+                  <Field label="Ripples start from (across)">
+                    <Slider label="Ripple centre across" value={Math.round(bl.origin[0] * 100)} min={0} max={100} step={1} unit="%" onChange={(v) => setBl({ origin: [v / 100, bl.origin[1]] }, "Move the ripple centre", "origin-x")} />
+                  </Field>
+                  <Field label="Ripples start from (down)">
+                    <Slider label="Ripple centre down" value={Math.round(bl.origin[1] * 100)} min={0} max={100} step={1} unit="%" onChange={(v) => setBl({ origin: [bl.origin[0], v / 100] }, "Move the ripple centre", "origin-y")} />
+                  </Field>
+                </>
+              )}
+              <Field label="Starts moving at" help="Seconds into this layer.">
+                <Slider label="Blocks start at" value={bl.startAt} min={0} max={Math.max(1, lenS)} step={1 / 30} unit="s" onChange={(v) => setBl({ startAt: v }, "Change when blocks start", "start")} />
+              </Field>
+              <Toggle label="Settle flat again" value={bl.stopAt !== null} onChange={(v) => setBl({ stopAt: v ? Math.max(bl.startAt + bl.ramp, lenS - 0.5) : null }, v ? "Settle flat again" : "Keep moving", "stop-on")} />
+              {bl.stopAt !== null && (
+                <Field label="Flat again by" help="Seconds into this layer.">
+                  <Slider label="Blocks flat by" value={bl.stopAt} min={bl.startAt} max={Math.max(bl.startAt + 0.1, lenS)} step={1 / 30} unit="s" onChange={(v) => setBl({ stopAt: v }, "Change when blocks settle", "stop")} />
+                </Field>
+              )}
+              <Field label="Gets going over" help="Seconds to start moving, and to settle.">
+                <Slider label="Blocks ease" value={bl.ramp} min={0} max={5} step={0.1} unit="s" onChange={(v) => setBl({ ramp: v }, "Change easing", "ramp")} />
+              </Field>
+              {bl.pattern === "random" || bl.pattern === "pulse" ? (
+                <button className="ghost" onClick={() => setBl({ seed: bl.seed + 1 }, "Shuffle the blocks", "seed")}>
+                  Shuffle the blocks
+                </button>
+              ) : null}
             </>
           )}
         </Section>

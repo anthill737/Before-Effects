@@ -8,7 +8,7 @@ import { type Asset, getRecipe, newId } from "@be/core";
 import { useState } from "react";
 import { applyEffect, applyRecipeToSelection } from "./actions.ts";
 import { contentForArea, dropOnArea, isContentDrag, readDragPayload, setDragPayload } from "./assign.ts";
-import { addParticles, BREAK_EFFECTS, effect3dFor, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
+import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, effect3dFor, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
 import { addAssetLayer, importMediaFiles } from "./media.ts";
 import { findMissingInFolder, findOne } from "./relink.ts";
@@ -22,6 +22,12 @@ const SIM_KIND: Record<string, string> = {
   "collapse-3d": "physical: rigid pieces simulated with Rapier",
   "explode-3d": "physical: rigid pieces simulated with Rapier",
   "crumble-3d": "physical: rigid pieces simulated with Rapier",
+  "shatter-3d": "physical: glass shards simulated with Rapier",
+  "blocks-pulse": "procedural: blocks moved by rule (a pattern in time), not simulated",
+  "blocks-ripple": "procedural: blocks moved by rule (rings from a point), not simulated",
+  "blocks-wave": "procedural: blocks moved by rule (a wave across), not simulated",
+  "blocks-columns": "procedural: columns moved by rule (a wave across), not simulated",
+  "blocks-slats": "procedural: slats turned by rule (a wave across), not simulated",
   "melt-area": "procedural: the picture is warped downward by rule, not simulated",
   "particles-sparks": "procedural: particles placed by rule (drag, gravity, wind), not simulated — they don't hit the house",
   "particles-embers": "procedural: particles placed by rule (rise, sway, flicker), not simulated",
@@ -210,7 +216,7 @@ export const ContentPanel = () => {
 
       <h3 className="subhead">Animations</h3>
       <div className="anim-cards">
-        {[...ANIMATIONS.map((id) => getRecipe(id)).filter((r): r is NonNullable<typeof r> => !!r), ...BREAK_EFFECTS, ...PARTICLE_EFFECTS, MELT_EFFECT]
+        {[...ANIMATIONS.map((id) => getRecipe(id)).filter((r): r is NonNullable<typeof r> => !!r), ...BREAK_EFFECTS, ...BLOCK_EFFECTS, ...PARTICLE_EFFECTS, MELT_EFFECT]
           .map((r) => (
             <div
               key={r.id}
@@ -224,7 +230,7 @@ export const ContentPanel = () => {
                 if (!sel.regionIds.length) return useStudio.getState().toast({ kind: "info", text: `Drag “${r.title}” onto an area, or select areas and click it.` });
                 if (r.id === MELT_EFFECT.id) return void meltAreas(sel.regionIds);
                 if (!e3) return void applyEffect(r.id);
-                return "break" in e3 ? void makeArea3D(sel.regionIds, true, e3.break) : void addParticles(e3.particles, sel.regionIds);
+                return "break" in e3 ? void makeArea3D(sel.regionIds, true, e3.break) : "blocks" in e3 ? void makeArea3D(sel.regionIds, false, "collapse", e3.blocks) : void addParticles(e3.particles, sel.regionIds);
               }}
               title={`${r.description}${SIM_KIND[r.id] ? ` (${SIM_KIND[r.id]})` : ""}`}
               role="button"

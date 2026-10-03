@@ -12,6 +12,8 @@ import {
   type Material3D,
   type Object3D,
   type Physics3D,
+  type Blocks3D,
+  DEFAULT_BLOCKS,
   type Fracture3D,
   type PropValue,
   type Scene3D,
@@ -82,6 +84,7 @@ const objectInfo = (o: Object3D, t: number) => ({
   ...(o.material ? { material: { style: o.material.style, color: evalProp(o.material.color, t), roughness: o.material.roughness, metalness: o.material.metalness, glow: evalProp(o.material.glow, t), opacity: o.material.opacity } } : {}),
   ...(o.physics ? { physics: o.physics } : {}),
   ...(o.fracture ? { fracture: o.fracture } : {}),
+  ...(o.blocks ? { blocks: o.blocks } : {}),
   ...(o.light ? { light: { ...o.light, intensity: evalProp(o.light.intensity, t) } } : {}),
 });
 
@@ -123,13 +126,14 @@ method({
 method({
   name: "scene3d.createFromAreas",
   summary:
-    "Give areas thickness as a 3D solid (photo on its front, inside, ledge, ground, key light, fill), optionally breaking apart with real physics (Rapier): collapse (falls and flies back), explode (bursts toward the audience) crumble (top first, piles up) or shatter (like a pane of glass: thin, clear shards burst out from where it's struck). Adds a 3D layer at the playhead.",
-  params: z.object({ areas: z.array(z.string()).min(1), collapse: z.boolean().optional(), preset: z.enum(["collapse", "explode", "crumble", "shatter"]).optional(), thicknessCm: z.number().min(1).max(500).optional() }),
+    "Give areas thickness as a 3D solid (photo on its front, inside, ledge, ground, key light, fill), optionally breaking apart with real physics (Rapier): collapse (falls and flies back), explode (bursts toward the audience) crumble (top first, piles up) or shatter (like a pane of glass: thin, clear shards burst out from where it's struck). Or, with blocks, the surface as moving blocks (procedural, worked out from time): pulse (cubes breathing together), ripple (rings from a point), wave (a wave across), columns (tall columns pushing out) or slats (tall slats turning); adjust with scene3d.objectUpdate blocks. Adds a 3D layer at the playhead.",
+  params: z.object({ areas: z.array(z.string()).min(1), collapse: z.boolean().optional(), preset: z.enum(["collapse", "explode", "crumble", "shatter"]).optional(), blocks: z.enum(["pulse", "ripple", "wave", "columns", "slats"]).optional(), thicknessCm: z.number().min(1).max(500).optional() }),
   mutates: true,
   example: { areas: ["Wall 1"], collapse: true, preset: "explode", thicknessCm: 30 },
   run: (p, ctx) => {
     const ids = areaIds(p.areas);
-    const layerId = ctx.edit(() => makeArea3D(ids, !!p.collapse || !!p.preset, p.preset ?? "collapse"));
+    if (p.blocks && (p.collapse || p.preset)) throw new AgentError("invalid_params", "Choose either breaking apart (collapse/preset) or blocks, not both.");
+    const layerId = ctx.edit(() => makeArea3D(ids, !!p.collapse || !!p.preset, p.preset ?? "collapse", p.blocks));
     if (!layerId) throw new AgentError("rejected", "Those areas couldn't be made 3D.");
     const l = currentComp(st())!.layers[layerId]!;
     const sid = l.source.kind === "scene3d" ? l.source.sceneId : "";
@@ -223,6 +227,27 @@ method({
     material: z.object({ style: z.enum(["photo", "color", "shadow"]), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1) }).partial().optional(),
     physics: z.object({ body: z.enum(["dynamic", "static"]), mass: z.number().min(0.01).max(1e6), friction: z.number().min(0).max(2), bounce: z.number().min(0).max(1) }).partial().nullable().optional(),
     fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(0).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass"]) }).partial().nullable().optional(),
+    blocks: z
+      .object({
+        shape: z.enum(["cubes", "columns", "rows"]),
+        size: z.number().min(5).max(1000),
+        gap: z.number().min(0).max(100),
+        motion: z.enum(["push", "turn"]),
+        pattern: z.enum(["pulse", "ripple", "wave", "random", "checker"]),
+        amount: z.number().min(0).max(500),
+        bothWays: z.boolean(),
+        speed: z.number().min(0).max(20),
+        wavelength: z.number().min(10).max(10000),
+        direction: z.number(),
+        origin: z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]),
+        startAt: z.number().min(0),
+        stopAt: z.number().min(0).nullable(),
+        ramp: z.number().min(0).max(30),
+        seed: z.number().int(),
+      })
+      .partial()
+      .nullable()
+      .optional(),
     light: z.object({ type: z.enum(["directional", "spot", "point", "ambient"]), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), intensity: z.number().min(0).max(100), castShadow: z.boolean(), target: vec3, angle: z.number().min(1).max(89), softness: z.number().min(0).max(1) }).partial().optional(),
   }),
   mutates: true,
@@ -256,6 +281,13 @@ method({
       if (f.rebuildAt !== null && f.rebuildAt <= f.collapseAt) throw new AgentError("invalid_params", "rebuildAt must be after collapseAt (or null to stay down).");
       changes.fracture = f;
       if (!o.physics || o.physics.body !== "dynamic") changes.physics = { ...(o.physics ?? { mass: 2000, friction: 0.7, bounce: 0.15 }), body: "dynamic" };
+    }
+    if (p.blocks === null) changes.blocks = null;
+    else if (p.blocks) {
+      if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", "Only building areas given thickness can move as blocks.");
+      const bl: Blocks3D = { ...(o.blocks ?? DEFAULT_BLOCKS), ...p.blocks } as Blocks3D;
+      if (bl.stopAt !== null && bl.stopAt <= bl.startAt) throw new AgentError("invalid_params", "stopAt must be after startAt (or null to keep moving).");
+      changes.blocks = bl;
     }
     if (p.light) {
       if (!o.light) throw new AgentError("invalid_params", `“${o.name}” isn't a light.`);

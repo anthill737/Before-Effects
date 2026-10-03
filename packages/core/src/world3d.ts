@@ -91,6 +91,41 @@ export interface Fracture3D {
   readonly pattern?: "pieces" | "glass";
 }
 
+/**
+ * The surface as blocks that move in a pattern (procedural: worked out from time, like particles):
+ * cubes pushing out and back, columns rising, slats turning, in a pulse, ripples, a wave…
+ */
+export interface Blocks3D {
+  /** cubes: a grid · columns: full-height strips · rows: full-width strips. */
+  readonly shape: "cubes" | "columns" | "rows";
+  /** Block size in cm (= canvas pixels). */
+  readonly size: number;
+  /** Gap between blocks (cm). */
+  readonly gap: number;
+  /** push: toward the audience (and back) · turn: about their own middle, like slats. */
+  readonly motion: "push" | "turn";
+  /** pulse: all together · ripple: rings from a point · wave: a band across · random: each its own · checker: alternate blocks opposite. */
+  readonly pattern: "pulse" | "ripple" | "wave" | "random" | "checker";
+  /** How far: cm pushed out, or degrees turned. */
+  readonly amount: number;
+  /** Also push in (or turn the other way); otherwise only out from the wall. */
+  readonly bothWays: boolean;
+  /** Cycles per second. */
+  readonly speed: number;
+  /** Distance between wave crests (cm), for ripple and wave. */
+  readonly wavelength: number;
+  /** Direction a wave travels, degrees (0 = left to right, 90 = upward). */
+  readonly direction: number;
+  /** Where ripples start, across the area (0..1, top-left origin). */
+  readonly origin: Vec2;
+  /** Seconds into the layer when they start moving, and when they've settled flat again (null = keep moving). */
+  readonly startAt: number;
+  readonly stopAt: number | null;
+  /** Seconds to get going and to settle. */
+  readonly ramp: number;
+  readonly seed: number;
+}
+
 export interface Light3D {
   readonly type: "directional" | "spot" | "point" | "ambient";
   readonly color: RGBA;
@@ -121,6 +156,8 @@ export interface Object3D {
   readonly physics?: Physics3D;
   /** Break into pieces that fall (and optionally fly back). Areas only. */
   readonly fracture?: Fracture3D;
+  /** The surface as moving blocks (cubes, columns, slats). Areas only; ignored while it breaks apart. */
+  readonly blocks?: Blocks3D;
   readonly light?: Light3D;
   /** A moving part of the house made from a traced area (see parts3d.ts). */
   readonly part?: import("./parts3d.ts").PartInfo;
@@ -396,6 +433,111 @@ export const glassShards = (outline: readonly Vec2[], holes: readonly (readonly 
   return pieces;
 };
 
+/**
+ * Cut an outline (minus holes) into blocks: a grid of squares, full-height columns or full-width
+ * rows, `size` apart with `gap` between them (canvas pixels). Blocks are clipped to the outline.
+ */
+export const blockCells = (outline: readonly Vec2[], holes: readonly (readonly Vec2[])[], b: Pick<Blocks3D, "shape" | "size" | "gap">): Vec2[][] => {
+  const key = simHash(stableJson({ blocks: 1, outline, holes, shape: b.shape, size: b.size, gap: b.gap }));
+  const hit = fractureCache.get(key);
+  if (hit) return hit;
+  const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  let s = Math.max(4, b.size);
+  const count = () => (b.shape === "cubes" ? Math.ceil((x1 - x0) / s) * Math.ceil((y1 - y0) / s) : Math.ceil((b.shape === "columns" ? x1 - x0 : y1 - y0) / s));
+  while (count() > MAX_FRAGMENTS) s *= 1.15;
+  const gap = Math.max(0, Math.min(b.gap, s * 0.45)) / 2;
+  const nx = b.shape === "rows" ? 1 : Math.max(1, Math.round((x1 - x0) / s));
+  const ny = b.shape === "columns" ? 1 : Math.max(1, Math.round((y1 - y0) / s));
+  const cw = (x1 - x0) / nx, ch = (y1 - y0) / ny;
+  const gx = b.shape === "rows" ? 0 : gap, gy = b.shape === "columns" ? 0 : gap;
+  const ring = (pts: readonly Vec2[]): [number, number][] => pts.map((p) => [p[0], p[1]]);
+  const open = (rg: [number, number][]): Vec2[] => (rg.length > 1 && rg[0]![0] === rg.at(-1)![0] && rg[0]![1] === rg.at(-1)![1] ? rg.slice(0, -1) : rg) as Vec2[];
+  const cells: Vec2[][] = [];
+  try {
+    const whole = polygonClipping.difference([ring(outline)], ...holes.filter((h) => h.length >= 3).map((h) => [ring(h)]));
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++) {
+        const ax = x0 + i * cw + gx, bx = x0 + (i + 1) * cw - gx;
+        const ay = y0 + j * ch + gy, by = y0 + (j + 1) * ch - gy;
+        for (const poly of polygonClipping.intersection([[[ax, ay], [bx, ay], [bx, by], [ax, by]]], whole)) {
+          const o = open(poly[0]!);
+          if (o.length >= 3 && Math.abs(polyArea(o)) > 4) cells.push(ccw(o));
+        }
+      }
+  } catch {
+    return [ccw([...outline])];
+  }
+  fractureCache.set(key, cells);
+  if (fractureCache.size > 24) fractureCache.delete(fractureCache.keys().next().value!);
+  return cells;
+};
+
+const smoothstep = (a: number, b: number, x: number) => {
+  if (b <= a) return x >= b ? 1 : 0;
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+/** One block's offset at a moment: pushed out `dz` metres, turned `angle` radians about `axis` through its middle. */
+export interface BlockPose {
+  readonly dz: number;
+  readonly angle: number;
+  readonly axis: "x" | "y";
+}
+
+const blockFrames = new WeakMap<readonly ResolvedPiece[], { x0: number; x1: number; y0: number; y1: number }>();
+
+/**
+ * Where block `i` of `pieces` is at `t` seconds into the layer. Worked out from time (no state), so
+ * any frame can be drawn on its own — seeking, preview and export agree.
+ */
+export const blockPose = (b: Blocks3D, pieces: readonly ResolvedPiece[], i: number, t: number): BlockPose => {
+  const piece = pieces[i];
+  const axis = b.shape === "rows" ? "x" : "y";
+  if (!piece) return { dz: 0, angle: 0, axis };
+  let f = blockFrames.get(pieces);
+  if (!f) {
+    const cx = pieces.map((p) => p.center[0]), cy = pieces.map((p) => p.center[1]);
+    f = { x0: Math.min(...cx), x1: Math.max(...cx), y0: Math.min(...cy), y1: Math.max(...cy) };
+    blockFrames.set(pieces, f);
+  }
+  const envelope = smoothstep(b.startAt, b.startAt + b.ramp, t) * (b.stopAt === null ? 1 : 1 - smoothstep(b.stopAt - b.ramp, b.stopAt, t));
+  if (envelope <= 0) return { dz: 0, angle: 0, axis };
+  const [x, y] = piece.center;
+  const r1 = rand01(b.seed, i, 0, 11), r2 = rand01(b.seed, i, 0, 12);
+  const lambda = Math.max(0.05, b.wavelength * METERS_PER_PIXEL);
+  const tau = 2 * Math.PI;
+  let v: number;
+  switch (b.pattern) {
+    case "ripple": {
+      // The origin across the area (y runs down on the canvas, up in metres).
+      const ox = f.x0 + (f.x1 - f.x0) * b.origin[0], oy = f.y1 - (f.y1 - f.y0) * b.origin[1];
+      v = Math.sin(tau * (Math.hypot(x - ox, y - oy) / lambda - b.speed * t));
+      break;
+    }
+    case "wave": {
+      const a = (b.direction * Math.PI) / 180;
+      v = Math.sin(tau * ((x * Math.cos(a) + y * Math.sin(a)) / lambda - b.speed * t));
+      break;
+    }
+    case "random":
+      v = Math.sin(tau * (b.speed * (0.7 + 0.6 * r1) * t + r2));
+      break;
+    case "checker": {
+      const s = Math.max(0.01, b.size * METERS_PER_PIXEL);
+      const odd = (Math.floor((x - f.x0) / s + 0.5) + Math.floor((y - f.y0) / s + 0.5)) % 2 === 1;
+      v = (odd ? -1 : 1) * Math.sin(tau * b.speed * t);
+      break;
+    }
+    default:
+      // Together, with a little spread so it breathes rather than moving as one slab.
+      v = Math.sin(tau * b.speed * t + 0.6 * (r1 - 0.5));
+  }
+  const m = (b.bothWays ? v : (v + 1) / 2) * envelope;
+  return b.motion === "turn" ? { dz: 0, angle: (b.amount * m * Math.PI) / 180, axis } : { dz: b.amount * METERS_PER_PIXEL * m, angle: 0, axis };
+};
+
 // ---------------------------------------------------------------------------------------------
 // Resolving a scene for rendering and physics
 
@@ -476,7 +618,9 @@ export interface ResolvedScene3D {
 const seconds = (t: Flicks) => t / FLICKS_PER_SECOND;
 const flicks = (s: number) => Math.round(s * FLICKS_PER_SECOND);
 
-const piecesCache = new WeakMap<Geometry3D, { fracture: Fracture3D | undefined; venue: unknown; w: number; h: number; pieces: ResolvedPiece[] }>();
+const piecesCache = new WeakMap<Geometry3D, { fracture: Fracture3D | undefined; cut: string; venue: unknown; w: number; h: number; pieces: ResolvedPiece[] }>();
+/** What decides how blocks cut the surface (their motion settings don't change the pieces). */
+const blockCut = (b: Blocks3D | undefined) => (b ? `${b.shape}|${b.size}|${b.gap}` : "");
 
 /**
  * The object's pieces in its own space (metres). Kept while the area, the venue and the way it
@@ -487,13 +631,14 @@ const piecesFor = (project: Project, o: Object3D, canvas: Canvas, venueId: Id | 
   if (!g || g.kind !== "area") return [];
   const venue = venueId ? project.venues[venueId] : undefined;
   const hit = piecesCache.get(g);
-  if (hit && hit.fracture === o.fracture && hit.venue === venue && hit.w === canvas.width && hit.h === canvas.height) return hit.pieces;
-  const pieces = computePieces(project, g, o.fracture, canvas, venueId);
-  piecesCache.set(g, { fracture: o.fracture, venue, w: canvas.width, h: canvas.height, pieces });
+  const cut = o.fracture ? "" : blockCut(o.blocks);
+  if (hit && hit.fracture === o.fracture && hit.cut === cut && hit.venue === venue && hit.w === canvas.width && hit.h === canvas.height) return hit.pieces;
+  const pieces = computePieces(project, g, o.fracture, canvas, venueId, o.fracture ? undefined : o.blocks);
+  piecesCache.set(g, { fracture: o.fracture, cut, venue, w: canvas.width, h: canvas.height, pieces });
   return pieces;
 };
 
-const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }>, fr: Fracture3D | undefined, canvas: Canvas, venueId: Id | undefined): ResolvedPiece[] => {
+const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }>, fr: Fracture3D | undefined, canvas: Canvas, venueId: Id | undefined, blocks?: Blocks3D): ResolvedPiece[] => {
   const regions = refRegions(project, g.ref, venueId).filter((r) => r.path.closed);
   const vid = venueId ?? project.activeVenueId;
   const venue = vid ? project.venues[vid] : undefined;
@@ -503,7 +648,11 @@ const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }
     const outline = closedPoints(r.path);
     const holes = regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
     if (outline.length < 3) continue;
-    const polys = fr ? (fr.pattern === "glass" ? glassShards : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] })) : solidWithHoles(outline, holes);
+    const polys = fr
+      ? (fr.pattern === "glass" ? glassShards : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
+      : blocks
+        ? blockCells(outline, holes, blocks).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
+        : solidWithHoles(outline, holes);
     for (const poly of polys) {
       const w = poly.outline.map((p) => canvasToWorld(p, canvas));
       const c = polyCentroid(w);
@@ -754,6 +903,32 @@ export const FRACTURE_PRESETS: Record<"collapse" | "explode" | "crumble" | "shat
     fracture: { pieceSize: 22, seed: 1, collapseAt: 1, rebuildAt: null, rebuildSeconds: 2, push: 2.6, spin: 1.2, pattern: "glass" },
   },
 };
+/** Blocks: the surface as cubes, columns or slats moving in a pattern (procedural). */
+export const DEFAULT_BLOCKS: Blocks3D = { shape: "cubes", size: 50, gap: 4, motion: "push", pattern: "pulse", amount: 40, bothWays: false, speed: 0.5, wavelength: 300, direction: 0, origin: [0.5, 0.5], startAt: 0.5, stopAt: 7.5, ramp: 1, seed: 1 };
+export const BLOCK_PRESETS: Record<"pulse" | "ripple" | "wave" | "columns" | "slats", { title: string; description: string; blocks: Blocks3D }> = {
+  pulse: { title: "Pulsing cubes (3D)", description: "The surface becomes a grid of cubes that push out of the wall and sink back, breathing together.", blocks: DEFAULT_BLOCKS },
+  ripple: {
+    title: "Cube ripple (3D)",
+    description: "Cubes rise and fall in rings spreading out from a point, like a drop in water.",
+    blocks: { ...DEFAULT_BLOCKS, pattern: "ripple", size: 40, amount: 45, speed: 0.6, wavelength: 260 },
+  },
+  wave: {
+    title: "Cube wave (3D)",
+    description: "A wave of cubes rolls across the surface, each one pushing out as it passes.",
+    blocks: { ...DEFAULT_BLOCKS, pattern: "wave", size: 40, amount: 50, speed: 0.45, wavelength: 420 },
+  },
+  columns: {
+    title: "Rising columns (3D)",
+    description: "The surface splits into tall columns that push out one after another, like organ pipes.",
+    blocks: { ...DEFAULT_BLOCKS, shape: "columns", size: 45, gap: 5, pattern: "wave", amount: 60, speed: 0.4, wavelength: 500 },
+  },
+  slats: {
+    title: "Flipping slats (3D)",
+    description: "The surface becomes tall slats that turn like louvres, showing their sides as a wave passes.",
+    blocks: { ...DEFAULT_BLOCKS, shape: "columns", size: 35, gap: 3, motion: "turn", pattern: "wave", amount: 75, bothWays: true, speed: 0.35, wavelength: 600 },
+  },
+};
+
 /** What a glass shatter is made of: a thin pane (cm) and a clear, glossy material. */
 export const GLASS = { thicknessCm: 1.2, opacity: 0.6, roughness: 0.06, metalness: 0.15 };
 
@@ -774,7 +949,7 @@ const areaBounds = (project: Project, ref: RegionRef, venueId?: Id) => {
  */
 export const areaScene = (
   project: Project,
-  o: { sceneId: Id; idPrefix: string; name: string; ref: RegionRef; venueId?: Id; canvas: Canvas; depth?: number; collapse?: boolean; fracture?: Fracture3D },
+  o: { sceneId: Id; idPrefix: string; name: string; ref: RegionRef; venueId?: Id; canvas: Canvas; depth?: number; collapse?: boolean; fracture?: Fracture3D; blocks?: Blocks3D },
 ): Scene3D => {
   const p = o.idPrefix;
   const b = areaBounds(project, o.ref, o.venueId) ?? { x0: o.canvas.width * 0.25, x1: o.canvas.width * 0.75, y0: o.canvas.height * 0.25, y1: o.canvas.height * 0.75 };
@@ -786,22 +961,33 @@ export const areaScene = (
   const width = lx1 - lx0;
   const cx = (lx0 + lx1) / 2;
   const ledgeH = ly > 0.05 && ly <= 1.5 ? ly : 0.3;
+  const blocks = !!o.blocks && !o.collapse;
   const objects: Object3D[] = [
-    mesh(`${p}-area`, glass ? "Glass (3D)" : "Wall (3D)", { kind: "area", ref: o.ref, depth }, [0, 0, 0], { style: "photo", color: staticProp(grey(1)), ...(glass ? { opacity: GLASS.opacity, roughness: GLASS.roughness, metalness: GLASS.metalness } : {}) }, {
+    mesh(`${p}-area`, glass ? "Glass (3D)" : o.blocks ? "Blocks (3D)" : "Wall (3D)", { kind: "area", ref: o.ref, depth }, [0, 0, 0], { style: "photo", color: staticProp(grey(1)), ...(glass ? { opacity: GLASS.opacity, roughness: GLASS.roughness, metalness: GLASS.metalness } : {}) }, {
       physics: o.collapse ? DEFAULT_PHYSICS : { ...DEFAULT_PHYSICS, body: "static" },
       ...(o.collapse ? { fracture: o.fracture ?? DEFAULT_FRACTURE } : {}),
+      ...(o.blocks && !o.collapse ? { blocks: o.blocks } : {}),
     }),
-    mesh(`${p}-inside`, "Inside (behind the wall)", { kind: "box", size: [width + 0.2, top - ly + 0.2, 0.2] }, [cx, (top + ly) / 2, -depth - 0.6], { color: staticProp(grey(0.08)), roughness: 1 }, { castShadow: false }),
-    // A ledge along the bottom: a solid plinth when the area starts near the ground, else a 30 cm slab.
-    mesh(`${p}-ledge`, "Ledge", { kind: "box", size: [width + 0.6, ledgeH, depth + 2] }, [cx, ly - ledgeH / 2, (2 - depth) / 2], { color: staticProp(grey(0.45)) }, {
-      physics: { body: "static", mass: 1000, friction: 0.8, bounce: 0.1 },
-    }),
-    mesh(`${p}-ground`, "Ground", { kind: "box", size: [60, 0.2, 40] }, [0, -0.1, 0], { style: "shadow", opacity: 0.6 }, {
-      physics: { body: "static", mass: 1000, friction: 0.9, bounce: 0.05 },
-      castShadow: false,
-    }),
-    lightObject(`${p}-key`, "Key light", { target: [cx, (top + ly) / 2, 0] }, [cx - width * 0.6, top + 3, 6]),
-    lightObject(`${p}-fill`, "Soft fill", { type: "ambient", intensity: staticProp(0.35), castShadow: false, color: [0.8, 0.86, 1, 1] }, [0, 0, 0]),
+    // Blocks need nothing behind or below them: the gaps stay empty (no light), and whatever is under
+    // the layer shows through. Breaking apart needs the dark inside, a ledge and the ground to land on.
+    ...(blocks
+      ? []
+      : [
+          mesh(`${p}-inside`, "Inside (behind the wall)", { kind: "box", size: [width + 0.2, top - ly + 0.2, 0.2] }, [cx, (top + ly) / 2, -depth - 0.6], { color: staticProp(grey(0.08)), roughness: 1 }, { castShadow: false }),
+          // A ledge along the bottom: a solid plinth when the area starts near the ground, else a 30 cm slab.
+          mesh(`${p}-ledge`, "Ledge", { kind: "box", size: [width + 0.6, ledgeH, depth + 2] }, [cx, ly - ledgeH / 2, (2 - depth) / 2], { color: staticProp(grey(0.45)) }, {
+            physics: { body: "static", mass: 1000, friction: 0.8, bounce: 0.1 },
+          }),
+          mesh(`${p}-ground`, "Ground", { kind: "box", size: [60, 0.2, 40] }, [0, -0.1, 0], { style: "shadow", opacity: 0.6 }, {
+            physics: { body: "static", mass: 1000, friction: 0.9, bounce: 0.05 },
+            castShadow: false,
+          }),
+        ]),
+    // Blocks read by their shading and shadows: light from low and to the side.
+    blocks
+      ? lightObject(`${p}-key`, "Key light", { target: [cx, (top + ly) / 2, 0], intensity: staticProp(3.6) }, [cx - width * 0.75, top + 1.5, 3.2])
+      : lightObject(`${p}-key`, "Key light", { target: [cx, (top + ly) / 2, 0] }, [cx - width * 0.6, top + 3, 6]),
+    lightObject(`${p}-fill`, "Soft fill", { type: "ambient", intensity: staticProp(blocks ? 0.3 : 0.35), castShadow: false, color: [0.8, 0.86, 1, 1] }, [0, 0, 0]),
   ];
   return { id: o.sceneId, name: o.name, objectOrder: objects.map((x) => x.id), objects: Object.fromEntries(objects.map((x) => [x.id, x])), gravity: [0, -9.81, 0], cameraDistance: 1.6 };
 };

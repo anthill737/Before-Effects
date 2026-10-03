@@ -87,7 +87,7 @@ export const finishDrop = async (payload: DragPayload, areaIds: string[], mode: 
   if (payload.kind === "asset") return assignMedia(payload.id, areaIds, mode);
   if (payload.id === MELT_EFFECT.id) return meltAreas(areaIds);
   const e3 = effect3dFor(payload.id);
-  if (e3) return "break" in e3 ? makeArea3D(areaIds, true, e3.break) : addParticles(e3.particles, areaIds);
+  if (e3) return "break" in e3 ? makeArea3D(areaIds, true, e3.break) : "blocks" in e3 ? makeArea3D(areaIds, false, "collapse", e3.blocks) : addParticles(e3.particles, areaIds);
   const def = getRecipe(payload.id);
   if (!def) return null;
   useStudio.getState().selectRegions(areaIds);

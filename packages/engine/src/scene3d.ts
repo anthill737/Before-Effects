@@ -17,6 +17,7 @@ import {
   type EvaluatedSource,
   eulerDegToQuat,
   evalProp,
+  blockPose,
   FLICKS_PER_SECOND,
   type Light3D,
   METERS_PER_PIXEL,
@@ -137,6 +138,10 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
 
 const tmp = new THREE.Object3D();
 const tmpColor = new THREE.Color();
+const tmpQ = new THREE.Quaternion();
+const blockQ = new THREE.Quaternion();
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /** Round soft-edged sprites: "glow" (bright core, long falloff, for sparks and embers) or "soft" (a flake). */
 const sprites = new Map<string, THREE.DataTexture>();
@@ -580,6 +585,14 @@ export class SceneHost implements ExternalSourceRenderer {
           const d = motion.data;
           mesh.position.set(d[off]!, d[off + 1]!, d[off + 2]!);
           mesh.quaternion.set(d[off + 3]!, d[off + 4]!, d[off + 5]!, d[off + 6]!);
+        } else if (o.blocks && piece && !moving) {
+          // Blocks: each pushed out or turned about its own middle, worked out from time.
+          const bp = blockPose(o.blocks, e.pieces, i, t / FLICKS_PER_SECOND);
+          const w = placePoint([piece.center[0], piece.center[1], piece.center[2] + bp.dz], pos, q, scl, o.pivot);
+          mesh.position.set(w[0], w[1], w[2]);
+          tmpQ.set(q[0], q[1], q[2], q[3]);
+          if (bp.angle) tmpQ.multiply(blockQ.setFromAxisAngle(bp.axis === "x" ? X_AXIS : Y_AXIS, bp.angle));
+          mesh.quaternion.copy(tmpQ);
         } else {
           const c = piece ? piece.center : ([0, 0, 0] as Vec3);
           const w = placePoint(c, pos, q, scl, o.pivot);

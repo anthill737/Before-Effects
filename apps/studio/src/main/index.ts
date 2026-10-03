@@ -8,6 +8,7 @@ import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { setProcessTracker } from "@be/media";
+import "./profile.ts";
 import { registerAvCheckIpc } from "./avcheck.ts";
 import { registerDecodeIpc, stopAllDecoders } from "./decode.ts";
 import { cancelAllEncodes, health, paths, registerFileIpc } from "./files.ts";
