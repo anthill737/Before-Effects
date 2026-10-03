@@ -41,6 +41,8 @@ export const Thumb = ({ id }: { id: string }) => {
       {(id.endsWith("-3d") || id === "collapse-3d") && <path d="M20 14 L38 30 L30 44 L50 52 M38 30 L62 24 L80 40 M62 24 L58 12" className="thumb-crack" />}
       {id.startsWith("particles-") && [12, 28, 44, 60, 76, 22, 52, 70, 36].map((x, i) => <circle key={i} cx={x + 4} cy={14 + ((i * 17) % 40)} r={i % 2 ? 1.6 : 2.4} className="thumb-dot" />)}
       {id === "melt-area" && <path d="M14 14 H86 V30 Q80 44 74 30 Q68 52 60 30 Q52 40 44 30 Q36 56 28 30 Q22 40 14 30 Z" className="thumb-melt" />}
+      {id === "torch-flames" && [30, 70].map((x) => <path key={x} d={`M${x} 46 C${x - 7} 40 ${x - 6} 30 ${x} 20 C${x + 6} 30 ${x + 7} 40 ${x} 46 Z`} className="thumb-flame" />)}
+      {id === "spin-3d" && [22, 50, 78].map((x, i) => <rect key={x} x={x - (i === 1 ? 3 : 7)} y="12" width={i === 1 ? 6 : 14} height="42" rx="2" className={i === 1 ? "thumb-block up" : "thumb-block"} />)}
       {id === "ripple-area" && [6, 13, 20].map((r) => <ellipse key={r} cx="50" cy="33" rx={r * 1.6} ry={r * 0.8} className="thumb-ripple" />)}
       {id === "glitch-area" && [14, 24, 34, 44].map((y, i) => <rect key={y} x={10 + ((i * 13) % 20)} y={y} width={60 - i * 6} height="6" className={i % 2 ? "thumb-glitch b" : "thumb-glitch"} />)}
       {id === "lightning" && (

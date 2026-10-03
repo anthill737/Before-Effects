@@ -547,3 +547,6 @@ body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px;
 .thumb-bolt { fill: none; stroke: #e8f1ff; stroke-width: 2; stroke-linejoin: round; filter: drop-shadow(0 0 2px #7fb2ff); opacity: 0; animation: thumb-flash 2.4s infinite; }
 @keyframes thumb-flash { 0%, 100% { opacity: 0; } 4% { opacity: 0.9; } 9% { opacity: 0.15; } 20% { opacity: 0.6; } 26%, 99% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .thumb-flash, .thumb-bolt { animation: none; opacity: 0.6; } }
+.thumb-flame { fill: #ffb24a; filter: drop-shadow(0 0 3px #ff7a1a); transform-origin: center bottom; animation: thumb-flicker 0.4s infinite alternate; }
+@keyframes thumb-flicker { from { opacity: 0.85; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .thumb-flame { animation: none; } }

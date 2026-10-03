@@ -5,6 +5,7 @@
  */
 import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
+import { animatePart } from "./parts.ts";
 import { PICTURE_EFFECTS } from "./pictureEffects.ts";
 
 export interface CatalogEffect {
@@ -22,7 +23,7 @@ export interface CatalogEffect {
   readonly apply: (regionIds: readonly string[]) => string | null;
 }
 
-export const EFFECT_GROUPS = ["Blocks (3D)", "Breaking apart (3D)", "Particles (3D)", "Picture effects"] as const;
+export const EFFECT_GROUPS = ["Blocks (3D)", "Breaking apart (3D)", "Moving parts (3D)", "Particles (3D)", "Picture effects"] as const;
 
 export const CATALOG: readonly CatalogEffect[] = [
   ...BLOCK_EFFECTS.map((e) => ({
@@ -45,6 +46,20 @@ export const CATALOG: readonly CatalogEffect[] = [
     needsAreas: true,
     apply: (ids: readonly string[]) => makeArea3D(ids, true, e.preset),
   })),
+  {
+    id: "spin-3d",
+    title: "Spin (3D)",
+    description: "Each chosen part turns right around in 3D — a column or panel spins about its middle, showing its sides, then settles back in place.",
+    group: "Moving parts (3D)",
+    keywords: ["spin", "rotate", "turn", "twist", "column", "pillar", "panel", "3d", "moving"],
+    kind: "procedural: the part turns by rule in 3D (adjust it under Moving parts), not simulated",
+    needsAreas: true,
+    apply: (ids: readonly string[]) => {
+      let last: string | null = null;
+      for (const id of ids) last = animatePart(id, { motion: { kind: "turn", axis: "vertical", turns: 1 }, timing: { move: 2.5, hold: 0, back: false } }) ?? last;
+      return last;
+    },
+  },
   ...PARTICLE_EFFECTS.map((e) => ({
     id: e.id,
     title: e.title,
