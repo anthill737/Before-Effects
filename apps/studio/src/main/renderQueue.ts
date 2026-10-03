@@ -59,12 +59,26 @@ const broadcast = () => {
   for (const fn of queueListeners) fn(list as RenderJob[]);
 };
 
+/** Exports rendering or waiting (the app keeps running for them after the editor closes). */
+export const rendersBusy = () => jobs.some((j) => j.state === "rendering" || j.state === "queued");
+let idleWaiters: Array<() => void> = [];
+/** Run `cb` once no export is rendering or waiting (now, if none is). */
+export const whenRendersIdle = (cb: () => void) => {
+  if (!rendersBusy()) cb();
+  else idleWaiters.push(cb);
+};
+
 const update = (id: string, changes: Partial<RenderJob>) => {
   const j = jobs.find((x) => x.id === id);
   if (!j) return;
   Object.assign(j, changes);
   broadcast();
   if (changes.state && changes.state !== "rendering") save();
+  if (changes.state && idleWaiters.length && !rendersBusy()) {
+    const w = idleWaiters;
+    idleWaiters = [];
+    for (const cb of w) cb();
+  }
 };
 
 const ensureWorker = () => {

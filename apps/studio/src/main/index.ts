@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, dialog, ipcMain } from "electron";
 import { setProcessTracker } from "@be/media";
 import "./profile.ts";
 import { registerAvCheckIpc } from "./avcheck.ts";
@@ -18,7 +18,7 @@ import { registerAgentApi, shutdownAgentApi } from "./agentApi.ts";
 import { registerHouseDetect, shutdownHouseDetect } from "./houseDetect.ts";
 import { registerBlender, shutdownBlender } from "./blender.ts";
 import { registerAssistantIpc, shutdownAssistant } from "./assistant.ts";
-import { registerRenderQueue, shutdownRenders } from "./renderQueue.ts";
+import { registerRenderQueue, rendersBusy, shutdownRenders, whenRendersIdle } from "./renderQueue.ts";
 import { registerDriveIpc } from "./drive.ts";
 import { initLog, log } from "./log.ts";
 import { stopAll, track } from "./processes.ts";
@@ -56,8 +56,37 @@ app.on("second-instance", () => {
     if (w.isMinimized()) w.restore();
     w.show();
     w.focus();
+  } else if (app.isReady()) {
+    // The editor was closed while exports finished in the background: open it again.
+    log("launched again with no editor open; opening the editor");
+    openEditor();
   }
 });
+
+/**
+ * The editor, and what happens when it closes: its video decoders stop; with no exports left the app
+ * quits, otherwise they finish in the background (launching again reopens the editor) and the app
+ * quits when they're done.
+ */
+const openEditor = () => {
+  const win = createEditor(mode);
+  win.on("closed", () => {
+    stopAllDecoders();
+    if (mode !== "studio") return;
+    if (!rendersBusy()) {
+      log("editor closed; quitting");
+      app.quit();
+      return;
+    }
+    log("editor closed; finishing exports in the background, then quitting");
+    whenRendersIdle(() => {
+      if (editorWindow()) return;
+      log("background exports finished; quitting");
+      app.quit();
+    });
+  });
+  return win;
+};
 
 let lastDialog = 0;
 const fatal = (title: string, err: unknown) => {
@@ -119,12 +148,12 @@ app.whenReady().then(() => {
   log(`ready (mode ${mode}, packaged ${app.isPackaged}, ffmpeg ${health().ffmpeg.ok ? "ok" : "MISSING"})`);
   registerHouseDetect();
   registerBlender();
-  const win = createEditor(mode);
+  const win = openEditor();
   // The external-agent API starts with the app when it's enabled (Settings → Agent access).
   if (mode === "studio" || mode === "uitest") void registerAgentApi(mode);
   if (mode === "uitest") win.webContents.once("did-finish-load", () => void runUiTest(win, paths().renders));
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createEditor(mode);
+    if (!editorWindow()) openEditor();
   });
 });
 
