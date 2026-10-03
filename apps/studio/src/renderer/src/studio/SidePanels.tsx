@@ -1,4 +1,4 @@
-/** Left panels for the Space, Content and Preview steps (Animate uses the effects library). */
+/** Left panels for the Space, Content and Preview steps (Effects uses the effects library). */
 import { newLayer, type RegionKind, secondsToTime, staticProp } from "@be/core";
 import { usePreview } from "../preview/settings.ts";
 import { applyRecipeToSelection, KIND_LABEL } from "./actions.ts";

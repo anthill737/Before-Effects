@@ -216,7 +216,7 @@ await step("the garage door crumbles (real physics)", async () => {
 });
 
 await step("fire on a column, simulated in Blender", async () => {
-  await ed.click(byText(".route-step", "Animate"));
+  await ed.click(byText(".route-step", "Effects"));
   await ed.click(area("Column 2"));
   const has = await ed.eval(`!!${byText(".blender-effects button", "Fire")}`);
   if (!has) return "Blender isn't installed: skipped";

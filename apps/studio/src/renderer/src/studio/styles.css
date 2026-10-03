@@ -531,3 +531,10 @@ body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px;
 .badge.approximated { color: #ffe3a3; background: #3a3014; }
 .badge.video-only { color: #c8d8ff; background: #1c2a48; }
 .badge.skipped { color: #d0d0d0; background: #2a2a2a; }
+
+/* Thumbnails for 3D, particle and picture effects in the Effects tab. */
+.thumb-block { fill: #6f7686; }
+.thumb-block.up { fill: #c9cfdb; stroke: #1b1f27; stroke-width: 1.2; transform: translate(-1.5px, -1.5px); }
+.thumb-crack { fill: none; stroke: #ffd18c; stroke-width: 1.6; }
+.thumb-dot { fill: #ffb35a; }
+.thumb-melt { fill: #8a93a6; }

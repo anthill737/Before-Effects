@@ -531,7 +531,7 @@ await step("13 · a second scene", async () => {
 
 const blender = async (button, areaName, label, factor = 10) => {
   if (!(await ed.eval(`!!${byText(".preview-toolbar [role=radio][aria-checked=true]", "Show preview")} || !!${byText(".preview-toolbar [role=radio][aria-checked=true]", "On the house")}`))) await view("On the house");
-  await goStep("Animate");
+  await goStep("Effects");
   await ed.click(area(areaName));
   const has = await ed.eval(`!!${startsText(".blender-effects button", button)}`);
   if (!has) return `${button}: Blender not installed — skipped`;
@@ -621,7 +621,7 @@ await step("20 · snow and confetti", async () => {
 
 await step("21 · describe it in plain words", async () => {
   await chapter("21 · Describe what you want", "The effects library understands everyday words");
-  await goStep("Animate");
+  await goStep("Effects");
   const box = `document.querySelector("#library-search")`;
   await ed.click(box);
   await ed.type("make this look like water");

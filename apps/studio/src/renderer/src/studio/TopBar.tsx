@@ -1,4 +1,4 @@
-/** The guided route (Space → Content → Animate → Preview → Export/Play), undo/redo, and save state. */
+/** The guided route (Space → Content → Effects → Preview → Export/Play), undo/redo, and save state. */
 import { type Step, useStudio } from "./store.ts";
 import { saveProject } from "./persistence.ts";
 import { AgentButton } from "./AgentPanel.tsx";
@@ -8,7 +8,7 @@ import { AssistantButton } from "./assistant/AssistantPanel.tsx";
 const STEPS: Array<{ id: Step; label: string; hint: string }> = [
   { id: "space", label: "Areas", hint: "Trace the building's areas once — every scene uses them — and line up the projector" },
   { id: "content", label: "Content", hint: "Drag pictures, videos and animations onto areas" },
-  { id: "animate", label: "Animate", hint: "Pick effects for parts of the building" },
+  { id: "animate", label: "Effects", hint: "Every effect in one place — light, 3D blocks, breaking apart, particles, picture effects — for parts of the building" },
   { id: "preview", label: "Preview", hint: "Watch the show on the building or as the projector sees it" },
   { id: "export", label: "Export or play", hint: "Save videos and projector files" },
 ];

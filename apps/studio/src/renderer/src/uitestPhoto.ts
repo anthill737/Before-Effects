@@ -159,7 +159,7 @@ export const PHOTO_STEPS: Record<string, () => Promise<{ ok: boolean; note?: str
     return { ok: moved && restored, note: "dragged a corner to correct the outline, then Ctrl+Z restored it" };
   },
   "animate-own-windows": async () => {
-    click(byText(".route-step", "Animate"));
+    click(byText(".route-step", "Effects"));
     await sleep(300);
     usePreview.getState().set({ view: "show", resolution: "full" });
     const win = Object.values(venue().regions).find((r) => r.kind === "window")!;
