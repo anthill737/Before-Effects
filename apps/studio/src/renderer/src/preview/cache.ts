@@ -3,9 +3,11 @@
  * (composition, frame, render fraction, effect quality), within a memory budget (least recently
  * used frames are evicted first). Edits invalidate only frames whose time ranges changed (see
  * core/invalidate.ts). Every view (Show, 3D, Projector) presents from the same cached content.
+ * Frames on disk (diskCache.ts) use the same keys and are dropped by the same edits.
  */
 import type { Affected, Flicks, Rational } from "@be/core";
 import { frameToTime, timeToFrame } from "@be/core";
+import { frameKey } from "../../../shared/diskFrames.ts";
 
 interface Entry {
   readonly tex: GPUTexture;
@@ -28,7 +30,7 @@ export class FrameCache {
   constructor(private budgetBytes: number) {}
 
   private key(compId: string, frame: number, fraction: number, quality: string) {
-    return `${compId}|${frame}|${fraction.toFixed(5)}|${quality}`;
+    return `${compId}|${frameKey(frame, fraction, quality)}`;
   }
 
   setBudget(bytes: number): void {
@@ -45,6 +47,11 @@ export class FrameCache {
 
   has(compId: string, frame: number, fraction: number, quality: string): boolean {
     return this.entries.has(this.key(compId, frame, fraction, quality));
+  }
+
+  /** Like get(), without counting as a use (saving a frame to disk isn't watching it). */
+  peek(compId: string, frame: number, fraction: number, quality: string): GPUTexture | null {
+    return this.entries.get(this.key(compId, frame, fraction, quality))?.tex ?? null;
   }
 
   /**

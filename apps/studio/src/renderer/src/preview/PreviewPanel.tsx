@@ -5,11 +5,16 @@
  *   Size:       Auto / Full / Half / Quarter / Eighth / Custom (rendered pixels, always shown)
  *   Zoom:       Fit / 25–400 %. Display only; it never changes the rendered pixels.
  *   Transport:  restart, step, play/pause, loop, preview range
- *   Status:     target vs achieved fps, skipped frames, cache, preparing progress
+ *   Status:     target vs achieved fps, skipped frames, cache (memory and disk), preparing progress
+ *   Caches:     any amount of graphics memory for frames and video, and disk space for frames
+ *               (Quality & speed), with what this computer has for guidance
  */
 import { formatSecondsFriendly, formatTimecode, type Project } from "@be/core";
 import { DEFAULT_ORBIT } from "@be/engine";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { MachineMemory } from "../../../shared/api.ts";
+import { formatSize } from "../../../shared/diskFrames.ts";
+import { clearDiskCache, refreshDiskStatus, useDiskCache } from "./diskCache.ts";
 import { previewAudio } from "../studio/audioEngine.ts";
 import { getMediaHost, getRenderer, venueReference } from "../studio/engineHost.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
@@ -19,7 +24,7 @@ import { venuePhotoUrl } from "../space/actions.ts";
 import { TracingLayer } from "../space/TracingLayer.tsx";
 import { useTrace } from "../space/traceStore.ts";
 import { ActionBar, CalibrationOverlay, RegionOverlay } from "./overlays.tsx";
-import { effectiveFraction, fractionLabel, RESOLUTIONS, type ResolutionChoice, usePreview, type View } from "./settings.ts";
+import { effectiveFraction, fractionLabel, MIN_DISK_GB, MIN_MEMORY_MB, RESOLUTIONS, type ResolutionChoice, usePreview, type View } from "./settings.ts";
 import { onSimFrame, simProgress, useSims } from "../studio/simHost.ts";
 import { dropOnArea, isContentDrag, readDragPayload } from "../studio/assign.ts";
 import { areaAt } from "../space/areaEdit.ts";
@@ -135,7 +140,11 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
     };
   }, [project?.activeVenueId, venue?.referenceAssetId]);
 
-  useEffect(() => loopRef.current?.cache.setBudget(s.cacheBudgetMB * 1024 * 1024), [s.cacheBudgetMB]);
+  // A moment's wait, so dragging the slider down and back up doesn't throw frames away on the way.
+  useEffect(() => {
+    const t = setTimeout(() => loopRef.current?.cache.setBudget(s.cacheBudgetMB * 1024 * 1024), 300);
+    return () => clearTimeout(t);
+  }, [s.cacheBudgetMB]);
 
   // Ctrl+wheel zooms the picture around the pointer (display zoom only: never changes the rendered pixels).
   const zoomAnchor = useRef<{ fx: number; fy: number; cx: number; cy: number } | null>(null);
@@ -417,10 +426,97 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
   );
 };
 
+const MB = 1024 ** 2;
+const GB = 1024 ** 3;
+
+/** How much memory this computer and its graphics card have (asked once per window). */
+let machineInfo: Promise<MachineMemory | null> | null = null;
+const useMachine = (): MachineMemory | null => {
+  const [m, setM] = useState<MachineMemory | null>(null);
+  useEffect(() => {
+    let live = true;
+    void (machineInfo ??= window.be.cache.machine().catch(() => null)).then((v) => live && setM(v));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return m;
+};
+
+/**
+ * An amount in gigabytes: a slider over the usual range and a box for any amount, including more
+ * than the slider reaches. A typed amount applies on Enter or when leaving the box.
+ */
+const AmountField = ({ label, gb, min, max, step, title, onChange }: { label: string; gb: number; min: number; max: number; step: number; title: string; onChange: (gb: number) => void }) => {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    const v = Number(draft.replace(",", "."));
+    setDraft(null);
+    if (Number.isFinite(v) && v > 0) onChange(Math.max(min, v));
+  };
+  return (
+    <div className="amount-field" title={title}>
+      <span>{label}</span>
+      <input type="range" min={min} max={Math.max(min, max)} step={step} value={Math.min(gb, max)} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
+      <input
+        className="amount-number"
+        type="number"
+        min={min}
+        step="any"
+        value={draft ?? String(Number(gb.toFixed(2)))}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") setDraft(null);
+        }}
+        aria-label={`${label} in gigabytes (any amount)`}
+      />
+      <span className="unit">GB</span>
+    </div>
+  );
+};
+
+/** Whole gigabytes, the way computers and graphics cards are sold ("32 GB", "12 GB"). */
+const wholeGB = (bytes: number) => `${Math.max(1, Math.round(bytes / GB))} GB`;
+
 const QualityPopover = () => {
   const s = usePreview();
+  const machine = useMachine();
+  const disk = useDiskCache((d) => d.status);
+  useEffect(() => {
+    if (s.diskCache) void refreshDiskStatus();
+  }, [s.diskCache, s.diskCacheFolder]);
+
+  // Graphics memory: guidance from what this computer has (a warning, never a limit).
+  const vram = machine?.gpu?.bytes ?? 0;
+  const ram = machine?.ramBytes ?? 0;
+  const memoryMax = vram ? Math.max(4, Math.ceil(vram / GB)) : 16;
+  const onCard = (s.cacheBudgetMB + s.videoCacheMB) * MB;
+  let memoryNote: { warn: boolean; text: string } | null = null;
+  if (vram && onCard > vram) {
+    memoryNote = { warn: true, text: `Together that's ${formatSize(onCard)}, more than the graphics card's ${wholeGB(vram)}. Windows lends it the computer's memory instead, which is slower, and if that runs out too, frames can't be kept.` };
+  } else if (vram && onCard > vram * 0.75) {
+    memoryNote = { warn: false, text: "That's most of the graphics card's memory. Effects, 3D and the display need some too." };
+  } else if (!vram && ram && onCard > ram / 2) {
+    memoryNote = { warn: true, text: `Together that's ${formatSize(onCard)}, more than this computer can likely give its graphics card (about ${wholeGB(ram / 2)}).` };
+  }
+  const machineLine = machine
+    ? `This computer has ${wholeGB(ram)} of memory${machine.gpu ? `; its graphics card (${machine.gpu.name}) has ${wholeGB(machine.gpu.bytes)} of its own` : ""}. The pop-out preview keeps its own frames.`
+    : "";
+
+  // Disk: guidance from the drive's free space.
+  const free = disk && !disk.scanning ? disk.freeBytes : null;
+  const diskMax = free !== null && disk ? Math.max(10, Math.floor((free + disk.bytes) / GB)) : 200;
+  const tooBig = free !== null && disk !== null && s.diskCacheGB * GB > disk.bytes + free;
+  const chooseFolder = async () => {
+    const dir = await window.be.files.chooseFolder("Choose where to keep preview frames");
+    if (dir) s.set({ diskCacheFolder: dir });
+  };
+
   return (
-    <div className="popover wide" role="dialog" aria-label="Quality and speed">
+    <div className="popover wide quality" role="dialog" aria-label="Quality and speed">
       <p className="muted small">These only affect the preview. Exports always render at full size and full quality.</p>
       <label className="row-field">
         <span>Playback</span>
@@ -449,19 +545,82 @@ const QualityPopover = () => {
       <label className="check">
         <input type="checkbox" checked={s.useProxies} onChange={(e) => s.set({ useProxies: e.target.checked })} /> Use lighter proxy copies of videos for preview
       </label>
-      <label className="row-field">
-        <span>Frame cache</span>
-        <select value={s.cacheBudgetMB} onChange={(e) => s.set({ cacheBudgetMB: Number(e.target.value) })}>
-          {[512, 1024, 1536, 3072, 6144].map((m) => (
-            <option key={m} value={m}>
-              {m >= 1024 ? `${m / 1024} GB` : `${m} MB`} of graphics memory
-            </option>
-          ))}
-        </select>
+      <h3>Graphics memory</h3>
+      <AmountField
+        label="Frame cache"
+        gb={s.cacheBudgetMB / 1024}
+        min={MIN_MEMORY_MB / 1024}
+        max={memoryMax}
+        step={0.25}
+        title="Finished frames kept in graphics memory, ready to play. More memory means more of the show plays smoothly at full size."
+        onChange={(gb) => s.set({ cacheBudgetMB: Math.round(gb * 1024) })}
+      />
+      <AmountField
+        label="Video frames"
+        gb={s.videoCacheMB / 1024}
+        min={MIN_MEMORY_MB / 1024}
+        max={memoryMax}
+        step={0.25}
+        title="Decoded frames of your videos, kept in graphics memory so they play without waiting."
+        onChange={(gb) => s.set({ videoCacheMB: Math.round(gb * 1024) })}
+      />
+      {machineLine && <p className="muted small">{machineLine}</p>}
+      {memoryNote && (
+        <p className={memoryNote.warn ? "warn small" : "muted small"} role={memoryNote.warn ? "alert" : undefined}>
+          {memoryNote.text}
+        </p>
+      )}
+      <h3>Disk</h3>
+      <label className="check">
+        <input type="checkbox" checked={s.diskCache} onChange={(e) => s.set({ diskCache: e.target.checked })} /> Also keep finished frames on disk, so they don’t have to be prepared again (even after restarting)
       </label>
+      {s.diskCache && (
+        <>
+          <AmountField
+            label="Disk space"
+            gb={s.diskCacheGB}
+            min={MIN_DISK_GB}
+            max={diskMax}
+            step={1}
+            title="How much of the drive preview frames may use. When it's full, the frames used longest ago make room."
+            onChange={(gb) => s.set({ diskCacheGB: Math.round(gb * 100) / 100 })}
+          />
+          <p className="muted small disk-folder" title={disk?.root}>
+            Folder: {disk?.root ?? "…"}
+          </p>
+          <div className="row gap wrap">
+            <button className="ghost small-btn" onClick={() => void chooseFolder()}>
+              Change folder…
+            </button>
+            {s.diskCacheFolder && (
+              <button className="ghost small-btn" onClick={() => s.set({ diskCacheFolder: null })}>
+                Use the standard folder
+              </button>
+            )}
+            <button className="ghost small-btn" disabled={!disk || disk.scanning || disk.files === 0} onClick={() => void clearDiskCache()}>
+              Clear disk cache
+            </button>
+          </div>
+          <p className="muted small">
+            {!disk || disk.scanning
+              ? "Finding the frames already saved there…"
+              : `Using ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)} (${disk.files.toLocaleString()} frames)${disk.freeBytes !== null ? ` · ${formatSize(disk.freeBytes)} free on this drive` : ""}`}
+          </p>
+          {tooBig && (
+            <p className="warn small" role="alert">
+              That’s more than this drive has free ({formatSize(free ?? 0)}). Frames stop being saved when the drive is nearly full.
+            </p>
+          )}
+          {disk?.problem && (
+            <p className="warn small" role="alert">
+              {disk.problem}
+            </p>
+          )}
+        </>
+      )}
       <div className="row gap">
         <button className="ghost small-btn" onClick={() => currentPreviewLoop()?.cache.clear()}>
-          Clear cached frames
+          Clear frames in memory
         </button>
         <button className="ghost small-btn" onClick={() => s.reset()}>
           Reset preview settings
@@ -524,8 +683,16 @@ const TransportBar = ({ role }: { role: "editor" | "popout" }) => {
 const StatusLine = () => {
   const st = usePreviewStats();
   const s = usePreview();
+  const disk = useDiskCache((d) => d.status);
   const fraction = effectiveFraction(s);
   const behind = st.mode === "playing" && st.achievedFps > 0 && st.achievedFps < st.targetFps * 0.8;
+  // Disk usage changes as frames are saved (here or in another window): look now and then.
+  useEffect(() => {
+    if (!s.diskCache) return;
+    void refreshDiskStatus();
+    const t = setInterval(() => void refreshDiskStatus(), 3000);
+    return () => clearInterval(t);
+  }, [s.diskCache, s.diskCacheFolder]);
   return (
     <div className="preview-status" aria-live="polite">
       {st.size && (
@@ -549,7 +716,8 @@ const StatusLine = () => {
       )}
       <SimChip />
       <span className="muted">
-        Cache {st.cacheFrames} frames · {st.cacheMB} MB of {st.cacheBudgetMB >= 1024 ? `${(st.cacheBudgetMB / 1024).toFixed(1)} GB` : `${st.cacheBudgetMB} MB`}
+        Cache {st.cacheFrames} frames · {formatSize(st.cacheMB * MB)} of {formatSize(st.cacheBudgetMB * MB)}
+        {s.diskCache && ` · Disk ${!disk || disk.scanning ? "(looking…)" : `${disk.files.toLocaleString()} frames · ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)}`}`}
       </span>
       {behind && s.resolution !== "auto" && (
         <span className="offer">

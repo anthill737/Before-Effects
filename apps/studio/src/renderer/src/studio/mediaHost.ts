@@ -4,12 +4,13 @@
  *   Images      decoded once into working-space textures.
  *   Video       frames decoded by FFmpeg in the desktop process at the size the preview needs
  *               (lighter "proxy" sizes while previewing), cached on the GPU and prefetched ahead.
+ *               How much graphics memory they may use is a preview setting ("Video frames").
  *   Exports     call prepare() before each frame. It waits for full-size frames, so the preview
  *               size never lowers export quality.
  */
 import { evaluateComp, type EvaluatedComp, type Flicks, type Id, type Project } from "@be/core";
 import type { FrameRenderer, MediaProvider } from "@be/engine";
-import { usePreview } from "../preview/settings.ts";
+import { MIN_MEMORY_MB, usePreview } from "../preview/settings.ts";
 
 interface Entry {
   tex: GPUTexture;
@@ -17,7 +18,7 @@ interface Entry {
   used: number;
 }
 
-const BUDGET = 768 * 1024 * 1024;
+const budget = () => Math.max(MIN_MEMORY_MB, usePreview.getState().videoCacheMB) * 1024 * 1024;
 
 export class MediaHost implements MediaProvider {
   project: Project | null = null;
@@ -29,7 +30,12 @@ export class MediaHost implements MediaProvider {
   private tick = 0;
   private listeners = new Set<() => void>();
 
-  constructor(private readonly renderer: FrameRenderer) {}
+  constructor(private readonly renderer: FrameRenderer) {
+    // A smaller amount applies right away.
+    usePreview.subscribe((s, prev) => {
+      if (s.videoCacheMB < prev.videoCacheMB) this.trim();
+    });
+  }
 
   /** Diagnostics: what's loaded, loading and failed. */
   stats(): { images: number; frames: number; loading: number; failed: string[]; keys: string[] } {
@@ -89,14 +95,19 @@ export class MediaHost implements MediaProvider {
     const bytes = tex.width * tex.height * 8;
     map.set(key, { tex, bytes, used: ++this.tick });
     this.bytes += bytes;
-    if (this.bytes > BUDGET) {
-      const all = [...this.frames.entries()].sort((a, b) => a[1].used - b[1].used);
-      for (const [k, ent] of all) {
-        if (this.bytes <= BUDGET * 0.85) break;
-        this.renderer.gpu.defer(ent.tex);
-        this.frames.delete(k);
-        this.bytes -= ent.bytes;
-      }
+    this.trim();
+  }
+
+  /** Over the budget: drop the least recently used video frames (images stay). */
+  private trim() {
+    const limit = budget();
+    if (this.bytes <= limit) return;
+    const all = [...this.frames.entries()].sort((a, b) => a[1].used - b[1].used);
+    for (const [k, ent] of all) {
+      if (this.bytes <= limit * 0.85) break;
+      this.renderer.gpu.defer(ent.tex);
+      this.frames.delete(k);
+      this.bytes -= ent.bytes;
     }
   }
 

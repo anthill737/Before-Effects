@@ -12,6 +12,7 @@ import { registerAvCheckIpc } from "./avcheck.ts";
 import { registerDecodeIpc, stopAllDecoders } from "./decode.ts";
 import { cancelAllEncodes, health, paths, registerFileIpc } from "./files.ts";
 import { registerMediaImportIpc } from "./mediaImport.ts";
+import { registerPreviewCacheIpc } from "./previewCache.ts";
 import { registerAgentApi, shutdownAgentApi } from "./agentApi.ts";
 import { registerHouseDetect, shutdownHouseDetect } from "./houseDetect.ts";
 import { registerBlender, shutdownBlender } from "./blender.ts";
@@ -73,6 +74,7 @@ process.on("unhandledRejection", (e) => log(`unhandled rejection: ${String((e as
 registerFileIpc();
 registerDecodeIpc();
 registerMediaImportIpc();
+registerPreviewCacheIpc();
 registerAvCheckIpc();
 registerWindowIpc(mode);
 registerRenderQueue(mode);

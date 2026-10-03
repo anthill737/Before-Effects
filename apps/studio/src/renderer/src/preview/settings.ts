@@ -38,8 +38,16 @@ export interface PreviewSettings {
   /** Real-time mode: skip frames to keep timing (true) or play every frame, slower if needed (false). */
   frameSkipping: boolean;
   useProxies: boolean;
-  /** VRAM budget for cached frames, in megabytes. */
+  /** Graphics memory for finished frames, in megabytes (any amount from MIN_MEMORY_MB). */
   cacheBudgetMB: number;
+  /** Graphics memory for decoded video frames, in megabytes (any amount from MIN_MEMORY_MB). */
+  videoCacheMB: number;
+  /** Also keep finished frames on disk. The disk settings are shared by every window (one folder). */
+  diskCache: boolean;
+  /** Disk space for frames, in gigabytes (any amount from MIN_DISK_GB). */
+  diskCacheGB: number;
+  /** A folder picked for frames on disk, or null for the data folder's Cache\preview. */
+  diskCacheFolder: string | null;
   overlays: { outlines: boolean; selection: boolean; guides: boolean; grid: boolean };
   orbit: OrbitCamera;
   ambient: number;
@@ -59,19 +67,53 @@ const DEFAULTS: PreviewSettings = {
   frameSkipping: true,
   useProxies: true,
   cacheBudgetMB: 1536,
+  videoCacheMB: 768,
+  diskCache: false,
+  diskCacheGB: 20,
+  diskCacheFolder: null,
   overlays: { outlines: true, selection: true, guides: false, grid: false },
   orbit: DEFAULT_ORBIT,
   ambient: 0.05,
   maximized: false,
 };
 
+/** Smallest amounts the cache controls accept (there's no largest). */
+export const MIN_MEMORY_MB = 256;
+export const MIN_DISK_GB = 1;
+
 const KEY = `be.preview.${window.be?.app.kind ?? "editor"}`;
+/** Disk-cache settings are stored once for all windows: there's one folder on disk. */
+const DISK_KEY = "be.preview.disk";
+const DISK_FIELDS = ["diskCache", "diskCacheGB", "diskCacheFolder"] as const;
+
+const atLeast = (v: unknown, min: number, fallback: number): number => (typeof v === "number" && Number.isFinite(v) ? Math.max(min, v) : fallback);
+
+const loadDisk = (): Partial<PreviewSettings> => {
+  try {
+    const raw = localStorage.getItem(DISK_KEY);
+    const d = raw ? (JSON.parse(raw) as Partial<PreviewSettings>) : {};
+    return Object.fromEntries(DISK_FIELDS.filter((k) => k in d).map((k) => [k, d[k]]));
+  } catch {
+    return {};
+  }
+};
+
+/** Amounts from older or hand-edited preferences are kept within what the controls accept. */
+const sane = (s: PreviewSettings): PreviewSettings => ({
+  ...s,
+  cacheBudgetMB: atLeast(s.cacheBudgetMB, MIN_MEMORY_MB, DEFAULTS.cacheBudgetMB),
+  videoCacheMB: atLeast(s.videoCacheMB, MIN_MEMORY_MB, DEFAULTS.videoCacheMB),
+  diskCache: s.diskCache === true,
+  diskCacheGB: atLeast(s.diskCacheGB, MIN_DISK_GB, DEFAULTS.diskCacheGB),
+  diskCacheFolder: typeof s.diskCacheFolder === "string" && s.diskCacheFolder ? s.diskCacheFolder : null,
+});
 
 const load = (): PreviewSettings => {
   try {
     const raw = localStorage.getItem(KEY);
     // An enlarged preview hides the side panels; it's for the moment, so each launch starts normal.
-    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<PreviewSettings>), autoFraction: 1, maximized: false };
+    if (raw) return sane({ ...DEFAULTS, ...(JSON.parse(raw) as Partial<PreviewSettings>), ...loadDisk(), autoFraction: 1, maximized: false });
+    return sane({ ...DEFAULTS, ...loadDisk() });
   } catch {
     // ignore unreadable preferences
   }
@@ -85,14 +127,21 @@ export const usePreview = create<PreviewSettings & { set(p: Partial<PreviewSetti
     try {
       const { set: _s, reset: _r, ...rest } = { ...get(), ...p };
       localStorage.setItem(KEY, JSON.stringify(rest));
+      if (DISK_FIELDS.some((k) => k in p)) localStorage.setItem(DISK_KEY, JSON.stringify(Object.fromEntries(DISK_FIELDS.map((k) => [k, rest[k]]))));
     } catch {
       // preferences are a convenience
     }
   },
   reset() {
-    set(DEFAULTS);
+    // Saved too, so a reset lasts (the disk settings are reset for every window).
+    get().set(DEFAULTS);
   },
 }));
+
+// Another window changed the disk settings: follow them (the "storage" event only reaches other windows).
+window.addEventListener?.("storage", (e) => {
+  if (e.key === DISK_KEY) usePreview.setState(sane({ ...usePreview.getState(), ...loadDisk() }));
+});
 
 /** The fraction actually rendered right now. */
 export const effectiveFraction = (s: Pick<PreviewSettings, "resolution" | "customScale" | "autoFraction">): number => {

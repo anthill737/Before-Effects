@@ -120,6 +120,41 @@ export interface SavedFile {
   readonly savedAt: string;
 }
 
+/** The computer's memory and its graphics card's own memory (when Windows reports it), in bytes. */
+export interface MachineMemory {
+  readonly ramBytes: number;
+  readonly gpu: { readonly name: string; readonly bytes: number } | null;
+}
+
+/** Preview frames on disk: one folder and size limit for all windows. */
+export interface DiskCacheConfig {
+  /** A folder the person picked (frames go in a folder of their own inside it), or null for the data folder's Cache\preview. */
+  readonly folder: string | null;
+  readonly limitBytes: number;
+}
+
+export interface DiskCacheUsage {
+  readonly bytes: number;
+  readonly files: number;
+  readonly limitBytes: number;
+}
+
+export interface DiskCacheStatus extends DiskCacheUsage {
+  /** Where the frames are. */
+  readonly root: string;
+  /** Free space on that drive (null when unknown). */
+  readonly freeBytes: number | null;
+  /** Still finding out what's already saved there. */
+  readonly scanning: boolean;
+  readonly problem?: string;
+}
+
+/** Whose frames: a show (project id) and one of its compositions. */
+export interface DiskCacheScope {
+  readonly project: string;
+  readonly comp: string;
+}
+
 export type WindowKind = "editor" | "preview" | "output" | "render" | "identify" | "spike" | "uitest";
 
 export interface HealthReport {
@@ -278,6 +313,23 @@ export interface BeApi {
     metrics(): Promise<{ cpu: string; threads: number; ramGB: number; processes: Array<{ type: string; name: string; mb: number; privateMb: number }> }>;
     reportSpike(result: unknown): Promise<void>;
     log(message: string): void;
+  };
+  /** Preview frames kept on disk (see main/previewCache.ts), and how much memory there is for caches. */
+  readonly cache: {
+    machine(): Promise<MachineMemory>;
+    /** Folder and size limit (shared by every window; a smaller limit deletes the least recently used frames). */
+    configure(config: DiskCacheConfig): Promise<DiskCacheStatus>;
+    status(): Promise<DiskCacheStatus>;
+    /** Before first using a composition's frames: they're kept only if made from this exact show (fingerprint). Returns the frame keys on disk. */
+    validate(scope: DiskCacheScope, fingerprint: string): Promise<string[]>;
+    /** After edits were applied: the frames on disk now belong to this version of the show. */
+    stamp(scope: DiskCacheScope, fingerprint: string): Promise<void>;
+    /** An edit changed these frames (half-open frame ranges): delete them. */
+    invalidate(scope: DiskCacheScope, ranges: Array<[number, number]>): Promise<DiskCacheUsage>;
+    /** Save a frame (a compact image). Null when it wasn't kept (drive nearly full, or the show changed meanwhile). */
+    put(scope: DiskCacheScope, key: string, data: Uint8Array): Promise<DiskCacheUsage | null>;
+    get(scope: DiskCacheScope, key: string): Promise<Uint8Array | null>;
+    clear(): Promise<DiskCacheStatus>;
   };
   readonly agent: {
     status(): Promise<AgentStatus>;

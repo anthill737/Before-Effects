@@ -258,6 +258,15 @@ progress { width: 100%; height: 12px; accent-color: var(--accent); }
 .check { display: flex; align-items: center; gap: 8px; }
 .row-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .row-field > span { color: var(--muted); font-size: 12.5px; }
+.popover.quality { width: 420px; max-height: 75vh; overflow-y: auto; }
+.popover.quality h3 { margin: 6px 0 0; }
+.popover.quality p.small { margin: 0; }
+.amount-field { display: grid; grid-template-columns: 92px 1fr 70px auto; gap: 8px; align-items: center; }
+.amount-field > span:first-child { color: var(--muted); font-size: 12.5px; }
+.amount-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.amount-number { width: 70px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); text-align: right; }
+.amount-field .unit { color: var(--muted); font-size: 12px; }
+.disk-folder { overflow-wrap: anywhere; }
 .preview-scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; }
 .preview-scroll.zoomed { overflow: auto; align-items: flex-start; justify-content: flex-start; }
 .preview-panel.is-3d .canvas-stage { box-shadow: none; }

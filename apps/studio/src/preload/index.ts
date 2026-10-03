@@ -54,6 +54,17 @@ const api: BeApi = {
     reportSpike: (result) => ipcRenderer.invoke("app:reportSpike", result),
     log: (message) => ipcRenderer.send("app:log", message),
   },
+  cache: {
+    machine: () => ipcRenderer.invoke("cache:machine"),
+    configure: (config) => ipcRenderer.invoke("cache:configure", config),
+    status: () => ipcRenderer.invoke("cache:status"),
+    validate: (scope, fp) => ipcRenderer.invoke("cache:validate", scope, fp),
+    stamp: (scope, fp) => ipcRenderer.invoke("cache:stamp", scope, fp),
+    invalidate: (scope, ranges) => ipcRenderer.invoke("cache:invalidate", scope, ranges),
+    put: (scope, key, data) => ipcRenderer.invoke("cache:put", scope, key, data),
+    get: (scope, key) => ipcRenderer.invoke("cache:get", scope, key),
+    clear: () => ipcRenderer.invoke("cache:clear"),
+  },
   agent: {
     status: () => ipcRenderer.invoke("agent:status"),
     setEnabled: (on) => ipcRenderer.invoke("agent:setEnabled", on),
