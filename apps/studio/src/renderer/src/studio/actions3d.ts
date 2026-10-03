@@ -11,11 +11,14 @@ import {
   DEFAULT_FRACTURE,
   DEFAULT_PHYSICS,
   type Flicks,
+  FRACTURE_PRESETS,
   type Layer,
   lightObject,
   type Mask,
   newId,
   type Object3D,
+  PARTICLE_PRESETS,
+  type ParticleKind,
   type PropValue,
   type RegionRef,
   type Scene3D,
@@ -32,7 +35,19 @@ import { activeVenue, currentComp, useStudio } from "./store.ts";
 /** Which object of the selected 3D layer's scene is being edited. */
 export const use3D = create<{ objectId: string | null }>(() => ({ objectId: null }));
 
-export const COLLAPSE_EFFECT = { id: "collapse-3d", title: "Collapse & rebuild (3D)", description: "The area becomes a solid slab that breaks into pieces, falls onto a ledge with real physics, then flies back." };
+export const COLLAPSE_EFFECT = { id: "collapse-3d", title: FRACTURE_PRESETS.collapse.title, description: FRACTURE_PRESETS.collapse.description };
+export type BreakPreset = keyof typeof FRACTURE_PRESETS;
+/** Breaking apart with real physics: collapse & rebuild, explode, crumble (cards in the effects list). */
+export const BREAK_EFFECTS = (Object.keys(FRACTURE_PRESETS) as BreakPreset[]).map((k) => ({ id: k === "collapse" ? COLLAPSE_EFFECT.id : `${k}-3d`, preset: k, title: FRACTURE_PRESETS[k].title, description: FRACTURE_PRESETS[k].description }));
+/** Particles drawn by rule in 3D (cards in the effects list). */
+export const PARTICLE_EFFECTS = (Object.keys(PARTICLE_PRESETS) as ParticleKind[]).map((k) => ({ id: `particles-${k}`, kind: k, title: PARTICLE_PRESETS[k].title, description: PARTICLE_PRESETS[k].description }));
+/** Card id → what it makes. */
+export const effect3dFor = (id: string): { break: BreakPreset } | { particles: ParticleKind } | null => {
+  const b = BREAK_EFFECTS.find((e) => e.id === id);
+  if (b) return { break: b.preset };
+  const p = PARTICLE_EFFECTS.find((e) => e.id === id);
+  return p ? { particles: p.kind } : null;
+};
 
 export const sceneForLayer = (layer: Layer | undefined): Scene3D | undefined => {
   const p = useStudio.getState().project;
@@ -58,7 +73,7 @@ const refFor = (regionIds: readonly string[]): RegionRef => {
 };
 
 /** Give areas thickness as a 3D solid (optionally breaking apart), shown by a new 3D layer. */
-export const makeArea3D = (regionIds: readonly string[], collapse: boolean): string | null => {
+export const makeArea3D = (regionIds: readonly string[], collapse: boolean, preset: BreakPreset = "collapse"): string | null => {
   const s = useStudio.getState();
   const comp = currentComp(s);
   const venue = activeVenue(s);
@@ -66,7 +81,8 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean): str
   const names = regionIds.map((id) => venue.regions[id]?.name).filter(Boolean);
   const sceneId = newId("s3d");
   const name = `${names.length > 2 ? `${names.length} areas` : names.join(" + ")} in 3D`;
-  const scene = areaScene(s.project, { sceneId, idPrefix: sceneId, name, ref: refFor(regionIds), venueId: venue.id, canvas: venue.canvas, collapse });
+  const fracture = FRACTURE_PRESETS[preset].fracture;
+  const scene = areaScene(s.project, { sceneId, idPrefix: sceneId, name, ref: refFor(regionIds), venueId: venue.id, canvas: venue.canvas, collapse, fracture });
   const layerId = newId("layer");
   const start = snapToFrame(Math.min(s.time, Math.max(0, comp.duration - secondsToTime(2))), comp.frameRate);
   const layer: Layer = {
@@ -92,7 +108,7 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean): str
       { type: "scene3d.add", args: { scene } },
       { type: "layer.add", args: { compId: comp.id, layer } },
     ],
-    { label: collapse ? "Collapse & rebuild in 3D" : "Give the area thickness" },
+    { label: collapse ? FRACTURE_PRESETS[preset].title.replace(" (3D)", " in 3D") : "Give the area thickness" },
   );
   if (!tx) return null;
   // Show the result: the Areas step covers the picture with the tracing photo.
@@ -102,9 +118,75 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean): str
   s.toast({
     kind: "success",
     text: collapse
-      ? `“${name}”: the area breaks apart ${DEFAULT_FRACTURE.collapseAt} s in and flies back at ${DEFAULT_FRACTURE.rebuildAt} s. Adjust it on the right; look around it in “3D projection”.`
+      ? preset === "collapse"
+        ? `“${name}”: the area breaks apart ${DEFAULT_FRACTURE.collapseAt} s in and flies back at ${DEFAULT_FRACTURE.rebuildAt} s. Adjust it on the right; look around it in “3D projection”.`
+        : `“${name}”: the area ${preset === "explode" ? "explodes" : "crumbles"} ${fracture.collapseAt} s in, with real physics. Adjust it on the right; look around it in “3D projection”.`
       : `“${name}” is now a 3D solid ${Math.round(0.3 * 100)} cm thick. Adjust it on the right; look around it in “3D projection”.`,
   });
+  return layerId;
+};
+
+/**
+ * Particles (sparks, embers, snow, confetti) from the selected areas — snow can fall over the whole
+ * picture — as a 3D layer on top of the scene at the playhead. Returns the layer id.
+ */
+export const addParticles = (kind: ParticleKind, regionIds: readonly string[]): string | null => {
+  const s = useStudio.getState();
+  const comp = currentComp(s);
+  const venue = activeVenue(s);
+  if (!s.project || !comp) return null;
+  if (!regionIds.length && kind !== "snow") return null;
+  const preset = PARTICLE_PRESETS[kind];
+  const names = regionIds.map((id) => venue?.regions[id]?.name).filter(Boolean);
+  const title = preset.title.replace(" (3D)", "");
+  const name = names.length ? `${title} — ${names.length > 2 ? `${names.length} areas` : names.join(" + ")}` : title;
+  const sceneId = newId("s3d");
+  const objectId = `${sceneId}-particles`;
+  const object: Object3D = {
+    id: objectId,
+    name: title,
+    kind: "particles",
+    visible: true,
+    position: staticProp<Vec3>([0, 0, 0], true),
+    rotation: staticProp<Vec3>([0, 0, 0]),
+    scale: staticProp<Vec3>([100, 100, 100]),
+    particles: { ...preset.settings, from: regionIds.length ? refFor(regionIds) : null, seed: Math.floor(Math.random() * 1e6) },
+  };
+  const scene: Scene3D = { id: sceneId, name, objectOrder: [objectId], objects: { [objectId]: object }, gravity: [0, -9.81, 0], cameraDistance: 1.6 };
+  const seconds = { sparks: 5, embers: 8, snow: 12, confetti: 6 }[kind];
+  const start = snapToFrame(Math.min(s.time, Math.max(0, comp.duration - secondsToTime(2))), comp.frameRate);
+  const layerId = newId("layer");
+  const layer: Layer = {
+    id: layerId,
+    name,
+    source: { kind: "scene3d", sceneId },
+    startTime: start,
+    inPoint: start,
+    outPoint: Math.min(comp.duration, start + secondsToTime(seconds)),
+    stretch: 1,
+    enabled: true,
+    solo: false,
+    locked: false,
+    audioEnabled: false,
+    is3D: false,
+    blendMode: preset.glow ? "add" : "normal",
+    transform: { anchor: staticProp<Vec3>([0, 0, 0]), position: staticProp<Vec3>([0, 0, 0], true), scale: staticProp<Vec3>([100, 100, 100]), rotation: staticProp<Vec3>([0, 0, 0]), opacity: staticProp(100) },
+    masks: [],
+    effects: [],
+  };
+  const tx = s.apply(
+    [
+      { type: "scene3d.add", args: { scene } },
+      // On top: particles fly in front of everything.
+      { type: "layer.add", args: { compId: comp.id, layer, index: 0 } },
+    ],
+    { label: `Add ${title.toLowerCase()}` },
+  );
+  if (!tx) return null;
+  if (s.step === "space") useStudio.setState({ step: "animate" });
+  s.selectLayer(layerId);
+  use3D.setState({ objectId });
+  s.toast({ kind: "success", text: `${title}: ${preset.description} Adjust amount, size and colour on the right.` });
   return layerId;
 };
 

@@ -1,3 +1,4 @@
+import { projectionOps } from "./projection.ts";
 import { coreOps } from "./ops-library.ts";
 import { type OpDef, OpRegistry } from "./ops.ts";
 import { recipeOps } from "./recipes.ts";
@@ -7,4 +8,4 @@ import { blenderOps } from "./blender.ts";
 import "./recipes-builtin.ts";
 
 /** Every operation available to the UI, scripts and the assistant. */
-export const createRegistry = (): OpRegistry => new OpRegistry().register(...([...coreOps, ...recipeOps, ...sceneOps, ...world3dOps, ...blenderOps] as readonly OpDef[]));
+export const createRegistry = (): OpRegistry => new OpRegistry().register(...([...coreOps, ...recipeOps, ...sceneOps, ...world3dOps, ...blenderOps, ...projectionOps] as readonly OpDef[]));

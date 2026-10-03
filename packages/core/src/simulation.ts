@@ -145,8 +145,10 @@ export const resolveSim = (
   const frames = Math.max(1, Math.ceil((layerDuration / 705_600_000) * fps)) + prerollFrames;
   const emitters = settings.emitters.map((emitter) => ({ emitter, paths: resolvePaths(emitter.source) }));
   const containers = settings.containers.flatMap((c) => resolvePaths(c));
+  // The look (colours, opacity, glow) is applied when frames are drawn, so it isn't part of the key:
+  // changing it shows at once instead of simulating again.
   const key = simHash(
-    stableJson({ v: SIM_ENGINE_VERSION, s: { ...settings, emitters: settings.emitters.map((e) => ({ ...e, source: null })), containers: null }, w: comp.width, h: comp.height, r: comp.frameRate, frames, emitters: emitters.map((e) => e.paths), containers }),
+    stableJson({ v: SIM_ENGINE_VERSION, s: { ...settings, look: null, emitters: settings.emitters.map((e) => ({ ...e, source: null })), containers: null }, w: comp.width, h: comp.height, r: comp.frameRate, frames, emitters: emitters.map((e) => e.paths), containers }),
   );
   return { settings, width: comp.width, height: comp.height, frameRate: comp.frameRate, frames, prerollFrames, emitters, containers, key };
 };

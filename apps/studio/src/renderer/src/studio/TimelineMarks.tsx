@@ -21,7 +21,7 @@ import {
 import { useState } from "react";
 import { updateObject, use3D } from "./actions3d.ts";
 import { KeyMenu } from "./KeyMenu.tsx";
-import { LAYER_PROPS, storeProp } from "./layerKeys.ts";
+import { layerProps, storeProp } from "./layerKeys.ts";
 import { useStudio } from "./store.ts";
 
 type TimeAt = (clientX: number) => Flicks;
@@ -229,7 +229,8 @@ export const LayerKeyMarks = ({ comp, layer, pct, timeAt }: { comp: Composition;
   const toLocal = (t: Flicks): Flicks => Math.round((t - layer.startTime) * layer.stretch);
   const snap = (t: Flicks) => Math.max(0, Math.round((t / FLICKS_PER_SECOND) * fps) / fps) * FLICKS_PER_SECOND;
   const marks: React.ReactNode[] = [];
-  for (const P of LAYER_PROPS) {
+  const props = layerProps(layer);
+  for (const P of props) {
     const prop = P.get(layer);
     for (const k of prop?.keyframes ?? []) {
       marks.push(
@@ -260,7 +261,7 @@ export const LayerKeyMarks = ({ comp, layer, pct, timeAt }: { comp: Composition;
       );
     }
   }
-  const P = menu ? LAYER_PROPS.find((x) => x.path === menu.path) : undefined;
+  const P = menu ? props.find((x) => x.path === menu.path) : undefined;
   const prop = P?.get(layer);
   return (
     <>

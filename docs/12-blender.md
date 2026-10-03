@@ -14,6 +14,9 @@ Before Effects uses Blender for physical simulations it doesn't do itself, and t
 | **Fire** | Flames lick up from the area, with a little smoke. | Blender Mantaflow (fire + smoke) |
 | **Water pouring** | Water bursts out of the area, splashes down the front of the house and runs off. | Blender Mantaflow (liquid, FLIP) |
 | **Cloth reveal** | A sheet hangs over the area, lets go and crumples at the foot of the house. | Blender cloth |
+| **Break apart** | The area breaks into photo-faced pieces that fall, tumble and land on the house and the ground. | Blender rigid bodies (Bullet) |
+
+The built-in **Collapse & rebuild, Explode and Crumble (3D)** use Before Effects' own Rapier physics and stay available alongside. They adjust live; Blender's version comes back as a video.
 
 Then:
 - Progress shows while Blender works ("Building the Blender scene", "Simulating in Blender 40 of 120", "Rendering in Blender", "Making the video"). **Cancel** stops Blender and adds nothing.
@@ -21,7 +24,7 @@ Then:
 
 The effects library also contains procedural look-alikes (Smoke rising, Fill with flowing water, Crack & rebuild). Their cards carry a *procedural* badge, and their descriptions name the physical alternative.
 
-**On a layer Blender made**, the **Made in Blender** section offers:
+**On a layer Blender made**, the **Made in Blender** section has **Settings**. These are every setting of the effect, plus its name, areas, start, length and quality, gathered and applied together with **Simulate again** (see [13-effects-and-settings.md](13-effects-and-settings.md) for what updates when). It also offers:
 - **Open in Blender**: opens its .blend in Blender's own window.
 - **Update from Blender**: renders the .blend again, keeping your edits, and swaps the video in the same layer. The button lights up and a note appears when the .blend changed since the last render.
 - **Render at full quality**: full canvas size and finer simulation. For an effect this rebuilds the scene, which replaces edits made in Blender; the button says so.
@@ -79,6 +82,13 @@ Old renders stay on disk, so undo can bring them back. They leave the media list
 
 **Physics Before Effects already prepared.** Moving bodies in 3D layers (Rapier collapses, falling parts) on screen during the effect go to Blender with their prepared poses, resampled to Blender's frames. Smoke and water flow around the falling pieces, and the area those pieces replace is left out as a still obstacle. The 3D scene's fixed solids, such as the plinth the pieces land on, come along as still obstacles.
 
+**Break apart.** Before Effects cuts the areas into Voronoi pieces, the same fracture as the built-in collapse. Each piece is `debris` owned by Blender and carries its `release`:
+- the frame it lets go (top first when "lets go over" is set);
+- its push toward the audience;
+- its spin.
+
+Blender holds each piece (animated) until that frame. Two keyed frames hand Bullet the push and spin, and it simulates from there. A dark `backdrop` shows where the pieces were.
+
 **Cloth.** `pin` lists:
 - the held vertices (the top edge);
 - the handle's keyframes (a small tug toward the audience);
@@ -105,12 +115,14 @@ Blender reads pin weights every frame, so the sheet falls when they drop to zero
 | `blender.update` | `{link}` renders again keeping edits; `{link, rebuild: {quality, seconds}}` rebuilds |
 | `blender.open` | opens the .blend in Blender |
 
-**Effect params:**
-- `color` (`#rrggbb`) and `density`;
-- smoke and fire: `swirl` and `linger`;
-- fire: `fuel`;
-- liquid: `push` and `pourFor`;
-- cloth: `revealAt`.
+**Effect params** are declared once in `BLENDER_PARAMS`, which the inspector, the agent API and `be_blender.py` all read; times are in seconds:
+- smoke: `color`, `density`, `swirl`, `linger`;
+- fire: `fuel`, `density`, `swirl`, `linger`, `color` (smoke);
+- liquid: `color`, `push`, `pourFor`;
+- cloth: `color`, `revealAt`;
+- shatter: `pieceSize`, `breakAt`, `stagger`, `push`, `spin`, `bounce`, `friction`, `seed`.
+
+`blender.update` with `rebuild: {params, startSeconds, seconds, quality}` simulates again with new settings.
 
 ## Measured (this PC, Blender 5.2.2, 3 s at 30 fps)
 
@@ -123,6 +135,7 @@ Blender reads pin weights every frame, so the sheet falls when they drop to zero
 | Fire beside a Rapier garage collapse (45 played-back pieces), draft | 35 s |
 | Same fire at full quality (1920×1080, resolution 160) | 94 s |
 | Linked .blend, 60 frames at 1280×720 | 12 s; Update after editing it: 14 s |
+| Break apart on the garage door, draft (≈60 pieces) | 18 s |
 
 ## Limitations
 

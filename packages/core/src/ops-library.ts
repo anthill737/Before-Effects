@@ -221,6 +221,9 @@ const layerChanges = z
     stretch: z.number().finite().refine((x) => x !== 0, "stretch cannot be 0"),
     parentId: z.string().nullable(),
     label: z.string(),
+    /** The whole clipping stack (masks) or effect stack, replaced as a unit. */
+    masks: z.array(obj<Mask>("mask")),
+    effects: z.array(obj<EffectInstance>("effect")),
   })
   .partial();
 
@@ -228,7 +231,7 @@ export const layerUpdate = defineOp({
   type: "layer.update",
   title: "Change layer",
   description:
-    "Change a layer's name, visibility, solo, lock, blend mode, timing (startTime/inPoint/outPoint in flicks), speed (stretch) or parent.",
+    "Change a layer's name, visibility, solo, lock, blend mode, timing (startTime/inPoint/outPoint in flicks), speed (stretch), parent, or replace its masks or effects.",
   args: z.object({ compId: id, layerId: id, changes: layerChanges }),
   apply: (d, a, ctx) => {
     const l = layerOf(d, a.compId, a.layerId);

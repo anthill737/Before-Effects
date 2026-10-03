@@ -60,6 +60,8 @@ export interface ProjectorOutputOptions {
   /** Overlay the content grid to help alignment. */
   readonly showGrid?: boolean;
   readonly encodeSrgb?: boolean;
+  /** Edge blending with the other projectors lighting the same content (see core projection.ts). */
+  readonly blend?: { readonly curve: number; readonly others: ReadonlyArray<{ readonly h: Mat3; readonly size: { readonly width: number; readonly height: number } }> };
 }
 
 export const renderProjectorOutput = (
@@ -80,7 +82,8 @@ export const renderProjectorOutput = (
   });
   const hom = projectorHomography(projector);
   const hinv = hom?.hinv ?? Float64Array.from([1, 0, 0, 0, 1, 0, 0, 0, 1]);
-  const u = new ArrayBuffer(96);
+  // 96 bytes of warp and correction, then the blend: vec4 + 7 mat3x3 (48 bytes each) + 7 vec4.
+  const u = new ArrayBuffer(96 + 16 + 7 * 48 + 7 * 16);
   const f = new Float32Array(u);
   // mat3x3f: three vec3 columns, each padded to 16 bytes.
   for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) f[c * 4 + r] = hinv[c * 3 + r]!;
@@ -90,6 +93,12 @@ export const renderProjectorOutput = (
   f[20] = projector.outputColor.gamma;
   f[21] = projector.outputColor.blackLevel;
   new Uint32Array(u, 88, 2).set([o.encodeSrgb === false ? 0 : 1, o.showGrid ? 1 : 0]);
+  const others = (o.blend?.others ?? []).slice(0, 7);
+  f.set([others.length, o.blend?.curve ?? 2, 0, 0], 24);
+  others.forEach((x, k) => {
+    for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) f[28 + k * 12 + c * 4 + r] = x.h[c * 3 + r]!;
+    f.set([x.size.width, x.size.height, 0, 0], 28 + 7 * 12 + k * 4);
+  });
   // Output masks are areas (in projector pixels) where light is blocked; none = nothing blocked.
   let mask: GPUTexture;
   if (projector.outputMasks.length) {

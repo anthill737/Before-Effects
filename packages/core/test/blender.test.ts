@@ -10,8 +10,13 @@ import {
   newComposition,
   polygonPath,
   preparedObstacles,
+  LAYER_EFFECTS,
+  newEffect,
+  newLayer,
+  staticProp as sp,
   type Region,
   type ResolvedScene3D,
+  shatterPieces,
   staticProp,
   type Venue,
 } from "../src/index.ts";
@@ -144,5 +149,61 @@ describe("Blender exchange", () => {
     expect(x.objects.some((o) => o.name === "Area: Window 2")).toBe(false);
     expect(x.objects.filter((o) => o.motion)).toHaveLength(2);
     expect(checkOwners(x)).toEqual([]);
+  });
+
+  it("breaks an area into Blender-owned pieces that let go top first, with a dark backdrop where they were", () => {
+    const area = { name: "Door", outline: [[100, 100], [300, 100], [300, 400], [100, 400]] as [number, number][], holes: [] };
+    const objs = shatterPieces([area], canvas, 30, 90, { pieceSize: 60, breakAt: 1, stagger: 1, push: 2, spin: 0.5, seed: 3 });
+    const pieces = objs.filter((o) => o.role === "debris");
+    expect(pieces.length).toBeGreaterThan(5);
+    expect(pieces.every((o) => o.owner === "blender" && o.release && o.mesh.uvs?.length === o.mesh.verts.length)).toBe(true);
+    const back = objs.find((o) => o.role === "backdrop")!;
+    expect(back.owner).toBe("before-effects");
+    // Behind the pieces.
+    expect(Math.max(...back.mesh.verts.map((v) => v[2]))).toBeLessThan(Math.min(...pieces.flatMap((o) => o.mesh.verts.map((v) => v[2]))));
+    // Top pieces let go first (from frame 31 = 1 s), lower ones up to a second later; pushed toward the audience.
+    const topY = (o: (typeof pieces)[number]) => Math.max(...o.mesh.verts.map((v) => v[1]));
+    const sorted = [...pieces].sort((a, b) => topY(b) - topY(a));
+    expect(sorted[0]!.release!.frame).toBeLessThan(sorted.at(-1)!.release!.frame);
+    expect(Math.min(...pieces.map((o) => o.release!.frame))).toBe(31);
+    expect(Math.max(...pieces.map((o) => o.release!.frame))).toBeLessThanOrEqual(61);
+    expect(pieces.every((o) => o.release!.velocity[2] > 0)).toBe(true);
+    const x = { version: 1, kind: "shatter" as const, params: {}, fps: 30, frames: 90, render: { width: 1, height: 1 }, camera: { eye: [0, 0, 1] as [number, number, number], target: [0, 0, 0] as [number, number, number], fovYDegrees: 30 }, objects: objs, output };
+    expect(checkOwners(x)).toEqual([]);
+    expect(checkOwners({ ...x, objects: [{ ...pieces[0]!, owner: "before-effects" as const }] })[0]).toMatch(/debris but isn't owned by Blender/);
+  });
+});
+
+describe("layer effects", () => {
+  it("start with every setting at its default, each animatable", () => {
+    for (const [type, spec] of Object.entries(LAYER_EFFECTS)) {
+      const e = newEffect(type, "fx1");
+      expect(Object.keys(e.params).sort()).toEqual(spec.params.map((p) => p.key).sort());
+      for (const p of spec.params) {
+        expect(e.params[p.key]!.value).toBe(p.default);
+        expect(p.default).toBeGreaterThanOrEqual(p.min);
+        expect(p.default).toBeLessThanOrEqual(p.max);
+      }
+    }
+    expect(newEffect("melt", "m", { distance: 120 }).params["distance"]!.value).toBe(120);
+  });
+
+  it("are stored when a layer's effects or clipping change (one undo step)", () => {
+    const h = setup();
+    const layer = newLayer({ id: "L", name: "Pic", source: { kind: "solid", color: sp([1, 1, 1, 1]), width: 100, height: 100 }, start: 0, duration: 1000 });
+    h.apply({ type: "layer.add", args: { compId: "s1", layer } });
+    const mask = { id: "m", name: "Area", source: { kind: "region" as const, ref: { role: "areas", regionIds: ["w1"] } }, mode: "add" as const, inverted: false, feather: sp(4), expansion: sp(0), opacity: sp(100) };
+    h.apply({ type: "layer.update", args: { compId: "s1", layerId: "L", changes: { effects: [newEffect("melt", "fx")], masks: [mask] } } });
+    const l = h.project.compositions["s1"]!.layers["L"]!;
+    expect(l.effects.map((e) => e.type)).toEqual(["melt"]);
+    expect(l.masks[0]!.feather.value).toBe(4);
+    h.apply({ type: "prop.set", args: { compId: "s1", layerId: "L", path: "effects.fx.params.distance", value: 120 } });
+    h.apply({ type: "prop.set", args: { compId: "s1", layerId: "L", path: "masks.m.feather", value: 9 } });
+    expect(h.project.compositions["s1"]!.layers["L"]!.effects[0]!.params["distance"]!.value).toBe(120);
+    expect(h.project.compositions["s1"]!.layers["L"]!.masks[0]!.feather.value).toBe(9);
+    h.undo();
+    h.undo();
+    h.undo();
+    expect(h.project.compositions["s1"]!.layers["L"]!.effects).toEqual([]);
   });
 });

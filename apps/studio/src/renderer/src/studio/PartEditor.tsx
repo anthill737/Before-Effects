@@ -5,7 +5,7 @@
 import { ASSUMED_DEPTH, type Backing, type Object3D, type PartMotion, partDepth } from "@be/core";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { MOVES, removePart, secondsLabel, updatePart, wallColorAround } from "./parts.ts";
-import { activeVenue, useStudio } from "./store.ts";
+import { activeVenue, currentComp, useStudio } from "./store.ts";
 
 const FRESH: Record<PartMotion["kind"], PartMotion> = {
   swing: { kind: "swing", hinge: "left", direction: "in", angle: 95 },
@@ -83,7 +83,7 @@ export const PartEditor = ({ o }: { o: Object3D }) => {
       {m.kind === "fall" && <p className="muted small">Comes loose and falls with real physics (prepared ahead, like collapses).</p>}
 
       <Field label="Starts at" help="Seconds into the scene.">
-        <Slider label="Starts at" value={t.start} min={0} max={60} step={0.1} unit="s" onChange={(v) => set({ timing: { start: v } }, "start")} />
+        <Slider label="Starts at" value={t.start} min={0} max={Math.max(60, (currentComp(useStudio.getState())?.duration ?? 0) / 705_600_000)} step={0.1} unit="s" onChange={(v) => set({ timing: { start: v } }, "start")} />
       </Field>
       <Field label="Takes">
         <Slider label="Move takes" value={t.move} min={0.2} max={10} step={0.1} unit="s" onChange={(v) => set({ timing: { move: v } }, "move")} />
@@ -113,6 +113,11 @@ export const PartEditor = ({ o }: { o: Object3D }) => {
       {info.backing.kind === "room" && (
         <Field label="Room light">
           <ColorField label="Room light colour" value={info.backing.color} onChange={(c) => set({ backing: { kind: "room", color: c } }, "room")} />
+        </Field>
+      )}
+      {info.backing.kind === "wall" && (
+        <Field label="Wall colour" help="Picked from the photo around the opening; change it if it doesn't match.">
+          <ColorField label="Wall colour behind" value={info.backing.color} onChange={(c) => set({ backing: { kind: "wall", color: c } }, "wall")} />
         </Field>
       )}
       {info.backing.kind === "image" && (

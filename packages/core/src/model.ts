@@ -400,6 +400,8 @@ export interface Venue {
   readonly groups: Readonly<Record<Id, RegionGroup>>;
   readonly projectorOrder: readonly Id[];
   readonly projectors: Readonly<Record<Id, Projector>>;
+  /** Edge blending where projectors overlap (see projection.ts); absent = on, smooth. */
+  readonly blend?: import("./projection.ts").VenueBlend;
 }
 
 /**

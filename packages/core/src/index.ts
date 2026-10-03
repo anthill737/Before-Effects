@@ -28,4 +28,7 @@ export * from "./houseDetect.ts";
 export * from "./houseRefine.ts";
 export * from "./areaShapes.ts";
 export * from "./parts3d.ts";
+export * from "./particles3d.ts";
 export * from "./blender.ts";
+export * from "./layerEffects.ts";
+export * from "./projection.ts";

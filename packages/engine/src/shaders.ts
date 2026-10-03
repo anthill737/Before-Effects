@@ -149,6 +149,36 @@ struct U { intensity: f32, _p0: f32, _p1: f32, _p2: f32 };
 }
 `;
 
+/**
+ * Melt: the picture sags and drips downward. Each column slides down by its own amount — broad
+ * slumps plus thin drips — and is smeared along the way, so streaks trail behind. What slides away
+ * at the top leaves it empty. Procedural (a look, not a simulation).
+ */
+export const MELT = /* wgsl */ `
+${COMMON}
+struct U { amount: f32, drip: f32, seed: f32, reach: f32 };
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<uniform> u: U;
+fn h1(x: f32) -> f32 { return fract(sin(x * 127.1 + u.seed * 311.7) * 43758.5453); }
+fn n1(x: f32) -> f32 { let i = floor(x); let f = fract(x); return mix(h1(i), h1(i + 1.0), f * f * (3.0 - 2.0 * f)); }
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let x = i.uv.x;
+  let broad = n1(x * 5.0) * 0.6 + n1(x * 13.0 + 7.0) * 0.4;
+  let drips = pow(n1(x * 47.0 + 3.0), 6.0) * u.drip;
+  // How far this column has slid (uv), growing with the amount; drips run ahead.
+  let d = u.amount * u.reach * (0.3 + 0.6 * broad + 1.1 * drips);
+  var acc = vec4f(0.0);
+  for (var k = 0; k < 8; k++) {
+    // Smear: samples from where the column was, a little way back up its path.
+    let y = i.uv.y - d * (1.0 - f32(k) * 0.025);
+    if (y >= 0.0 && y <= 1.0) { acc += textureSampleLevel(src, samp, vec2f(x, y), 0.0); }
+  }
+  return acc / 8.0;
+}
+`;
+
 /** Threshold: keep only parts brighter than the threshold (for glow). */
 export const THRESHOLD = /* wgsl */ `
 ${COMMON}
@@ -223,6 +253,9 @@ struct U {
   blackLevel: f32,
   encodeSrgb: u32,
   showGrid: u32,
+  blend: vec4f,                    // x: other projectors (0 = no blending), y: curve
+  others: array<mat3x3f, 7>,       // content px -> each other projector's output px
+  otherSizes: array<vec4f, 7>,     // their output sizes (xy)
 };
 @group(0) @binding(0) var content: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
@@ -230,6 +263,12 @@ struct U {
 @group(0) @binding(3) var outMask: texture_2d<f32>;
 @group(0) @binding(4) var keepOff: texture_2d<f32>;   // content-space "keep light off here" areas
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
+// How far inside a projector's frame a point is (0 at the edge): side and top/bottom distances multiplied.
+fn edgeDist(p: vec2f, size: vec2f) -> f32 {
+  if (any(p < vec2f(0.0)) || any(p > size)) { return 0.0; }
+  return (min(p.x, size.x - p.x) / size.x) * (min(p.y, size.y - p.y) / size.y);
+}
+fn shaped(e: f32) -> f32 { return select(0.0, pow(e, max(u.blend.y, 0.25)), e > 0.0); }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let op = i.uv * u.outputSize;
   let h = u.hinv * vec3f(op, 1.0);
@@ -238,6 +277,17 @@ struct U {
   if (h.z > 0.0 && all(cp >= vec2f(0.0)) && all(cp <= u.contentSize)) {
     c = textureSampleLevel(content, samp, cp / u.contentSize, 0.0);
     c = c * (1.0 - textureSampleLevel(keepOff, samp, cp / u.contentSize, 0.0).r);
+    // Edge blending: this projector's share where others light the same point (mirrors core blendWeight).
+    let n = u32(u.blend.x);
+    if (n > 0u) {
+      let mine = shaped(edgeDist(op, u.outputSize));
+      var total = mine;
+      for (var k = 0u; k < n; k++) {
+        let q = u.others[k] * vec3f(cp, 1.0);
+        if (q.z > 0.0) { total += shaped(edgeDist(q.xy / q.z, u.otherSizes[k].xy)); }
+      }
+      c = c * select(select(0.0, 1.0, mine > 0.0), mine / total, total > 1e-12);
+    }
   }
   if (u.showGrid == 1u) {
     let g = abs(fract(cp / 80.0 + 0.5) - 0.5) * 80.0;

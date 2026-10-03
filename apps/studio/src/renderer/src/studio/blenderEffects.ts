@@ -123,7 +123,9 @@ const runLink = async (link: BlenderLink, mode: "build" | "render"): Promise<{ o
   const ops: Op[] = [{ type: "asset.add", args: { asset } }];
   let layerId = link.layerId;
   if (existing && existing.source.kind === "footage") {
-    ops.push({ type: "layer.replace", args: { compId: c.id, layer: { ...existing, source: { kind: "footage", assetId: asset.id } } } });
+    // Same layer (its effects, masks and keyframes stay), new video, and the link's start and length.
+    const start = secondsToTime(link.startSeconds);
+    ops.push({ type: "layer.replace", args: { compId: c.id, layer: { ...existing, source: { kind: "footage", assetId: asset.id }, startTime: start, inPoint: start, outPoint: start + secondsToTime(link.seconds) } } });
     // The previous render leaves the media list unless something else still shows it (its file stays, for undo).
     const old = link.result?.assetId;
     const usedElsewhere = Object.values(now.project!.compositions).some((cc) => Object.values(cc.layers).some((l) => l.id !== existing.id && l.source.kind === "footage" && l.source.assetId === old));
@@ -177,10 +179,33 @@ export const updateFromBlender = (linkId: Id) => {
   return link ? runLink(link, "render") : Promise.resolve({ ok: false as const, message: "That Blender link no longer exists." });
 };
 
-/** Make the effect again from Before Effects' side (after changing its length or quality); replaces edits made in Blender. */
-export const rebuildBlenderEffect = (linkId: Id, changes: Partial<Pick<BlenderLink, "seconds" | "quality">> = {}) => {
+/**
+ * Make the effect again from Before Effects' side, with changed settings, length, start or quality
+ * (replaces edits made in Blender). A linked .blend is rendered again at the new length or quality.
+ */
+export const rebuildBlenderEffect = (
+  linkId: Id,
+  changes: Partial<Pick<BlenderLink, "seconds" | "quality" | "startSeconds">> & { params?: Record<string, number | string | boolean>; regionIds?: readonly Id[] } = {},
+) => {
   const link = useStudio.getState().project?.blenderLinks?.[linkId];
-  return link ? runLink({ ...link, ...changes }, link.origin === "effect" ? "build" : "render") : Promise.resolve({ ok: false as const, message: "That Blender link no longer exists." });
+  if (!link) return Promise.resolve({ ok: false as const, message: "That Blender link no longer exists." });
+  const { params, regionIds, ...rest } = changes;
+  const next: BlenderLink = {
+    ...link,
+    ...rest,
+    ...(link.effect && (params || regionIds) ? { effect: { ...link.effect, ...(params ? { params: { ...link.effect.params, ...params } } : {}), ...(regionIds?.length ? { regionIds: [...regionIds] } : {}) } } : {}),
+  };
+  return runLink(next, link.origin === "effect" ? "build" : "render");
+};
+
+/** Rename a Blender link and the layer showing it (no Blender run). */
+export const renameBlenderLink = (linkId: Id, name: string) => {
+  const s = useStudio.getState();
+  const link = s.project?.blenderLinks?.[linkId];
+  if (!link || !name.trim()) return;
+  const ops: Op[] = [{ type: "blender.set", args: { link: { ...link, name } } }];
+  if (link.layerId && s.project?.compositions[link.compId]?.layers[link.layerId]) ops.push({ type: "layer.update", args: { compId: link.compId, layerId: link.layerId, changes: { name } } });
+  s.apply(ops, { label: "Rename", coalesceKey: `${linkId}:name` });
 };
 
 export const openInBlender = async (linkId: Id) => {

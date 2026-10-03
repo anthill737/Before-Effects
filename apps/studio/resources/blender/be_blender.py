@@ -20,7 +20,7 @@ import sys
 import traceback
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 def say(*parts):
@@ -219,7 +219,7 @@ def build(x):
 
     kind = x["kind"]
     params = x.get("params", {})
-    obstacles, emitters, cloth = [], [], None
+    obstacles, emitters, cloth, debris, backdrops = [], [], None, [], []
     for o in x["objects"]:
         ob = make_mesh(o["name"], o["mesh"])
         ob["be_owner"] = o["owner"]
@@ -240,6 +240,10 @@ def build(x):
             emitters.append(ob)
         elif o["role"] == "cloth":
             cloth = ob
+        elif o["role"] == "debris":
+            debris.append((ob, o))
+        elif o["role"] == "backdrop":
+            backdrops.append(ob)
 
     cache = bpy.path.relpath(x["output"]["cache"]) if bpy.data.filepath else x["output"]["cache"]
     if kind in ("smoke", "fire"):
@@ -257,8 +261,8 @@ def build(x):
             ds.flame_smoke = 0.1  # dark smoke doesn't project (it's no light): keep a little
         # Smoke thins out as it rises instead of covering the house.
         ds.use_dissolve_smoke = True
-        ds.dissolve_speed = int(params.get("linger", 25 if kind == "fire" else 80))
-        smoke_rgb = colour(params, "color", (0.22, 0.2, 0.2) if kind == "fire" else (0.75, 0.75, 0.78))
+        ds.dissolve_speed = max(1, round(float(params.get("linger", 0.8 if kind == "fire" else 2.7)) * float(x["fps"])))
+        smoke_rgb = colour(params, "color", (0.22, 0.2, 0.2) if kind == "fire" else (0.75, 0.75, 0.78))  # #383333 / #bfbfc7
         domain.data.materials.append(volume_material("BE Smoke", smoke_rgb, kind == "fire"))
         for e in emitters:
             fs = add_flow(e, "SMOKE" if kind == "smoke" else "BOTH")
@@ -307,7 +311,7 @@ def build(x):
             fs.use_initial_velocity = True
             fs.velocity_coord = (0.0, -float(params.get("push", 1.5)), 0.0)  # out toward the audience
             # A burst: water pours for the first part, then falls and spreads.
-            stop = max(2, round(int(x["frames"]) * float(params.get("pourFor", 0.25))))
+            stop = max(2, min(int(x["frames"]), round(float(params.get("pourFor", 1.0)) * float(x["fps"]))))
             fs.use_inflow = True
             fs.keyframe_insert("use_inflow", frame=stop - 1)
             fs.use_inflow = False
@@ -387,6 +391,8 @@ def build(x):
         bpy.context.view_layer.objects.active = cloth
         with bpy.context.temp_override(object=cloth, active_object=cloth):
             bpy.ops.object.modifier_move_to_index(modifier="Cloth", index=len(cloth.modifiers) - 2)
+    elif kind == "shatter":
+        build_shatter(scene, x, params, obstacles, debris, backdrops)
     else:
         raise ValueError(f"Unknown effect: {kind}")
 
@@ -395,6 +401,102 @@ def build(x):
     bpy.ops.file.make_paths_relative()
     bpy.ops.wm.save_mainfile()
     say("BE_DONE build", x["output"]["blend"])
+
+
+def photo_material(path):
+    """The building photo on the pieces, partly self-lit so it reads like the projected picture."""
+    mat = bpy.data.materials.new("BE Photo")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    bsdf = nt.nodes.get("Principled BSDF")
+    if path and os.path.exists(path):
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.load(path, check_existing=True)
+        uv = nt.nodes.new("ShaderNodeUVMap")
+        uv.uv_map = "Photo"
+        nt.links.new(uv.outputs["UV"], tex.inputs["Vector"])
+        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        nt.links.new(tex.outputs["Color"], bsdf.inputs["Emission Color"])
+    else:
+        bsdf.inputs["Base Color"].default_value = (0.8, 0.8, 0.82, 1)
+        bsdf.inputs["Emission Color"].default_value = (0.8, 0.8, 0.82, 1)
+    bsdf.inputs["Emission Strength"].default_value = 0.6
+    bsdf.inputs["Roughness"].default_value = 0.85
+    return mat
+
+
+def with_object(ob, fn):
+    bpy.context.view_layer.objects.active = ob
+    for o in bpy.context.selected_objects:
+        o.select_set(False)
+    ob.select_set(True)
+    with bpy.context.temp_override(object=ob, active_object=ob, selected_objects=[ob], selected_editable_objects=[ob]):
+        return fn()
+
+
+def build_shatter(scene, x, params, obstacles, debris, backdrops):
+    """Rigid-body pieces (Bullet): held in place, then each lets go at its frame with a push and spin
+    (a short keyframed move hands Bullet the velocity), landing on the house and the ground."""
+    frames = int(x["frames"])
+    fps = float(x["fps"])
+    with_object(obstacles[0] if obstacles else debris[0][0], lambda: bpy.ops.rigidbody.world_add())
+    rbw = scene.rigidbody_world
+    rbw.point_cache.frame_start = 1
+    rbw.point_cache.frame_end = frames
+    rbw.substeps_per_frame = 10
+    rbw.solver_iterations = 20
+    friction = float(params.get("friction", 0.7))
+    bounce = float(params.get("bounce", 0.15))
+    for ob in obstacles:
+        with_object(ob, lambda: bpy.ops.rigidbody.object_add(type="PASSIVE"))
+        ob.rigid_body.collision_shape = "MESH"
+        ob.rigid_body.friction = friction
+        ob.rigid_body.restitution = bounce
+        if ob.animation_data:
+            ob.rigid_body.kinematic = True  # played back from Before Effects
+    mat = photo_material(x.get("photo"))
+    dark = bpy.data.materials.new("BE Hole")
+    dark.use_nodes = True
+    dark.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0, 0, 0, 1)
+    dark.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
+    for ob in backdrops:
+        ob.data.materials.append(dark)
+    for ob, o in debris:
+        # Turn about its own middle.
+        me = ob.data
+        c = sum((v.co for v in me.vertices), Vector()) / max(1, len(me.vertices))
+        me.transform(Matrix.Translation(-c))
+        ob.location = c
+        me.materials.append(mat)
+        with_object(ob, lambda: bpy.ops.rigidbody.object_add(type="ACTIVE"))
+        rb = ob.rigid_body
+        rb.collision_shape = "CONVEX_HULL"
+        dims = ob.dimensions
+        rb.mass = max(0.05, dims.x * dims.y * dims.z * 600)
+        rb.friction = friction
+        rb.restitution = bounce
+        rb.collision_margin = 0.002
+        rel = o.get("release") or {"frame": 1, "velocity": [0, 0, 0], "spin": [0, 0, 0]}
+        f = max(3, int(rel["frame"]))
+        v = Vector(to_blender(rel["velocity"]))
+        w = Vector(to_blender(rel["spin"]))
+        dt = 1.0 / fps
+        # Held (animated) until its frame; the last two keyed frames move it at its push and spin,
+        # so Bullet carries that motion on when it's let go.
+        rb.kinematic = True
+        rb.keyframe_insert("kinematic", frame=f)
+        rb.kinematic = False
+        rb.keyframe_insert("kinematic", frame=f + 1)
+        start = ob.location.copy()
+        ob.rotation_mode = "XYZ"
+        for k, fr in ((0, 1), (0, f - 2), (1, f - 1), (2, f)):
+            ob.location = start + v * (k * dt)
+            ob.rotation_euler = (w.x * k * dt, w.y * k * dt, w.z * k * dt)
+            ob.keyframe_insert("location", frame=fr)
+            ob.keyframe_insert("rotation_euler", frame=fr)
+        for fc in fcurves(ob):
+            for kp in fc.keyframe_points:
+                kp.interpolation = "LINEAR"
 
 
 def place_domain(domain, box):
@@ -440,7 +542,12 @@ def render(x):
         say("BE_PROGRESS bake", 0, frames)
         with_selected([d], d, lambda: bpy.ops.fluid.bake_all())
         bpy.app.handlers.frame_change_post.remove(on_frame)
-    if any(m.type == "CLOTH" for o in scene.objects for m in o.modifiers):
+    if scene.rigidbody_world:
+        say("BE_PROGRESS bake", 0, frames)
+        scene.rigidbody_world.point_cache.frame_end = frames
+        bpy.ops.ptcache.bake_all(bake=True)
+        say("BE_PROGRESS bake", frames, frames)
+    elif any(m.type == "CLOTH" for o in scene.objects for m in o.modifiers):
         say("BE_PROGRESS bake", 0, frames)
         for o in scene.objects:
             for m in o.modifiers:

@@ -25,6 +25,7 @@ import { refRegions, regionHoles } from "./areas.ts";
 import type { Id, Project, RegionRef, RGBA, Vec2, Vec3 } from "./model.ts";
 import { defineOp, OpError } from "./ops.ts";
 import { flattenPath } from "./pathmath.ts";
+import { particleEmitter } from "./particles3d.ts";
 import { rand01 } from "./rng.ts";
 import { simHash, stableJson } from "./simulation.ts";
 import { type Flicks, FLICKS_PER_SECOND } from "./time.ts";
@@ -82,6 +83,8 @@ export interface Fracture3D {
   readonly push: number;
   /** Random tumbling when the pieces let go (turns per second). */
   readonly spin: number;
+  /** Seconds over which the pieces let go, from the top down (0 or absent = all at once). */
+  readonly stagger?: number;
 }
 
 export interface Light3D {
@@ -100,7 +103,7 @@ export interface Light3D {
 export interface Object3D {
   readonly id: Id;
   readonly name: string;
-  readonly kind: "mesh" | "light";
+  readonly kind: "mesh" | "light" | "particles";
   readonly visible: boolean;
   readonly position: AnimProp<Vec3>;
   readonly rotation: AnimProp<Vec3>;
@@ -117,6 +120,8 @@ export interface Object3D {
   readonly light?: Light3D;
   /** A moving part of the house made from a traced area (see parts3d.ts). */
   readonly part?: import("./parts3d.ts").PartInfo;
+  /** Particles (kind "particles"; see particles3d.ts): sparks, embers, snow, confetti. */
+  readonly particles?: import("./particles3d.ts").Particles3D;
 }
 
 export interface Scene3D {
@@ -355,6 +360,8 @@ export interface ResolvedObject {
   readonly pieces: readonly ResolvedPiece[];
   /** Index of the object's first moving body in the prepared motion (−1 = not moving by physics). */
   readonly poseIndex: number;
+  /** Particles: where they're born. */
+  readonly emitter?: import("./particles3d.ts").ParticleEmitter;
 }
 
 export type PhysicsShape =
@@ -530,7 +537,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
       if (fr && ph.body === "dynamic" && pieces.length) {
         poseIndex = movers;
         const total = pieces.reduce((s, p) => s + p.area, 0) || 1;
-        const release = Math.max(0, Math.round(fr.collapseAt * fps));
+        const release0 = Math.max(0, Math.round(fr.collapseAt * fps));
         const rebuildStart = fr.rebuildAt !== null && fr.rebuildAt > fr.collapseAt ? Math.round(fr.rebuildAt * fps) : null;
         const rebuildFrames = Math.max(1, Math.round(fr.rebuildSeconds * fps));
         // Pieces return bottom-up, each a little after the one below.
@@ -543,6 +550,8 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
           const r1 = rand01(fr.seed, i, 11), r2 = rand01(fr.seed, i, 12), r3 = rand01(fr.seed, i, 13);
           const spin = fr.spin * 2 * Math.PI;
           const h = (piece.center[1] - yLo) / ySpan;
+          // Crumbling: the top lets go first, the rest following down the wall.
+          const release = fr.stagger ? release0 + Math.round(fr.stagger * fps * Math.min(1, Math.max(0, (1 - h) * (0.85 + 0.3 * r1)))) : release0;
           bodies.push({
             kind: "fragment",
             shape: shapeFor(o, piece, sc, false)!,
@@ -589,6 +598,10 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
           });
         }
       }
+    }
+    if (o.kind === "particles" && o.particles) {
+      objects.push({ object: o, pieces, poseIndex, emitter: particleEmitter(project, o.particles, opts.venueId, canvas) });
+      continue;
     }
     objects.push({ object: o, pieces, poseIndex });
   }
@@ -658,6 +671,22 @@ export const ballObject = (id: Id, name: string, radius: number, position: Vec3,
   mesh(id, name, { kind: "sphere", radius }, position, { color: staticProp<RGBA>([0.9, 0.5, 0.2, 1]), roughness: 0.4 }, physics ? { physics } : {});
 
 export const DEFAULT_FRACTURE: Fracture3D = { pieceSize: 70, seed: 1, collapseAt: 1, rebuildAt: 5, rebuildSeconds: 2, push: 0.6, spin: 0.25 };
+/** Ways an area breaks apart, all with real physics (Rapier). */
+export const FRACTURE_PRESETS: Record<"collapse" | "explode" | "crumble", { title: string; description: string; fracture: Fracture3D }> = {
+  collapse: { title: "Collapse & rebuild (3D)", description: "The area becomes a solid slab that breaks into pieces, falls onto a ledge with real physics, then flies back.", fracture: DEFAULT_FRACTURE },
+  explode: {
+    title: "Explode (3D)",
+    description: "The area bursts into small pieces that fly out toward the audience, tumbling, and fall — real physics.",
+    fracture: { pieceSize: 45, seed: 1, collapseAt: 1, rebuildAt: null, rebuildSeconds: 2, push: 5, spin: 1.5 },
+  },
+  crumble: {
+    title: "Crumble (3D)",
+    description: "The area crumbles from the top down into small pieces that drop and pile up at its foot — real physics.",
+    // A nudge off the wall, so each piece peels away in front of those still holding.
+    fracture: { pieceSize: 35, seed: 1, collapseAt: 1, rebuildAt: null, rebuildSeconds: 2, push: 0.8, spin: 0.4, stagger: 1.8 },
+  },
+};
+
 export const DEFAULT_PHYSICS: Physics3D = { body: "dynamic", mass: 2000, friction: 0.7, bounce: 0.15 };
 
 /** Bounds of areas on the canvas (pixels). */
@@ -675,7 +704,7 @@ const areaBounds = (project: Project, ref: RegionRef, venueId?: Id) => {
  */
 export const areaScene = (
   project: Project,
-  o: { sceneId: Id; idPrefix: string; name: string; ref: RegionRef; venueId?: Id; canvas: Canvas; depth?: number; collapse?: boolean },
+  o: { sceneId: Id; idPrefix: string; name: string; ref: RegionRef; venueId?: Id; canvas: Canvas; depth?: number; collapse?: boolean; fracture?: Fracture3D },
 ): Scene3D => {
   const p = o.idPrefix;
   const b = areaBounds(project, o.ref, o.venueId) ?? { x0: o.canvas.width * 0.25, x1: o.canvas.width * 0.75, y0: o.canvas.height * 0.25, y1: o.canvas.height * 0.75 };
@@ -688,7 +717,7 @@ export const areaScene = (
   const objects: Object3D[] = [
     mesh(`${p}-area`, "Wall (3D)", { kind: "area", ref: o.ref, depth }, [0, 0, 0], { style: "photo", color: staticProp(grey(1)) }, {
       physics: o.collapse ? DEFAULT_PHYSICS : { ...DEFAULT_PHYSICS, body: "static" },
-      ...(o.collapse ? { fracture: DEFAULT_FRACTURE } : {}),
+      ...(o.collapse ? { fracture: o.fracture ?? DEFAULT_FRACTURE } : {}),
     }),
     mesh(`${p}-inside`, "Inside (behind the wall)", { kind: "box", size: [width + 0.2, top - ly + 0.2, 0.2] }, [cx, (top + ly) / 2, -depth - 0.6], { color: staticProp(grey(0.08)), roughness: 1 }, { castShadow: false }),
     // A ledge along the bottom: a solid plinth when the area starts near the ground, else a 30 cm slab.
@@ -717,7 +746,7 @@ const sceneShape = z.custom<Scene3D>(
 );
 const objectShape = z.custom<Object3D>((v) => {
   const o = v as Object3D;
-  return !!o && typeof o.id === "string" && (o.kind === "mesh" || o.kind === "light") && !!o.position && !!o.rotation && !!o.scale;
+  return !!o && typeof o.id === "string" && (o.kind === "mesh" || o.kind === "light" || (o.kind === "particles" && !!o.particles)) && !!o.position && !!o.rotation && !!o.scale;
 }, { message: "Not a valid 3D object." });
 
 const sceneOf = (d: { readonly scenes3d?: Readonly<Record<Id, Scene3D>> }, id: Id): Scene3D => {
@@ -754,7 +783,7 @@ export const scene3dUpdate = defineOp({
 export const object3dAdd = defineOp({
   type: "object3d.add",
   title: "Add 3D object",
-  description: "Add an object (solid or light) to a 3D scene.",
+  description: "Add an object (solid, light or particles) to a 3D scene.",
   args: z.object({ sceneId: z.string(), object: objectShape }),
   apply: (d, a) => {
     const s = sceneOf(d as never, a.sceneId) as unknown as { objects: Record<Id, Object3D>; objectOrder: Id[] };

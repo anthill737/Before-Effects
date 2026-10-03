@@ -100,6 +100,13 @@ export const crackRebuild: RecipeDef = {
     { key: "crackSeconds", label: "Cracks spread for", control: "seconds", default: 1.6, min: 0.2, max: 10, step: 0.1, unit: "s", drives: ["source.contents"] },
     { key: "hold", label: "Wait before breaking", control: "seconds", default: 0.8, min: 0, max: 10, step: 0.1, unit: "s", drives: ["transform"] },
     { key: "glow", label: "Glow", control: "slider", default: 60, min: 0, max: 100, unit: "%", drives: ["effects"] },
+    { key: "glowSize", label: "Glow size", control: "slider", default: 14, min: 1, max: 80, unit: "px", drives: ["effects"] },
+    { key: "crackWidth", label: "Crack width", control: "slider", default: 2.5, min: 0.5, max: 20, step: 0.5, unit: "px", drives: ["source.contents"] },
+    { key: "fallSeconds", label: "Pieces fall for", control: "seconds", default: 1.3, min: 0.2, max: 10, step: 0.1, unit: "s", drives: ["transform"] },
+    { key: "gone", label: "Stay gone for", control: "seconds", default: 0.9, min: 0, max: 30, step: 0.1, unit: "s", help: "With rebuild: the wait before they fly back.", drives: ["transform"] },
+    { key: "backSeconds", label: "Fly back over", control: "seconds", default: 1, min: 0.2, max: 10, step: 0.1, unit: "s", drives: ["transform"] },
+    { key: "throw", label: "Throw distance", control: "slider", default: 100, min: 10, max: 300, unit: "%", drives: ["transform"] },
+    { key: "spin", label: "Spin", control: "slider", default: 100, min: 0, max: 400, unit: "%", drives: ["transform"] },
     { key: "seed", label: "Variation", control: "seed", default: 4, drives: ["source", "transform"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 8, min: 1, max: 600, step: 0.5, unit: "s", drives: ["outPoint"] },
   ],
@@ -116,9 +123,12 @@ export const crackRebuild: RecipeDef = {
     const at = (s: number) => t0 + secondsToTime(s);
     const end = Math.min(ctx.comp.duration, t0 + secondsToTime(num(p.seconds, 8)));
     const breakAt = crackT + hold;
-    const fallFor = 1.3;
-    const backAt = breakAt + fallFor + 0.9;
-    const doneAt = backAt + 1.2;
+    const fallFor = Math.max(0.2, num(p.fallSeconds, 1.3));
+    const backFor = Math.max(0.2, num(p.backSeconds, 1));
+    const backAt = breakAt + fallFor + Math.max(0, num(p.gone, 0.9));
+    const doneAt = backAt + backFor + 0.2;
+    const throwK = Math.max(0.1, num(p.throw, 100) / 100);
+    const spinK = Math.max(0, num(p.spin, 100) / 100);
 
     // The venue photo, when there is one, so the pieces carry the real surface.
     const venue = ctx.project.activeVenueId ? ctx.project.venues[ctx.project.activeVenueId] : undefined;
@@ -165,7 +175,7 @@ export const crackRebuild: RecipeDef = {
           path: { kind: "path", path: staticProp(packPath({ closed: true, vertices: cell.map((q) => ({ p: q })) })) },
           stroke: {
             color: staticProp(light),
-            width: staticProp(2.5),
+            width: staticProp(Math.max(0.5, num(p.crackWidth, 2.5))),
             opacity: { value: 100, keyframes: [k1(`${id}_co0`, at(breakAt), 100), k1(`${id}_co1`, at(breakAt + 0.3), 0), ...(rebuild ? [k1(`${id}_co2`, at(backAt + 0.9), 0), k1(`${id}_co3`, at(doneAt), 100, "bezier"), k1(`${id}_co4`, at(doneAt + 0.8), 0)] : [])] },
             cap: "round",
             join: "round",
@@ -174,15 +184,16 @@ export const crackRebuild: RecipeDef = {
         });
         // Where the piece goes: down and spinning (fall) or out from the impact (burst).
         const r = (k: number) => rand01(regionSeed, 1000 + ci * 8 + k);
-        const away: Vec2 = burst
+        const thrown: Vec2 = burst
           ? [(c[0] - impact[0]) * (1.5 + r(0) * 2) + (r(1) - 0.5) * 80, (c[1] - impact[1]) * (1.5 + r(2) * 2) + 200 + r(3) * 250]
           : [(r(0) - 0.5) * 120, ctx.comp.height * (0.7 + r(1) * 0.5)];
-        const spin = (r(4) - 0.5) * (burst ? 540 : 220);
+        const away: Vec2 = [thrown[0] * throwK, thrown[1] * throwK];
+        const spin = (r(4) - 0.5) * (burst ? 540 : 220) * spinK;
         const start = at(breakAt + d * 0.35);
         const home: Vec3 = [c[0], c[1], 0];
         const gone: Vec3 = [c[0] + away[0], c[1] + away[1], 0];
-        const pos = { value: home, spatial: true, keyframes: [k3(`${id}_p0`, start, home, "in"), k3(`${id}_p1`, at(breakAt + d * 0.35 + fallFor), gone, rebuild ? "hold" : "in"), ...(rebuild ? [k3(`${id}_p2`, at(backAt + d * 0.3), gone, "out"), k3(`${id}_p3`, at(backAt + d * 0.3 + 1.0), home, "out")] : [])] };
-        const rot = { value: [0, 0, 0] as Vec3, keyframes: [k3(`${id}_r0`, start, [0, 0, 0], "in"), k3(`${id}_r1`, at(breakAt + d * 0.35 + fallFor), [0, 0, spin], rebuild ? "hold" : "in"), ...(rebuild ? [k3(`${id}_r2`, at(backAt + d * 0.3), [0, 0, spin], "out"), k3(`${id}_r3`, at(backAt + d * 0.3 + 1.0), [0, 0, 0], "out")] : [])] };
+        const pos = { value: home, spatial: true, keyframes: [k3(`${id}_p0`, start, home, "in"), k3(`${id}_p1`, at(breakAt + d * 0.35 + fallFor), gone, rebuild ? "hold" : "in"), ...(rebuild ? [k3(`${id}_p2`, at(backAt + d * 0.3), gone, "out"), k3(`${id}_p3`, at(backAt + d * 0.3 + backFor), home, "out")] : [])] };
+        const rot = { value: [0, 0, 0] as Vec3, keyframes: [k3(`${id}_r0`, start, [0, 0, 0], "in"), k3(`${id}_r1`, at(breakAt + d * 0.35 + fallFor), [0, 0, spin], rebuild ? "hold" : "in"), ...(rebuild ? [k3(`${id}_r2`, at(backAt + d * 0.3), [0, 0, spin], "out"), k3(`${id}_r3`, at(backAt + d * 0.3 + backFor), [0, 0, 0], "out")] : [])] };
         const piecePath = packPath({ closed: true, vertices: cell.map((q) => ({ p: [q[0] - c[0], q[1] - c[1]] as Vec2 })) });
         if (photo) {
           // The photo, masked to the piece; anchored at the piece's centre so it turns about it.
@@ -213,7 +224,7 @@ export const crackRebuild: RecipeDef = {
           ...base("Cracks"),
           source: { kind: "shape", contents: cracks },
           blendMode: "add",
-          effects: [{ id: `${ctx.instanceId}_glow`, type: "glow", enabled: glow > 0, params: { radius: staticProp(14), intensity: staticProp(glow / 50), threshold: staticProp(0) } }],
+          effects: [{ id: `${ctx.instanceId}_glow`, type: "glow", enabled: glow > 0, params: { radius: staticProp(Math.max(1, num(p.glowSize, 14))), intensity: staticProp(glow / 50), threshold: staticProp(0) } }],
         },
       },
       ...pieces,

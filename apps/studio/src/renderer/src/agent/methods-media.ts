@@ -28,7 +28,7 @@ import { z } from "zod";
 import { currentPreviewLoop } from "../preview/PreviewPanel.tsx";
 import { usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
-import { addObject, layerTime, makeArea3D, removeObject, setContain } from "../studio/actions3d.ts";
+import { addObject, addParticles, layerTime, makeArea3D, removeObject, setContain } from "../studio/actions3d.ts";
 import { hasAudio } from "../studio/audioEngine.ts";
 import { getRenderer } from "../studio/engineHost.ts";
 import { OUTCOMES, SIZES } from "../studio/ExportDialog.tsx";
@@ -120,13 +120,14 @@ method({
 
 method({
   name: "scene3d.createFromAreas",
-  summary: "Give areas thickness as a 3D solid (photo on its front, inside, ledge, ground, key light, fill), optionally breaking apart (collapse & rebuild with physics). Adds a 3D layer at the playhead.",
-  params: z.object({ areas: z.array(z.string()).min(1), collapse: z.boolean().optional(), thicknessCm: z.number().min(1).max(500).optional() }),
+  summary:
+    "Give areas thickness as a 3D solid (photo on its front, inside, ledge, ground, key light, fill), optionally breaking apart with real physics (Rapier): collapse (falls and flies back), explode (bursts toward the audience) or crumble (top first, piles up). Adds a 3D layer at the playhead.",
+  params: z.object({ areas: z.array(z.string()).min(1), collapse: z.boolean().optional(), preset: z.enum(["collapse", "explode", "crumble"]).optional(), thicknessCm: z.number().min(1).max(500).optional() }),
   mutates: true,
-  example: { areas: ["Wall 1"], collapse: true, thicknessCm: 30 },
+  example: { areas: ["Wall 1"], collapse: true, preset: "explode", thicknessCm: 30 },
   run: (p, ctx) => {
     const ids = areaIds(p.areas);
-    const layerId = ctx.edit(() => makeArea3D(ids, !!p.collapse));
+    const layerId = ctx.edit(() => makeArea3D(ids, !!p.collapse || !!p.preset, p.preset ?? "collapse"));
     if (!layerId) throw new AgentError("rejected", "Those areas couldn't be made 3D.");
     const l = currentComp(st())!.layers[layerId]!;
     const sid = l.source.kind === "scene3d" ? l.source.sceneId : "";
@@ -136,6 +137,23 @@ method({
       ctx.edit(() => st().apply({ type: "object3d.update", args: { sceneId: sid, objectId: area.id, changes: { geometry: { ...area.geometry!, depth: p.thicknessCm! / 100 } } } }, { label: "Change thickness" }));
     }
     return { scene: sid, layer: layerId, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "particles.add",
+  summary:
+    "Particles in 3D in front of the house, as a layer on top at the playhead: sparks (spray out and arc down), embers (drift up, flickering), snow (falls over the areas, or the whole picture without areas), confetti (a burst that flutters down). Procedural: placed by rule, not simulated; they don't hit the house. Adjust with scene3d.objectUpdate (particles: rate, life, speed, size, colors, wind, start, stop, seed).",
+  params: z.object({ kind: z.enum(["sparks", "embers", "snow", "confetti"]), areas: z.array(z.string()).optional() }),
+  mutates: true,
+  example: { kind: "sparks", areas: ["Garage door"] },
+  run: (p, ctx) => {
+    const ids = p.areas?.length ? areaIds(p.areas) : [];
+    if (!ids.length && p.kind !== "snow") throw new AgentError("invalid_params", `${p.kind} start from areas: give at least one.`);
+    const layerId = ctx.edit(() => addParticles(p.kind, ids));
+    if (!layerId) throw new AgentError("rejected", "The particles couldn't be added.");
+    const l = currentComp(st())!.layers[layerId]!;
+    return { scene: l.source.kind === "scene3d" ? l.source.sceneId : "", layer: layerId, revision: currentRevision() };
   },
 });
 

@@ -29,6 +29,7 @@ import { AssignmentControls, TimingFields } from "./AssignmentPanel.tsx";
 import { makeArea3D, use3D } from "./actions3d.ts";
 import { animatePart, moveChoices, partFor, partsLayer } from "./parts.ts";
 import { BlenderEffectButtons } from "./BlenderPanel.tsx";
+import { AreaPicker } from "./AreaPicker.tsx";
 import { Scene3DPanel } from "./Scene3DPanel.tsx";
 
 /** Make the selected areas 3D: a solid with thickness, or one that collapses and rebuilds. */
@@ -118,6 +119,15 @@ const RecipePanel = ({ inst }: { inst: RecipeInstance }) => {
         <h2>{inst.label}</h2>
       </div>
       <p className="muted small">On {describeTargets(project, inst)} · starts at {timeToSeconds(inst.startTime).toFixed(1)} s</p>
+      <Field label="Name">
+        <input className="text-input" value={inst.label} aria-label="Effect name" onChange={(e) => e.target.value.trim() && useStudio.getState().apply({ type: "recipe.update", args: { instanceId: inst.id, label: e.target.value } }, { label: "Rename effect", coalesceKey: `${inst.id}:label` })} />
+      </Field>
+      <Field label="On these areas" help="Click an area to add it or leave it out.">
+        <AreaPicker
+          value={resolveTargets(project, inst.targets).map((t) => t.region.id)}
+          onChange={(ids) => useStudio.getState().apply({ type: "recipe.update", args: { instanceId: inst.id, targets: [{ role: "areas", regionIds: [...new Set(ids)] }] } }, { label: `Change the areas of ${def.title}` })}
+        />
+      </Field>
       <SimStatusLine layerIds={Object.values(inst.generated)} />
       <TimingFields inst={inst} def={def} />
       {def.id === "area-content" ? (

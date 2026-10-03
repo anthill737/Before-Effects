@@ -3,9 +3,11 @@
  * simulated by Blender), and, on a layer Blender made, opening the .blend, updating after edits,
  * and re-rendering at another length or quality. Progress shows while Blender works; Cancel stops it.
  */
-import { BLENDER_EFFECTS, type BlenderEffectKind, type BlenderLink } from "@be/core";
+import { BLENDER_EFFECTS, BLENDER_PARAMS, type BlenderEffectKind, type BlenderLink } from "@be/core";
 import { useEffect, useState } from "react";
-import { blendChanged, blenderEffect, cancelBlender, linkBlendFile, openInBlender, rebuildBlenderEffect, STAGES, updateFromBlender, useBlenderJobs } from "./blenderEffects.ts";
+import { ColorField, Field, Slider } from "./controls.tsx";
+import { AreaPicker } from "./AreaPicker.tsx";
+import { blendChanged, blenderEffect, cancelBlender, linkBlendFile, openInBlender, rebuildBlenderEffect, renameBlenderLink, STAGES, updateFromBlender, useBlenderJobs } from "./blenderEffects.ts";
 import { useStudio } from "./store.ts";
 
 const useBlenderStatus = () => {
@@ -83,6 +85,79 @@ export const BlenderEffectButtons = ({ regionIds }: { regionIds: readonly string
   );
 };
 
+const hex = (c: readonly number[]) => `#${c.slice(0, 3).map((x) => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, "0")).join("")}`;
+const rgb = (h: string) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255, 1];
+
+/**
+ * Every setting of a Blender job: the effect's own (colour, thickness, swirl…), when it starts, how
+ * long it lasts and the quality. Blender simulates again to apply them (a minute or two), so they're
+ * gathered here and applied together with "Simulate again".
+ */
+const BlenderSettings = ({ link, busy }: { link: BlenderLink; busy: boolean }) => {
+  const specs = link.effect ? BLENDER_PARAMS[link.effect.kind] : [];
+  const saved = () => ({
+    params: Object.fromEntries(specs.map((sp) => [sp.key, link.effect?.params[sp.key] ?? sp.default])) as Record<string, number | string>,
+    regionIds: [...(link.effect?.regionIds ?? [])],
+    startSeconds: link.startSeconds,
+    seconds: link.seconds,
+    quality: link.quality,
+  });
+  const [draft, setDraft] = useState(saved);
+  // A different link (or one changed elsewhere, e.g. undo) resets the draft.
+  useEffect(() => setDraft(saved()), [link]); // eslint-disable-line react-hooks/exhaustive-deps
+  const changed = JSON.stringify(draft) !== JSON.stringify(saved());
+  const setParam = (k: string, v: number | string) => setDraft((d) => ({ ...d, params: { ...d.params, [k]: v } }));
+  const apply = () => void rebuildBlenderEffect(link.id, { params: draft.params, regionIds: draft.regionIds, startSeconds: draft.startSeconds, seconds: draft.seconds, quality: draft.quality }).then(report);
+  return (
+    <div className="blender-settings" role="group" aria-label="Blender settings">
+      <h3 className="subhead">Settings</h3>
+      <Field label="Name" help="Applies at once.">
+        <input className="text-input" value={link.name} aria-label="Blender effect name" onChange={(e) => renameBlenderLink(link.id, e.target.value)} />
+      </Field>
+      {link.effect && (
+        <Field label={link.effect.kind === "cloth" ? "Covers" : "Comes from"}>
+          <AreaPicker value={draft.regionIds} onChange={(ids) => setDraft((d) => ({ ...d, regionIds: ids }))} />
+        </Field>
+      )}
+      {specs.map((sp) => (
+        <Field key={sp.key} label={sp.label} help={sp.help}>
+          {sp.kind === "color" ? (
+            <ColorField label={sp.label} value={rgb(String(draft.params[sp.key]))} onChange={(v) => setParam(sp.key, hex(v))} />
+          ) : (
+            <Slider label={sp.label} value={Number(draft.params[sp.key])} min={sp.min ?? 0} max={sp.max ?? 10} step={sp.step} unit={sp.unit} onChange={(v) => setParam(sp.key, v)} />
+          )}
+        </Field>
+      ))}
+      <Field label="Starts at">
+        <Slider label="Starts at" value={draft.startSeconds} min={0} max={600} step={0.1} unit="s" onChange={(v) => setDraft((d) => ({ ...d, startSeconds: v }))} />
+      </Field>
+      <Field label="Lasts" help={link.origin === "linked" ? "Frames rendered from the file's own first frame." : undefined}>
+        <Slider label="Lasts" value={draft.seconds} min={0.5} max={link.origin === "linked" ? 60 : 30} step={0.1} unit="s" onChange={(v) => setDraft((d) => ({ ...d, seconds: v }))} />
+      </Field>
+      <Field label="Quality" help="Draft: half size and a coarser simulation, quicker. Full: canvas size, finer detail, slower.">
+        <div className="segmented" role="radiogroup" aria-label="Quality">
+          {(["draft", "full"] as const).map((q) => (
+            <button key={q} role="radio" aria-checked={draft.quality === q} className={draft.quality === q ? "on" : ""} onClick={() => setDraft((d) => ({ ...d, quality: q }))}>
+              {q === "draft" ? "Draft" : "Full"}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <div className="row gap wrap">
+        <button className={changed ? "primary" : "ghost"} disabled={busy || !changed} onClick={apply} title={link.origin === "effect" ? "Blender builds and simulates the effect again with these settings (replaces edits made in Blender)" : "Blender renders the file again"}>
+          {link.origin === "effect" ? "Simulate again" : "Render again"}
+        </button>
+        {changed && (
+          <button className="ghost" disabled={busy} onClick={() => setDraft(saved())}>
+            Undo changes
+          </button>
+        )}
+      </div>
+      {changed && <p className="muted small">Not applied yet: Blender {link.origin === "effect" ? "simulates" : "renders"} again with these (a minute or two).</p>}
+    </div>
+  );
+};
+
 /** On a layer Blender made: open, update after editing, re-render. */
 export const BlenderLinkSection = ({ link }: { link: BlenderLink }) => {
   const [changed, setChanged] = useState(false);
@@ -121,6 +196,7 @@ export const BlenderLinkSection = ({ link }: { link: BlenderLink }) => {
         )}
       </div>
       <JobProgress linkId={link.id} />
+      <BlenderSettings link={link} busy={busy} />
     </section>
   );
 };

@@ -8,7 +8,8 @@ import { type Asset, getRecipe, newId } from "@be/core";
 import { useState } from "react";
 import { applyEffect, applyRecipeToSelection } from "./actions.ts";
 import { contentForArea, dropOnArea, isContentDrag, readDragPayload, setDragPayload } from "./assign.ts";
-import { COLLAPSE_EFFECT, makeArea3D } from "./actions3d.ts";
+import { addParticles, BREAK_EFFECTS, effect3dFor, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
+import { MELT_EFFECT, meltAreas } from "./melt.ts";
 import { addAssetLayer, importMediaFiles } from "./media.ts";
 import { findMissingInFolder, findOne } from "./relink.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
@@ -19,6 +20,13 @@ const KIND_ICON: Record<string, string> = { image: "🖼", video: "🎞", audio:
 /** Which effects simulate something, and how: real physics, or a look made procedurally. */
 const SIM_KIND: Record<string, string> = {
   "collapse-3d": "physical: rigid pieces simulated with Rapier",
+  "explode-3d": "physical: rigid pieces simulated with Rapier",
+  "crumble-3d": "physical: rigid pieces simulated with Rapier",
+  "melt-area": "procedural: the picture is warped downward by rule, not simulated",
+  "particles-sparks": "procedural: particles placed by rule (drag, gravity, wind), not simulated — they don't hit the house",
+  "particles-embers": "procedural: particles placed by rule (rise, sway, flicker), not simulated",
+  "particles-snow": "procedural: flakes placed by rule (fall, sway, wind), not simulated — they don't settle",
+  "particles-confetti": "procedural: particles placed by rule (air drag, gravity, flutter), not simulated",
   "smoke-rising": "procedural: a smoke look, not a fluid simulation — for real smoke use Smoke (Blender) on an area",
   "water-fill": "procedural: a water look, not a fluid simulation — for real water use Water pouring (Blender)",
   "crack-rebuild": "procedural: drawn cracks — for real breaking use Collapse & rebuild (3D)",
@@ -202,20 +210,22 @@ export const ContentPanel = () => {
 
       <h3 className="subhead">Animations</h3>
       <div className="anim-cards">
-        {[...ANIMATIONS.map((id) => getRecipe(id)).filter((r): r is NonNullable<typeof r> => !!r), COLLAPSE_EFFECT]
+        {[...ANIMATIONS.map((id) => getRecipe(id)).filter((r): r is NonNullable<typeof r> => !!r), ...BREAK_EFFECTS, ...PARTICLE_EFFECTS, MELT_EFFECT]
           .map((r) => (
             <div
               key={r.id}
               className="chip anim-card"
               draggable
               onDragStart={(e) => setDragPayload(e, { kind: "effect", id: r.id })}
-              onClick={() =>
-                sel.regionIds.length
-                  ? r.id === COLLAPSE_EFFECT.id
-                    ? makeArea3D(sel.regionIds, true)
-                    : void applyEffect(r.id)
-                  : useStudio.getState().toast({ kind: "info", text: `Drag “${r.title}” onto an area, or select areas and click it.` })
-              }
+              onClick={() => {
+                const e3 = effect3dFor(r.id);
+                // Snow can fall over the whole picture; everything else starts from areas.
+                if (e3 && "particles" in e3 && e3.particles === "snow") return void addParticles("snow", sel.regionIds);
+                if (!sel.regionIds.length) return useStudio.getState().toast({ kind: "info", text: `Drag “${r.title}” onto an area, or select areas and click it.` });
+                if (r.id === MELT_EFFECT.id) return void meltAreas(sel.regionIds);
+                if (!e3) return void applyEffect(r.id);
+                return "break" in e3 ? void makeArea3D(sel.regionIds, true, e3.break) : void addParticles(e3.particles, sel.regionIds);
+              }}
               title={`${r.description}${SIM_KIND[r.id] ? ` (${SIM_KIND[r.id]})` : ""}`}
               role="button"
               tabIndex={0}

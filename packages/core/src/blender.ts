@@ -28,15 +28,21 @@ import { defineOp, OpError } from "./ops.ts";
 import { flattenPath } from "./pathmath.ts";
 import { evalProp } from "./anim.ts";
 import { secondsToTime } from "./time.ts";
-import { type Canvas, canvasToWorld, eulerDegToQuat, METERS_PER_PIXEL, placePoint, type ResolvedPiece, type ResolvedScene3D, showCamera } from "./world3d.ts";
+import { rand01 } from "./rng.ts";
+import { type Canvas, canvasToWorld, eulerDegToQuat, fracture, METERS_PER_PIXEL, placePoint, type ResolvedPiece, type ResolvedScene3D, showCamera } from "./world3d.ts";
 
-export type BlenderEffectKind = "smoke" | "fire" | "liquid" | "cloth";
+export type BlenderEffectKind = "smoke" | "fire" | "liquid" | "cloth" | "shatter";
 
 export const BLENDER_EFFECTS: Record<BlenderEffectKind, { title: string; description: string }> = {
   smoke: { title: "Smoke (Blender)", description: "Billowing smoke rising from the area, simulated by Blender around the house." },
   fire: { title: "Fire (Blender)", description: "Flames and smoke from the area, simulated by Blender." },
   liquid: { title: "Water pouring (Blender)", description: "Water gushing out of the area and splashing down the front of the house, simulated by Blender." },
   cloth: { title: "Cloth reveal (Blender)", description: "A sheet hangs over the area, then lets go and falls away to reveal it — real cloth, simulated by Blender, crumpling at the foot of the house." },
+  shatter: {
+    title: "Break apart (Blender)",
+    description:
+      "The area breaks into pieces that fall with Blender's rigid-body physics, carrying the photo, and land on the house and the ground; rendered as a video. The built-in Collapse, Explode and Crumble (3D) stay available and adjust live.",
+  },
 };
 
 export interface BlenderLink {
@@ -63,6 +69,55 @@ export interface BlenderLink {
   /** The layer showing the result. */
   readonly layerId?: Id;
 }
+
+/** A setting of a Blender effect, shown in the inspector; changing it means simulating again. */
+export interface BlenderParamSpec {
+  readonly key: string;
+  readonly label: string;
+  readonly kind: "color" | "number";
+  readonly default: number | string;
+  readonly min?: number;
+  readonly max?: number;
+  readonly step?: number;
+  readonly unit?: string;
+  readonly help?: string;
+}
+
+/** Every setting each effect has (be_blender.py reads the same keys and defaults). */
+export const BLENDER_PARAMS: Record<BlenderEffectKind, readonly BlenderParamSpec[]> = {
+  smoke: [
+    { key: "color", label: "Colour", kind: "color", default: "#bfbfc7" },
+    { key: "density", label: "Thickness", kind: "number", default: 4, min: 0.5, max: 10, step: 0.1, help: "How much smoke the area gives off." },
+    { key: "swirl", label: "Swirl", kind: "number", default: 0.5, min: 0, max: 2, step: 0.05, help: "Curling detail as it rises." },
+    { key: "linger", label: "Lingers for", kind: "number", default: 2.7, min: 0.3, max: 10, step: 0.1, unit: "s", help: "How long the smoke lasts before thinning out." },
+  ],
+  fire: [
+    { key: "fuel", label: "Fuel", kind: "number", default: 1.2, min: 0.2, max: 3, step: 0.05, help: "More fuel: bigger, taller flames." },
+    { key: "density", label: "Smoke from the source", kind: "number", default: 4, min: 0, max: 10, step: 0.1 },
+    { key: "swirl", label: "Swirl", kind: "number", default: 0.5, min: 0, max: 2, step: 0.05 },
+    { key: "linger", label: "Smoke lingers for", kind: "number", default: 0.8, min: 0.2, max: 10, step: 0.1, unit: "s" },
+    { key: "color", label: "Smoke colour", kind: "color", default: "#383333" },
+  ],
+  liquid: [
+    { key: "color", label: "Water colour", kind: "color", default: "#296bd9" },
+    { key: "push", label: "Bursts out at", kind: "number", default: 1.5, min: 0, max: 5, step: 0.1, unit: "m/s", help: "How hard the water comes out toward the audience." },
+    { key: "pourFor", label: "Pours for", kind: "number", default: 1, min: 0.1, max: 30, step: 0.1, unit: "s", help: "Then it stops, falls and runs off." },
+  ],
+  shatter: [
+    { key: "pieceSize", label: "Piece size", kind: "number", default: 60, min: 15, max: 300, step: 1, unit: "cm", help: "Smaller pieces: more of them (up to 400)." },
+    { key: "breakAt", label: "Breaks at", kind: "number", default: 1, min: 0, max: 30, step: 0.1, unit: "s", help: "From the start of the effect." },
+    { key: "stagger", label: "Lets go over", kind: "number", default: 0, min: 0, max: 5, step: 0.1, unit: "s", help: "0: all at once. Longer: the top gives way first and the rest follows (crumbling)." },
+    { key: "push", label: "Push toward the audience", kind: "number", default: 1.5, min: 0, max: 8, step: 0.1, unit: "m/s" },
+    { key: "spin", label: "Tumble", kind: "number", default: 0.5, min: 0, max: 3, step: 0.05, unit: "turns/s" },
+    { key: "bounce", label: "Bounce", kind: "number", default: 0.15, min: 0, max: 1, step: 0.05 },
+    { key: "friction", label: "Friction", kind: "number", default: 0.7, min: 0, max: 2, step: 0.05 },
+    { key: "seed", label: "Variation", kind: "number", default: 1, min: 1, max: 99, step: 1 },
+  ],
+  cloth: [
+    { key: "color", label: "Sheet colour", kind: "color", default: "#ebebe6" },
+    { key: "revealAt", label: "Lets go at", kind: "number", default: 1.2, min: 0.3, max: 30, step: 0.1, unit: "s", help: "When the sheet drops, from the start of the effect." },
+  ],
+};
 
 // ---- operations ---------------------------------------------------------------------------------------
 
@@ -112,7 +167,7 @@ export interface ExchangeObject {
   readonly name: string;
   readonly owner: "before-effects" | "blender";
   /** obstacle: hides what's behind it and blocks the simulation · emitter / cloth: the simulated thing. */
-  readonly role: "obstacle" | "emitter" | "cloth" | "ground";
+  readonly role: "obstacle" | "emitter" | "cloth" | "ground" | "debris" | "backdrop";
   readonly mesh: ExchangeMesh;
   /** Photo on the front (for cloth that shows the photo; obstacles are holdouts). */
   readonly photo?: boolean;
@@ -124,6 +179,8 @@ export interface ExchangeObject {
    * throughout). The rest of the sheet is simulated and follows.
    */
   readonly pin?: { readonly verts: readonly number[]; readonly keys: ReadonlyArray<readonly [number, number, number, number]>; readonly release?: readonly number[] };
+  /** Debris only: the frame it lets go, its push (m/s) and spin (radians/s, about x, y, z) then. */
+  readonly release?: { readonly frame: number; readonly velocity: Vec3; readonly spin: Vec3 };
 }
 
 export interface BlenderExchange {
@@ -337,6 +394,52 @@ export const clothSheet = (b: { x0: number; x1: number; y0: number; y1: number }
 };
 
 /**
+ * "Break apart": the areas cut into Voronoi pieces (the same fracture as the built-in collapse),
+ * each a photo-faced slab owned by Blender with the frame it lets go, its push toward the audience
+ * and its spin; plus a dark backdrop where they were (what the hole shows).
+ */
+export const shatterPieces = (
+  areas: ReadonlyArray<{ name: string; outline: readonly Vec2[]; holes: ReadonlyArray<readonly Vec2[]> }>,
+  canvas: Canvas,
+  fps: number,
+  frames: number,
+  params: Readonly<Record<string, number | string | boolean>>,
+): ExchangeObject[] => {
+  const num = (k: string, d: number) => (typeof params[k] === "number" && Number.isFinite(params[k]) ? (params[k] as number) : d);
+  const size = Math.max(15, num("pieceSize", 60));
+  const seed = Math.round(num("seed", 1));
+  const push = num("push", 1.5), spin = num("spin", 0.5) * 2 * Math.PI, stagger = Math.max(0, num("stagger", 0));
+  const breakFrame = Math.min(frames - 1, Math.max(1, Math.round(num("breakAt", 1) * fps) + 1));
+  const depth = 0.12;
+  const out: ExchangeObject[] = [];
+  for (const a of areas) {
+    const cells = fracture(a.outline, a.holes, size, seed).slice(0, 400);
+    const ys = cells.map((c) => c.reduce((s, q) => s + q[1], 0) / c.length);
+    const top = Math.min(...ys), span = Math.max(1e-6, Math.max(...ys) - top);
+    cells.forEach((cell, i) => {
+      const r = (k: number) => rand01(seed, i, k);
+      // Height 1 at the top (canvas y runs down).
+      const h = 1 - (ys[i]! - top) / span;
+      const frame = Math.min(frames, breakFrame + Math.round(stagger * fps * Math.min(1, (1 - h) * (0.85 + 0.3 * r(1)))));
+      out.push({
+        name: `Piece: ${a.name} ${i + 1}`,
+        owner: "blender",
+        role: "debris",
+        photo: true,
+        mesh: outlineSolid(cell, [], canvas, depth, 0),
+        release: {
+          frame,
+          velocity: [(r(2) - 0.5) * push * 0.5, (r(3) - 0.3) * push * 0.3, push * (0.2 + 1.6 * h) * (0.7 + 0.6 * r(4))],
+          spin: [(r(3) - 0.5) * spin, (r(4) - 0.5) * spin, (r(2) - 0.5) * spin],
+        },
+      });
+    });
+    out.push({ name: `Behind: ${a.name}`, owner: "before-effects", role: "backdrop", mesh: outlineSolid(a.outline, a.holes, canvas, 0.02, -depth - 0.01) });
+  }
+  return out;
+};
+
+/**
  * Build the exchange for an effect link: the building (the facade with its openings, every other
  * traced area that's solid) as holdout obstacles owned by Before Effects, the effect's emitter (or
  * cloth) owned by Blender, the show camera and the simulation box.
@@ -389,13 +492,16 @@ export const buildExchange = (
   if (!areas.length) throw new Error("The effect's areas no longer exist.");
   const src = areas.flatMap((r) => closedPoints(r.path));
   const b = worldBounds(src, canvas);
+  const frames0 = Math.max(1, Math.round(link.seconds * o.fps));
+  if (effect.kind === "shatter") objects.push(...shatterPieces(areas.map((r) => ({ name: r.name, outline: closedPoints(r.path), holes: regionHoles(r, venue).map(closedPoints) })), canvas, o.fps, frames0, effect.params));
   for (const r of areas) {
-    if (effect.kind === "cloth") continue;
+    if (effect.kind === "cloth" || effect.kind === "shatter") continue;
     // A thin slab just in front of the area: where smoke, fire or water comes from.
     objects.push({ name: `Emitter: ${r.name}`, owner: "blender", role: "emitter", mesh: outlineSolid(closedPoints(r.path), [], canvas, 0.06, 0.08) });
   }
   const frames = Math.max(1, Math.round(link.seconds * o.fps));
-  if (effect.kind === "cloth") objects.push(clothSheet(b, frames, Number(effect.params.revealAt ?? 0.3)));
+  // "Lets go at" is in seconds from the effect's start.
+  if (effect.kind === "cloth") objects.push(clothSheet(b, frames, Math.min(0.9, (Number(effect.params.revealAt ?? 1.2) * o.fps) / frames)));
   const cam = showCamera(canvas, o.cameraDistance ?? 1.6);
   const w = b.x1 - b.x0, h = b.y1 - b.y0;
   const domain =
@@ -431,7 +537,7 @@ export const checkOwners = (x: BlenderExchange): string[] => {
     if (prev && prev !== ob.owner) problems.push(`"${ob.name}" would be moved by both Before Effects and Blender.`);
     seen.set(ob.name, ob.owner);
     if (ob.owner === "blender" && ob.motion) problems.push(`"${ob.name}" is simulated by Blender but also has motion from Before Effects.`);
-    if (ob.owner === "before-effects" && (ob.role === "emitter" || ob.role === "cloth")) problems.push(`"${ob.name}" is a ${ob.role} but isn't owned by Blender.`);
+    if (ob.owner === "before-effects" && (ob.role === "emitter" || ob.role === "cloth" || ob.role === "debris")) problems.push(`"${ob.name}" is a ${ob.role} but isn't owned by Blender.`);
   }
   return problems;
 };

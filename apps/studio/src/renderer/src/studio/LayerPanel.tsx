@@ -1,6 +1,6 @@
 /** Inspector for a plain layer: pictures and videos, text, and sound. Simple controls first. */
-import { type AnimProp, defaultAudio, evalProp, formatSecondsFriendly, keyAt, type Layer, type PropValue, secondsToTime, type Vec3 } from "@be/core";
-import { ColorField, Field, Slider, Toggle } from "./controls.tsx";
+import { type AnimProp, defaultAudio, evalProp, formatSecondsFriendly, keyAt, LAYER_EFFECTS, type Layer, newEffect, newId, type PropValue, secondsToTime, type Vec3 } from "@be/core";
+import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { layerLocal, setLayerValue, toggleLayerKey } from "./layerKeys.ts";
 import { BlenderLinkSection } from "./BlenderPanel.tsx";
 import { currentComp, useStudio } from "./store.ts";
@@ -21,6 +21,182 @@ const KeyToggle = ({ layer, path, prop, label }: { layer: Layer; path: string; p
     >
       ◆
     </button>
+  );
+};
+
+/**
+ * The layer's effects (blur, glow, melt…): every setting of each, each with ◆ for keyframes, on/off,
+ * remove, and adding more. Effects a recipe made are adjusted from the recipe's own settings too.
+ */
+const LayerEffects = ({ layer }: { layer: Layer }) => {
+  const time = useStudio((s) => s.time);
+  const comp = currentComp(useStudio.getState())!;
+  const apply = useStudio.getState().apply;
+  const lt = layerLocal(layer, time);
+  const setEffects = (effects: Layer["effects"], label: string) => apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes: { effects } } }, { label });
+  return (
+    <section className="layer-effects" aria-label="Effects">
+      <h3 className="subhead">Effects</h3>
+      {layer.effects.length === 0 && <p className="muted small">None. Add one below.</p>}
+      {layer.effects.map((e) => {
+        const spec = LAYER_EFFECTS[e.type];
+        return (
+          <div key={e.id} className="effect-card">
+            <div className="row gap">
+              <strong className="grow">{spec?.title ?? e.type}</strong>
+              <button className="ghost small-btn" onClick={() => setEffects(layer.effects.map((x) => (x.id === e.id ? { ...x, enabled: !x.enabled } : x)), e.enabled ? "Turn effect off" : "Turn effect on")}>
+                {e.enabled ? "On" : "Off"}
+              </button>
+              <button className="ghost small-btn danger" aria-label={`Remove ${spec?.title ?? e.type}`} onClick={() => setEffects(layer.effects.filter((x) => x.id !== e.id), "Remove effect")}>
+                ✕
+              </button>
+            </div>
+            {spec && <p className="muted small">{spec.description}</p>}
+            {(spec?.params ?? Object.keys(e.params).map((key) => ({ key, label: key, min: 0, max: 100, step: 0.1, default: 0 }))).map((ps) => {
+              const prop = e.params[ps.key];
+              if (!prop) return null;
+              const path = `effects.${e.id}.params.${ps.key}`;
+              const v = evalProp(prop as AnimProp<number>, lt);
+              return (
+                <Field key={ps.key} label={ps.label} help={"help" in ps ? ps.help : undefined}>
+                  <div className="row gap">
+                    <Slider value={typeof v === "number" ? v : 0} min={ps.min} max={ps.max} step={ps.step} unit={"unit" in ps ? ps.unit : undefined} onChange={(nv) => setLayerValue(comp, layer, path, prop as AnimProp<number>, nv, `Change ${ps.label.toLowerCase()}`)} label={`${spec?.title ?? e.type} ${ps.label}`} />
+                    <KeyToggle layer={layer} path={path} prop={prop} label={`${(spec?.title ?? e.type).toLowerCase()} ${ps.label.toLowerCase()}`} />
+                  </div>
+                </Field>
+              );
+            })}
+          </div>
+        );
+      })}
+      <div className="row gap wrap">
+        {Object.entries(LAYER_EFFECTS).map(([type, spec]) => (
+          <button key={type} className="ghost small-btn" title={spec.description} onClick={() => setEffects([...layer.effects, newEffect(type, newId("fx"))], `Add ${spec.title.toLowerCase()}`)}>
+            + {spec.title}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+};
+
+export const BLEND_CHOICES = [
+  { value: "normal", label: "Cover what's below" },
+  { value: "add", label: "Add light" },
+  { value: "screen", label: "Lighten" },
+  { value: "multiply", label: "Tint (darken)" },
+] as const;
+
+/** Name, show/hide and how it mixes with the layers below: for every kind of layer. */
+export const LayerIdentity = ({ layer }: { layer: Layer }) => {
+  const comp = currentComp(useStudio.getState())!;
+  const apply = useStudio.getState().apply;
+  const update = (changes: Partial<Layer>, label: string, key: string) => apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes } }, { label, coalesceKey: `${layer.id}:${key}` });
+  return (
+    <>
+      <Field label="Layer name">
+        <div className="row gap">
+          <input className="text-input grow" value={layer.name} aria-label="Layer name" onChange={(e) => e.target.value.trim() && update({ name: e.target.value }, "Rename layer", "name")} />
+          <button className="ghost small-btn" onClick={() => update({ enabled: !layer.enabled }, layer.enabled ? "Hide layer" : "Show layer", "enabled")}>
+            {layer.enabled ? "Hide" : "Show"}
+          </button>
+        </div>
+      </Field>
+      <Field label="Mix with what's below" help="Add light suits glows, sparks and fire on a dark house; Cover hides what's underneath.">
+        <Choice label="Mix with what's below" value={layer.blendMode} choices={BLEND_CHOICES} onChange={(v) => update({ blendMode: v as Layer["blendMode"] }, "Change how the layer mixes", "blend")} />
+      </Field>
+    </>
+  );
+};
+
+/** Opacity (◆) and when the layer plays: used where a layer has its own panel (3D layers). */
+export const LayerTiming = ({ layer }: { layer: Layer }) => {
+  const time = useStudio((s) => s.time);
+  const comp = currentComp(useStudio.getState())!;
+  const apply = useStudio.getState().apply;
+  const lt = layerLocal(layer, time);
+  return (
+    <>
+      <Field label="Opacity">
+        <div className="row gap">
+          <Slider value={evalProp(layer.transform.opacity, lt) as number} min={0} max={100} unit="%" onChange={(v) => setLayerValue(comp, layer, "transform.opacity", layer.transform.opacity, v, "Opacity")} label="Opacity" />
+          <KeyToggle layer={layer} path="transform.opacity" prop={layer.transform.opacity} label="opacity" />
+        </div>
+      </Field>
+      <Field label="Starts at">
+        <Slider
+          value={Math.round((layer.inPoint / secondsToTime(1)) * 10) / 10}
+          min={0}
+          max={Math.max(1, comp.duration / secondsToTime(1))}
+          step={0.1}
+          unit="s"
+          onChange={(v) => {
+            const shift = secondsToTime(v) - layer.inPoint;
+            apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes: { startTime: layer.startTime + shift, inPoint: layer.inPoint + shift, outPoint: layer.outPoint + shift } } }, { label: "Move in time", coalesceKey: `${layer.id}:start` });
+          }}
+          label="Starts at"
+        />
+      </Field>
+      <Field label="Length">
+        <Slider
+          value={Math.round(((layer.outPoint - layer.inPoint) / secondsToTime(1)) * 10) / 10}
+          min={0.1}
+          max={Math.max(0.2, (comp.duration - layer.inPoint) / secondsToTime(1))}
+          step={0.1}
+          unit="s"
+          onChange={(v) => apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes: { outPoint: layer.inPoint + secondsToTime(v) } } }, { label: "Change length", coalesceKey: `${layer.id}:len` })}
+          label="Length"
+        />
+      </Field>
+    </>
+  );
+};
+
+const MASK_MODES = [
+  { value: "add", label: "Show inside" },
+  { value: "subtract", label: "Cut out" },
+  { value: "intersect", label: "Only where shapes overlap" },
+  { value: "none", label: "Off" },
+];
+
+/** Every setting of the layer's clipping shapes (masks): how each clips, invert, soft edge, grow, strength. */
+export const LayerMasks = ({ layer }: { layer: Layer }) => {
+  const time = useStudio((s) => s.time);
+  const comp = currentComp(useStudio.getState())!;
+  const apply = useStudio.getState().apply;
+  const lt = layerLocal(layer, time);
+  if (!layer.masks.length) return null;
+  const setMask = (id: string, changes: Record<string, unknown>, label: string) =>
+    apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes: { masks: layer.masks.map((m) => (m.id === id ? { ...m, ...changes } : m)) } } }, { label, coalesceKey: `${layer.id}:${id}:${label}` });
+  return (
+    <section aria-label="Clipping">
+      <h3 className="subhead">Clipping</h3>
+      {layer.masks.map((m) => (
+        <div key={m.id} className="effect-card">
+          <strong>{m.name}</strong>
+          <Field label="Clips">
+            <Choice label={`${m.name} clips`} value={MASK_MODES.some((x) => x.value === m.mode) ? m.mode : "add"} choices={MASK_MODES} onChange={(v) => setMask(m.id, { mode: v }, "Change clipping")} />
+          </Field>
+          <Field label="Inverted" help="Show outside the shape instead of inside.">
+            <Toggle label={`${m.name} inverted`} value={m.inverted} onChange={(v) => setMask(m.id, { inverted: v }, "Invert clipping")} />
+          </Field>
+          {(
+            [
+              ["feather", "Soft edge", 0, 200, "px"],
+              ["expansion", "Grow / shrink", -200, 200, "px"],
+              ["opacity", "Strength", 0, 100, "%"],
+            ] as const
+          ).map(([k, label, min, max, unit]) => (
+            <Field key={k} label={label}>
+              <div className="row gap">
+                <Slider value={evalProp(m[k], lt) as number} min={min} max={max} unit={unit} onChange={(v) => setLayerValue(comp, layer, `masks.${m.id}.${k}`, m[k], v, label)} label={`${m.name} ${label}`} />
+                <KeyToggle layer={layer} path={`masks.${m.id}.${k}`} prop={m[k]} label={`${m.name} ${label.toLowerCase()}`} />
+              </div>
+            </Field>
+          ))}
+        </div>
+      ))}
+    </section>
   );
 };
 
@@ -48,6 +224,7 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
         <h2>{layer.name}</h2>
       </div>
       {madeInBlender && <BlenderLinkSection link={madeInBlender} />}
+      <LayerIdentity layer={layer} />
       <p className="muted small">
         {layer.source.kind === "audio" ? "Sound" : layer.source.kind === "text" ? "Text" : asset?.kind === "video" ? "Video" : asset?.kind === "image" ? "Picture" : "Layer"} · {formatSecondsFriendly(layer.inPoint)}–{formatSecondsFriendly(layer.outPoint)}
         {asset ? ` · ${asset.name}` : ""}
@@ -79,6 +256,52 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
               <KeyToggle layer={layer} path="source.doc.color" prop={layer.source.doc.color} label="text colour" />
             </div>
           </Field>
+          <Field label="Weight">
+            <Choice
+              label="Weight"
+              value={String(layer.source.doc.weight)}
+              choices={[
+                { value: "300", label: "Light" },
+                { value: "400", label: "Regular" },
+                { value: "600", label: "Semibold" },
+                { value: "700", label: "Bold" },
+                { value: "900", label: "Heavy" },
+              ]}
+              onChange={(v) => setField("source.doc.weight", Number(v), "Text weight")}
+            />
+          </Field>
+          <Field label="Line up">
+            <Choice label="Line up" value={layer.source.doc.align} choices={[{ value: "left", label: "Left" }, { value: "center", label: "Centre" }, { value: "right", label: "Right" }]} onChange={(v) => setField("source.doc.align", v, "Text alignment")} />
+          </Field>
+          <Field label="Line spacing">
+            <Slider value={layer.source.doc.lineHeight} min={0.7} max={3} step={0.05} onChange={(v) => setField("source.doc.lineHeight", v, "Line spacing")} label="Line spacing" />
+          </Field>
+          <Field label="Letter spacing">
+            <Slider value={layer.source.doc.tracking} min={-20} max={100} unit="px" onChange={(v) => setField("source.doc.tracking", v, "Letter spacing")} label="Letter spacing" />
+          </Field>
+          <Field label="Outline">
+            <Toggle
+              label="Outline"
+              value={!!layer.source.doc.stroke}
+              onChange={(v) => setField("source.doc.stroke", v ? { color: { value: [0, 0, 0, 1] }, width: { value: 4 } } : undefined, v ? "Add outline" : "Remove outline")}
+            />
+          </Field>
+          {layer.source.doc.stroke && (
+            <>
+              <Field label="Outline colour">
+                <div className="row gap">
+                  <ColorField value={staticValue<readonly number[]>(layer.source.doc.stroke.color, lt)} onChange={(v) => layer.source.kind === "text" && layer.source.doc.stroke && set("source.doc.stroke.color", layer.source.doc.stroke.color, v, "Outline colour")} label="Outline colour" />
+                  <KeyToggle layer={layer} path="source.doc.stroke.color" prop={layer.source.doc.stroke.color} label="outline colour" />
+                </div>
+              </Field>
+              <Field label="Outline width">
+                <div className="row gap">
+                  <Slider value={staticValue<number>(layer.source.doc.stroke.width, lt)} min={0} max={40} step={0.5} unit="px" onChange={(v) => layer.source.kind === "text" && layer.source.doc.stroke && set("source.doc.stroke.width", layer.source.doc.stroke.width, v, "Outline width")} label="Outline width" />
+                  <KeyToggle layer={layer} path="source.doc.stroke.width" prop={layer.source.doc.stroke.width} label="outline width" />
+                </div>
+              </Field>
+            </>
+          )}
         </>
       )}
 
@@ -101,6 +324,22 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
               <KeyToggle layer={layer} path="transform.scale" prop={layer.transform.scale} label="size" />
             </div>
           </Field>
+          {(["Width", "Height"] as const).map((axis, i) => (
+            <Field key={axis} label={`${axis} only`}>
+              <Slider
+                value={staticValue<readonly number[]>(layer.transform.scale, lt)[i]!}
+                min={1}
+                max={400}
+                unit="%"
+                onChange={(v) => {
+                  const cur = [...staticValue<readonly number[]>(layer.transform.scale, lt)] as [number, number, number];
+                  cur[i] = v;
+                  set("transform.scale", layer.transform.scale, cur as Vec3, "Resize");
+                }}
+                label={`${axis} only`}
+              />
+            </Field>
+          ))}
           {(["left/right", "up/down"] as const).map((axis, i) => (
             <Field key={axis} label={`Position (${axis})`}>
               <div className="row gap">
@@ -140,14 +379,36 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
         </>
       )}
 
+      {layer.source.kind !== "audio" && <LayerEffects layer={layer} />}
+      {layer.source.kind !== "audio" && <LayerMasks layer={layer} />}
+      {layer.source.kind === "footage" && asset?.kind === "video" && (
+        <Field label="Loop" help="Play the video again from the start when it ends.">
+          <Toggle label="Loop" value={!!layer.source.loop} onChange={(v) => setField("source.loop", v, v ? "Loop the video" : "Play once")} />
+        </Field>
+      )}
+
       {hasSound && audio && (
         <>
           <h3 className="subhead">Sound</h3>
           <Field label="Volume" help="0 dB plays the file as it is; lower is quieter.">
-            <Slider value={staticValue<number>(audio.volume, time)} min={-60} max={12} step={0.5} unit="dB" onChange={(v) => setField("audio", { ...audio, volume: { value: v } }, "Volume")} label="Volume" />
+            <div className="row gap">
+              <Slider
+                value={staticValue<number>(audio.volume, lt)}
+                min={-60}
+                max={12}
+                step={0.5}
+                unit="dB"
+                onChange={(v) => (layer.audio ? set("audio.volume", layer.audio.volume, v, "Volume") : setField("audio", { ...audio, volume: { value: v } }, "Volume"))}
+                label="Volume"
+              />
+              {layer.audio && <KeyToggle layer={layer} path="audio.volume" prop={layer.audio.volume} label="volume" />}
+            </div>
           </Field>
           <Field label="Left / right">
-            <Slider value={staticValue<number>(audio.pan, time)} min={-1} max={1} step={0.05} onChange={(v) => setField("audio", { ...audio, pan: { value: v } }, "Pan")} label="Pan" />
+            <div className="row gap">
+              <Slider value={staticValue<number>(audio.pan, lt)} min={-1} max={1} step={0.05} onChange={(v) => (layer.audio ? set("audio.pan", layer.audio.pan, v, "Pan") : setField("audio", { ...audio, pan: { value: v } }, "Pan"))} label="Pan" />
+              {layer.audio && <KeyToggle layer={layer} path="audio.pan" prop={layer.audio.pan} label="left/right" />}
+            </div>
           </Field>
           <Field label="Fade in">
             <Slider value={audio.fadeIn} min={0} max={20} step={0.1} unit="s" onChange={(v) => setField("audio", { ...audio, fadeIn: v }, "Fade in")} label="Fade in" />

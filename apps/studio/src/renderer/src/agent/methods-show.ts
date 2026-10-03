@@ -4,6 +4,9 @@
  */
 import {
   regionHoles,
+  LAYER_EFFECTS,
+  type Layer,
+  newEffect,
   type AnimProp,
   defaultParams,
   describeShow,
@@ -36,6 +39,7 @@ import { KIND_CHOICES } from "../space/traceStore.ts";
 import { recipeOpsFor } from "../studio/actions.ts";
 import { assignMedia, refForAreas, replaceMedia } from "../studio/assign.ts";
 import { importMediaFiles } from "../studio/media.ts";
+import { meltAreas } from "../studio/melt.ts";
 import { newEmptyScene, newSceneCopy, openShow, pickScene, showComp } from "../studio/ScenesBar.tsx";
 import { activeVenue, currentComp, useStudio } from "../studio/store.ts";
 import { AgentError, currentRevision, method } from "./core.ts";
@@ -811,6 +815,100 @@ method({
     if (!p.all && keep.length === (prop.keyframes?.length ?? 0)) throw new AgentError("not_found", "No keyframe at that time.");
     ctx.edit(() => st().apply({ type: "prop.setAnimation", args: { compId: sid, layerId: l.id, path, keyframes: keep.length >= 1 ? keep : [] } }, { label: `Remove keyframe` }));
     return { layer: l.id, remaining: keep.length, revision: currentRevision() };
+  },
+});
+
+// ---- layer effects (blur, glow, melt) -------------------------------------------------------------------
+
+const effectOf = (l: Layer, ref: string) => {
+  const e = l.effects.find((x) => x.id === ref) ?? l.effects.find((x) => x.type === ref || LAYER_EFFECTS[x.type]?.title.toLowerCase() === ref.toLowerCase());
+  if (!e) throw new AgentError("not_found", `“${l.name}” has no effect "${ref}" (see layers.effects).`);
+  return e;
+};
+
+method({
+  name: "layers.effects",
+  summary: `A layer's effects with every setting: value now, range, and keyframes if animated. Types: ${Object.entries(LAYER_EFFECTS).map(([t, e]) => `${t} (${e.title}: ${e.params.map((x) => x.key).join(", ")})`).join("; ")}.`,
+  params: z.object({ scene: z.string().optional(), layer: z.string() }),
+  run: (p) => {
+    const l = layerOf(sceneId(p.scene), p.layer);
+    return l.effects.map((e) => ({
+      id: e.id,
+      type: e.type,
+      enabled: e.enabled,
+      params: Object.entries(e.params).map(([k, prop]) => {
+        const sp = LAYER_EFFECTS[e.type]?.params.find((x) => x.key === k);
+        return { key: k, label: sp?.label ?? k, value: prop.value, min: sp?.min, max: sp?.max, unit: sp?.unit ?? null, keyframes: (prop.keyframes ?? []).map((kf) => ({ seconds: r2(timeToSeconds(kf.t)), value: kf.v })) };
+      }),
+    }));
+  },
+});
+
+method({
+  name: "layers.effectAdd",
+  summary: "Add an effect to a layer (gaussian-blur, glow, melt) with optional starting values for its settings.",
+  params: z.object({ scene: z.string().optional(), layer: z.string(), type: z.enum(Object.keys(LAYER_EFFECTS) as [string, ...string[]]), values: z.record(z.string(), z.number()).optional() }),
+  mutates: true,
+  run: (p, ctx) => {
+    const sid = sceneId(p.scene);
+    const l = layerOf(sid, p.layer);
+    const e = newEffect(p.type, newId("fx"), p.values ?? {});
+    ctx.edit(() => st().apply({ type: "layer.update", args: { compId: sid, layerId: l.id, changes: { effects: [...l.effects, e] } } }, { label: `Add ${LAYER_EFFECTS[p.type]!.title.toLowerCase()}` }));
+    return { layer: l.id, effect: e.id, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "layers.effectSet",
+  summary: "Change an effect setting (effect by id or type). With seconds: set it at that time as a keyframe (animating it). Also turn the effect on/off.",
+  params: z.object({ scene: z.string().optional(), layer: z.string(), effect: z.string(), param: z.string().optional(), value: z.number().optional(), seconds: z.number().min(0).optional(), enabled: z.boolean().optional() }),
+  mutates: true,
+  example: { layer: "Melt — Window", effect: "melt", param: "amount", seconds: 3, value: 1 },
+  run: (p, ctx) => {
+    const sid = sceneId(p.scene);
+    const l = layerOf(sid, p.layer);
+    const e = effectOf(l, p.effect);
+    if (p.enabled !== undefined) ctx.edit(() => st().apply({ type: "layer.update", args: { compId: sid, layerId: l.id, changes: { effects: l.effects.map((x) => (x.id === e.id ? { ...x, enabled: p.enabled! } : x)) } } }, { label: "Turn effect on/off" }));
+    if (p.param !== undefined) {
+      if (p.value === undefined) throw new AgentError("invalid_params", "Give a value for the setting.");
+      const prop = e.params[p.param];
+      if (!prop) throw new AgentError("not_found", `The effect has no setting "${p.param}" (it has ${Object.keys(e.params).join(", ")}).`);
+      const path = `effects.${e.id}.params.${p.param}`;
+      if (p.seconds !== undefined) {
+        const t = snapToFrame(secondsToTime(p.seconds), project().compositions[sid]!.frameRate);
+        let next: AnimProp = prop.keyframes?.length ? prop : toggleKeyAt(prop, l.inPoint);
+        next = setPropAt(next, t, p.value);
+        ctx.edit(() => st().apply({ type: "prop.setAnimation", args: { compId: sid, layerId: l.id, path, keyframes: [...(next.keyframes ?? [])] } }, { label: "Animate effect setting" }));
+      } else ctx.edit(() => st().apply({ type: "prop.set", args: { compId: sid, layerId: l.id, path, value: p.value! } }, { label: "Change effect setting" }));
+    }
+    return { layer: l.id, effect: e.id, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "layers.effectRemove",
+  summary: "Remove an effect from a layer (by id or type).",
+  params: z.object({ scene: z.string().optional(), layer: z.string(), effect: z.string() }),
+  mutates: true,
+  run: (p, ctx) => {
+    const sid = sceneId(p.scene);
+    const l = layerOf(sid, p.layer);
+    const e = effectOf(l, p.effect);
+    ctx.edit(() => st().apply({ type: "layer.update", args: { compId: sid, layerId: l.id, changes: { effects: l.effects.filter((x) => x.id !== e.id) } } }, { label: "Remove effect" }));
+    return { layer: l.id, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "effects.melt",
+  summary: "Melt areas: their own photo is projected back onto them, then sags and drips downward (0.5–3.5 s into a 6 s layer), leaving darkness. Procedural. Adjust with layers.effectSet (melt: amount, distance, drip, seed).",
+  params: z.object({ areas: z.array(z.string()).min(1) }),
+  mutates: true,
+  run: (p, ctx) => {
+    const ids = areaIds(p.areas);
+    const layerId = ctx.edit(() => meltAreas(ids));
+    if (!layerId) throw new AgentError("rejected", "Melt needs the building photo and at least one area.");
+    return { layer: layerId, revision: currentRevision() };
   },
 });
 

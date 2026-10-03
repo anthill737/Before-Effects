@@ -9,7 +9,8 @@
 import { getRecipe, newId, type RecipeInstance, type RegionRef, resolveTargets, snapToFrame } from "@be/core";
 import { create } from "zustand";
 import { applyEffect, applyRecipeToSelection } from "./actions.ts";
-import { COLLAPSE_EFFECT, makeArea3D } from "./actions3d.ts";
+import { addParticles, effect3dFor, makeArea3D } from "./actions3d.ts";
+import { MELT_EFFECT, meltAreas } from "./melt.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
 export const DRAG_ASSET = "application/x-be-asset";
@@ -84,7 +85,9 @@ export const dropOnArea = async (payload: DragPayload, areaId: string, at: { x: 
 export const finishDrop = async (payload: DragPayload, areaIds: string[], mode: "each" | "across") => {
   useDropChoice.setState({ pending: null });
   if (payload.kind === "asset") return assignMedia(payload.id, areaIds, mode);
-  if (payload.id === COLLAPSE_EFFECT.id) return makeArea3D(areaIds, true);
+  if (payload.id === MELT_EFFECT.id) return meltAreas(areaIds);
+  const e3 = effect3dFor(payload.id);
+  if (e3) return "break" in e3 ? makeArea3D(areaIds, true, e3.break) : addParticles(e3.particles, areaIds);
   const def = getRecipe(payload.id);
   if (!def) return null;
   useStudio.getState().selectRegions(areaIds);

@@ -17,9 +17,15 @@ import {
   type EvaluatedSource,
   eulerDegToQuat,
   evalProp,
+  FLICKS_PER_SECOND,
   type Light3D,
   METERS_PER_PIXEL,
   type Object3D,
+  PARTICLE_PRESETS,
+  PARTICLE_STRIDE,
+  particleCapacity,
+  type ParticleEmitter,
+  particlesAt,
   type ResolvedObject,
   type ResolvedPhysics,
   type ResolvedPiece,
@@ -51,6 +57,8 @@ interface Entry {
   readonly light?: THREE.Light;
   readonly target?: THREE.Object3D;
   readonly bulb?: THREE.Mesh;
+  /** Particles: one instanced quad per live particle, refilled every frame. */
+  readonly particles?: { readonly mesh: THREE.InstancedMesh; readonly emitter: ParticleEmitter; buf: Float32Array | null };
 }
 
 interface Built {
@@ -121,6 +129,32 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
   g.addGroup(0, frontCount, 0);
   g.addGroup(frontCount, pos.length / 3 - frontCount, 1);
   return g;
+};
+
+const tmp = new THREE.Object3D();
+const tmpColor = new THREE.Color();
+
+/** Round soft-edged sprites: "glow" (bright core, long falloff, for sparks and embers) or "soft" (a flake). */
+const sprites = new Map<string, THREE.DataTexture>();
+const spriteTexture = (kind: "glow" | "soft"): THREE.DataTexture => {
+  let t = sprites.get(kind);
+  if (t) return t;
+  const n = 64;
+  const px = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const r = Math.hypot((x + 0.5) / n - 0.5, (y + 0.5) / n - 0.5) * 2;
+      const a = kind === "glow" ? Math.max(0, Math.exp(-r * r * 6) - Math.exp(-6)) / (1 - Math.exp(-6)) : Math.min(1, Math.max(0, (1 - r) * 3));
+      const i = (y * n + x) * 4;
+      px[i] = px[i + 1] = px[i + 2] = 255;
+      px[i + 3] = Math.round(a * 255);
+    }
+  t = new THREE.DataTexture(px, n, n, THREE.RGBAFormat);
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  sprites.set(kind, t);
+  return t;
 };
 
 const primitiveGeometry = (o: Object3D): THREE.BufferGeometry | null => {
@@ -238,6 +272,26 @@ export class SceneHost implements ExternalSourceRenderer {
 
   private makeEntry(b: Built, r: ResolvedScene3D, ro: ResolvedObject): Entry {
     const o = ro.object;
+    if (o.kind === "particles" && o.particles && ro.emitter) {
+      const p = o.particles;
+      const glow = PARTICLE_PRESETS[p.kind].glow;
+      const geo = new THREE.PlaneGeometry(1, 1);
+      const mat =
+        p.kind === "confetti"
+          ? new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, toneMapped: false })
+          : new THREE.MeshBasicMaterial({ map: spriteTexture(glow ? "glow" : "soft"), transparent: true, depthWrite: false, blending: glow ? THREE.AdditiveBlending : THREE.NormalBlending, toneMapped: false });
+      const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, particleCapacity(p, ro.emitter)));
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.setColorAt(0, new THREE.Color(1, 1, 1));
+      // Rewritten every frame, like the matrices (also makes the very first frame use them).
+      mesh.instanceColor!.setUsage(THREE.DynamicDrawUsage);
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      b.scene.add(mesh);
+      return { model: o, pieces: ro.pieces, meshes: [mesh], mats: [mat], geos: [geo], particles: { mesh, emitter: ro.emitter, buf: null } };
+    }
     if (o.kind === "light" && o.light) {
       const L = o.light;
       let light: THREE.Light;
@@ -339,9 +393,10 @@ export class SceneHost implements ExternalSourceRenderer {
     for (const ro of r.objects) {
       seen.add(ro.object.id);
       const e = b.entries.get(ro.object.id);
-      if (e && e.model === ro.object && e.pieces === ro.pieces) continue;
+      const sameEmitter = !e?.particles || e.particles.emitter === ro.emitter;
+      if (e && e.model === ro.object && e.pieces === ro.pieces && sameEmitter) continue;
       // Only these change the built objects; transforms and values are set per frame below.
-      if (e && e.pieces === ro.pieces && sameBuild(e.model, ro.object)) {
+      if (e && e.pieces === ro.pieces && sameEmitter && sameBuild(e.model, ro.object)) {
         b.entries.set(ro.object.id, { ...e, model: ro.object });
         continue;
       }
@@ -377,6 +432,32 @@ export class SceneHost implements ExternalSourceRenderer {
         e.target?.position.set(L.target[0], L.target[1], L.target[2]);
         e.target?.updateMatrixWorld();
         e.bulb?.position.set(pos[0], pos[1], pos[2]);
+        continue;
+      }
+      if (e.particles && o.particles) {
+        // Where every live particle is at this moment (worked out from time, nothing stepped).
+        const P = e.particles;
+        const { count, data } = particlesAt(o.particles, P.emitter, t / FLICKS_PER_SECOND, P.buf ?? undefined);
+        P.buf = data;
+        const m = P.mesh;
+        const n = Math.min(count, m.instanceMatrix.count);
+        const glow = PARTICLE_PRESETS[o.particles.kind].glow;
+        for (let i = 0; i < n; i++) {
+          const k = i * PARTICLE_STRIDE;
+          const size = data[k + 3]!;
+          tmp.position.set(data[k]!, data[k + 1]!, data[k + 2]!);
+          tmp.rotation.set(data[k + 9]!, 0, data[k + 8]!, "ZXY");
+          tmp.scale.set(size * data[k + 10]!, size, 1);
+          tmp.updateMatrix();
+          m.setMatrixAt(i, tmp.matrix);
+          // Glowing particles fade by dimming (they add light); the others keep their colour.
+          const a = glow ? data[k + 7]! : 1;
+          m.setColorAt(i, tmpColor.setRGB(data[k + 4]! * a, data[k + 5]! * a, data[k + 6]! * a, THREE.SRGBColorSpace));
+        }
+        m.count = n;
+        m.visible = o.visible;
+        m.instanceMatrix.needsUpdate = true;
+        if (m.instanceColor) m.instanceColor.needsUpdate = true;
         continue;
       }
       // Materials.
@@ -540,6 +621,7 @@ export class SceneHost implements ExternalSourceRenderer {
 /** Whether two versions of an object need the same three.js objects (only values differ). */
 const sameBuild = (a: Object3D, b: Object3D): boolean =>
   a.kind === b.kind &&
+  a.particles === b.particles &&
   a.geometry === b.geometry &&
   a.castShadow === b.castShadow &&
   a.receiveShadow === b.receiveShadow &&

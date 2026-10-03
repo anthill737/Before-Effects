@@ -10,11 +10,20 @@
  *                      "projector" the calibrated image a projector outputs
  *   renderPixels()   full-resolution, full-quality frames for encoders. Preview settings never apply.
  */
-import { type EvaluatedComp, evaluateComp, type Flicks, type Id, type PathData, type Project, type ResolvedSim, type Venue } from "@be/core";
+import { blendSetup, type EvaluatedComp, evaluateComp, type Flicks, type Id, type PathData, type Project, type ResolvedSim, type Venue, venueBlend } from "@be/core";
 
 /** Venue areas marked "keep light off here" (applied only in projector output). */
 const keepOffPaths = (venue: Venue | undefined): PathData[] =>
   venue ? venue.regionOrder.map((id) => venue.regions[id]).filter((r) => r?.kind === "exclusion").map((r) => r!.path) : [];
+
+/** Edge blending with the venue's other projectors, when there are several and it's on. */
+const blendFor = (venue: Venue, projectorId: Id) => {
+  const b = venueBlend(venue);
+  if (!b.enabled || venue.projectorOrder.length < 2) return {};
+  const all = blendSetup(venue);
+  if (!all.some((x) => x.id === projectorId)) return {};
+  return { blend: { curve: b.curve, others: all.filter((x) => x.id !== projectorId) } };
+};
 import { Compositor, type MediaProvider, srgbToLinear } from "./compositor.ts";
 import { Gpu } from "./gpu.ts";
 import { encodeForFile, type PixelFormat, readback, renderProjectorOutput } from "./output.ts";
@@ -173,6 +182,7 @@ export class FrameRenderer {
           format: "rgba8",
           size: { width: target.width, height: target.height },
           keepOff: keepOffPaths(venue),
+          ...blendFor(venue, projector.id),
           ...(o.showGrid ? { showGrid: true } : {}),
         });
         gpu.defer(out);
@@ -235,6 +245,7 @@ export class FrameRenderer {
       out = renderProjectorOutput(gpu, compositor.raster, encoder, content, { width: comp.width, height: comp.height }, projector, {
         format,
         keepOff: keepOffPaths(project.venues[target.venueId]),
+        ...blendFor(project.venues[target.venueId]!, projector.id),
         ...(target.showGrid ? { showGrid: true } : {}),
       });
     }

@@ -1,5 +1,5 @@
 /** Agent methods for Blender: simulated effects, linked .blend files, updates after editing. */
-import { BLENDER_EFFECTS } from "@be/core";
+import { BLENDER_EFFECTS, BLENDER_PARAMS, type BlenderEffectKind } from "@be/core";
 import { z } from "zod";
 import { blenderEffect, linkBlendFile, openInBlender, rebuildBlenderEffect, updateFromBlender } from "../studio/blenderEffects.ts";
 import { useStudio } from "../studio/store.ts";
@@ -31,9 +31,9 @@ method({
 
 method({
   name: "blender.effect",
-  summary: `Simulate a physical effect on areas in Blender and add it to the current scene as a video layer lined up with the canvas: ${Object.entries(BLENDER_EFFECTS).map(([k, v]) => `${k} (${v.description})`).join("; ")}. The house blocks and hides the simulation (it flows around walls). Waits until Blender has finished (typically 1–3 minutes); progress arrives as events. Params: color ("#rrggbb"), density, swirl, linger (frames the smoke lasts) for smoke/fire; fuel (fire); push, pourFor (0..1 of the length) for liquid; revealAt (0..1, when the sheet lets go) for cloth.`,
+  summary: `Simulate a physical effect on areas in Blender and add it to the current scene as a video layer lined up with the canvas: ${Object.entries(BLENDER_EFFECTS).map(([k, v]) => `${k} (${v.description})`).join("; ")}. The house blocks and hides the simulation (it flows around walls). Waits until Blender has finished (typically 1–3 minutes); progress arrives as events. Params per kind (key: meaning, default): ${Object.entries(BLENDER_PARAMS).map(([k, ps]) => `${k} — ${ps.map((x) => `${x.key}: ${x.label.toLowerCase()}${x.unit ? ` (${x.unit})` : ""}, ${x.default}`).join("; ")}`).join(" | ")}.`,
   params: z.object({
-    kind: z.enum(["smoke", "fire", "liquid", "cloth"]),
+    kind: z.enum(Object.keys(BLENDER_EFFECTS) as [BlenderEffectKind, ...BlenderEffectKind[]]),
     areas: z.array(z.string()).min(1),
     seconds: z.number().min(0.5).max(30).optional(),
     startSeconds: z.number().min(0).optional(),
@@ -67,8 +67,20 @@ method({
 
 method({
   name: "blender.update",
-  summary: "Render a Blender link's .blend again (after it was edited in Blender) and replace its video in place; or rebuild an effect at another length or quality (rebuilding replaces edits made in Blender).",
-  params: z.object({ link: z.string(), rebuild: z.object({ seconds: z.number().min(0.5).max(30).optional(), quality: z.enum(["draft", "full"]).optional() }).optional(), timeoutMs: z.number().int().optional() }),
+  summary:
+    "Render a Blender link's .blend again (after it was edited in Blender) and replace its video in place; or rebuild an effect with changed settings (params, as for blender.effect), start, length or quality — rebuilding replaces edits made in Blender.",
+  params: z.object({
+    link: z.string(),
+    rebuild: z
+      .object({
+        seconds: z.number().min(0.5).max(60).optional(),
+        startSeconds: z.number().min(0).optional(),
+        quality: z.enum(["draft", "full"]).optional(),
+        params: z.record(z.string(), z.union([z.number(), z.string(), z.boolean()])).optional(),
+      })
+      .optional(),
+    timeoutMs: z.number().int().optional(),
+  }),
   mutates: true,
   long: true,
   run: async (p) => {

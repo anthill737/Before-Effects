@@ -117,6 +117,8 @@ export const edgeTrace: RecipeDef = {
     { key: "stagger", label: "Delay between edges", control: "seconds", default: 0.15, min: 0, max: 5, step: 0.05, unit: "s", drives: ["source.contents"] },
     { key: "direction", label: "Direction", control: "choice", default: "forward", choices: [{ value: "forward", label: "Forward" }, { value: "reverse", label: "Reverse" }], drives: ["source.contents"] },
     { key: "width", label: "Line width", control: "slider", default: 0, min: 0, max: 60, unit: "px", help: "0 picks a width that suits the scene size.", drives: ["source.contents"] },
+    { key: "glowSize", label: "Glow size", control: "slider", default: 100, min: 10, max: 400, unit: "%", help: "How far the glow spreads.", drives: ["effects.glow"] },
+    { key: "fadeIn", label: "Fade in", control: "seconds", default: 0.3, min: 0, max: 10, step: 0.05, unit: "s", help: "How long each edge's light takes to appear.", drives: ["source.contents"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 8, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint", "source.contents"] },
   ],
   generate: (ctx) => {
@@ -134,7 +136,8 @@ export const edgeTrace: RecipeDef = {
     const contents: ShapeContents[] = ctx.targets.map((tg, i) => {
       const ts = t0 + sec(stagger * i);
       const closed = tg.region.path.closed;
-      const fade: AnimProp<number> = animated(`${ctx.instanceId}_op${i}`, [kf(ts, 0, "bezier", true), kf(ts + sec(0.3), 100, "bezier", true)], 100);
+      const fadeIn = Math.max(0, num(p.fadeIn, 0.3));
+      const fade: AnimProp<number> = fadeIn > 0 ? animated(`${ctx.instanceId}_op${i}`, [kf(ts, 0, "bezier", true), kf(ts + sec(fadeIn), 100, "bezier", true)], 100) : staticProp(100);
       let trim: NonNullable<ShapeContents["trim"]>;
       if (closed) {
         const laps = Math.max(1, Math.ceil((end - ts) / lapF));
@@ -168,7 +171,7 @@ export const edgeTrace: RecipeDef = {
     return [
       {
         role: "trace",
-        layer: baseLayer(ctx, `Light trace — ${ctx.targets.length} edge${ctx.targets.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 60), width * 4)], end),
+        layer: baseLayer(ctx, `Light trace — ${ctx.targets.length} edge${ctx.targets.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 60), (width * 4 * num(p.glowSize, 100)) / 100)], end),
       },
     ];
   },
@@ -191,6 +194,7 @@ export const sequenceLightUp: RecipeDef = {
     { key: "hold", label: "Time lit", control: "seconds", default: 1, min: 0, max: 30, step: 0.1, unit: "s", help: "Used when Stay lit is off.", drives: ["source.contents"] },
     { key: "brightness", label: "Brightness", control: "slider", default: 85, min: 0, max: 100, unit: "%", drives: ["source.contents"] },
     { key: "glow", label: "Glow", control: "slider", default: 35, min: 0, max: 100, drives: ["effects.glow"] },
+    { key: "glowSize", label: "Glow size", control: "slider", default: 100, min: 10, max: 400, unit: "%", help: "How far the glow spreads.", drives: ["effects.glow"] },
     { key: "seed", label: "Shuffle", control: "seed", default: 1, help: "Pick a different random order.", drives: ["source.contents"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 6, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint"] },
   ],
@@ -218,7 +222,7 @@ export const sequenceLightUp: RecipeDef = {
     return [
       {
         role: "fills",
-        layer: baseLayer(ctx, `Lights — ${ordered.length} region${ordered.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 35), Math.round(diag * 0.01))], end),
+        layer: baseLayer(ctx, `Lights — ${ordered.length} region${ordered.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 35), Math.round((diag * 0.01 * num(p.glowSize, 100)) / 100))], end),
       },
     ];
   },
@@ -239,6 +243,8 @@ export const pulse: RecipeDef = {
     { key: "wave", label: "Wave across regions", control: "slider", default: 0, min: 0, max: 100, unit: "%", primary: true, help: "0 = all together; higher = the pulse travels across the regions.", drives: ["source.contents"] },
     { key: "order", label: "Wave direction", control: "choice", default: "left-right", choices: ORDER_CHOICES, drives: ["source.contents"] },
     { key: "glow", label: "Glow", control: "slider", default: 40, min: 0, max: 100, drives: ["effects.glow"] },
+    { key: "glowSize", label: "Glow size", control: "slider", default: 100, min: 10, max: 400, unit: "%", help: "How far the glow spreads.", drives: ["effects.glow"] },
+    { key: "seed", label: "Shuffle", control: "seed", default: 1, help: "A different random wave order (when the direction is Random).", drives: ["source.contents"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 8, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint", "source.contents"] },
   ],
   generate: (ctx) => {
@@ -248,7 +254,7 @@ export const pulse: RecipeDef = {
     const depth = Math.min(100, Math.max(0, num(p.depth, 80)));
     const wave = Math.min(100, Math.max(0, num(p.wave, 0))) / 100;
     const end = showEnd(ctx, num(p.seconds, 8));
-    const ordered = orderTargets(ctx.targets, String(p.order ?? "left-right"), 1);
+    const ordered = orderTargets(ctx.targets, String(p.order ?? "left-right"), num(p.seed, 1) | 0);
     const diag = Math.hypot(ctx.comp.width, ctx.comp.height);
     const contents: ShapeContents[] = ordered.map((tg, i) => {
       const phase = ordered.length > 1 ? (i / (ordered.length - 1)) * wave * period : 0;
@@ -260,7 +266,7 @@ export const pulse: RecipeDef = {
       }
       return { path: { kind: "region", ref: tg.ref }, fill: { color: staticProp(col), opacity: animated(`${ctx.instanceId}_p${tg.region.id}`, kfs, 100 - depth) } };
     });
-    return [{ role: "pulse", layer: baseLayer(ctx, `Pulse — ${ordered.length} region${ordered.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 40), Math.round(diag * 0.01))], end) }];
+    return [{ role: "pulse", layer: baseLayer(ctx, `Pulse — ${ordered.length} region${ordered.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 40), Math.round((diag * 0.01 * num(p.glowSize, 100)) / 100))], end) }];
   },
 };
 
@@ -278,6 +284,8 @@ export const neonOutline: RecipeDef = {
     { key: "width", label: "Line width", control: "slider", default: 0, min: 0, max: 60, unit: "px", primary: true, help: "0 picks a width that suits the scene size.", drives: ["source.contents"] },
     { key: "flicker", label: "Flicker on", control: "toggle", default: true, primary: true, drives: ["source.contents"] },
     { key: "seed", label: "Flicker pattern", control: "seed", default: 3, drives: ["source.contents"] },
+    { key: "flickers", label: "Flickers", control: "slider", default: 7, min: 1, max: 30, step: 1, help: "How many times it stutters before staying on.", drives: ["source.contents"] },
+    { key: "glowSize", label: "Glow size", control: "slider", default: 100, min: 10, max: 400, unit: "%", help: "How far the glow spreads.", drives: ["effects.glow"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 10, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint"] },
   ],
   generate: (ctx) => {
@@ -293,7 +301,7 @@ export const neonOutline: RecipeDef = {
         // A short, seeded on/off stutter, then steady.
         let t = ctx.startTime + sec(rand01(seed, i, 0) * 0.4);
         kfs.push(kf(ctx.startTime, 0, "hold"));
-        for (let k = 0; k < 7; k++) {
+        for (let k = 0, n = Math.max(1, Math.round(num(p.flickers, 7))); k < n; k++) {
           kfs.push(kf(t + 1, k % 2 === 0 ? 100 : 15 + rand01(seed, i, k + 10) * 30, "hold"));
           t += sec(0.04 + rand01(seed, i, k + 20) * 0.12);
         }
@@ -304,7 +312,7 @@ export const neonOutline: RecipeDef = {
         stroke: { color: staticProp(col), width: staticProp(width), opacity: animated(`${ctx.instanceId}_n${i}`, kfs, 100), cap: "round", join: "round" },
       };
     });
-    return [{ role: "neon", layer: baseLayer(ctx, `Neon — ${ctx.targets.length} outline${ctx.targets.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 70), width * 5)], end) }];
+    return [{ role: "neon", layer: baseLayer(ctx, `Neon — ${ctx.targets.length} outline${ctx.targets.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 70), (width * 5 * num(p.glowSize, 100)) / 100)], end) }];
   },
 };
 
@@ -320,6 +328,9 @@ export const colorWash: RecipeDef = {
     { key: "color", label: "Color", control: "color", default: [0.95, 0.55, 0.2, 1], primary: true, drives: ["source.contents"] },
     { key: "brightness", label: "Brightness", control: "slider", default: 70, min: 0, max: 100, unit: "%", primary: true, drives: ["source.contents"] },
     { key: "fade", label: "Fade in", control: "seconds", default: 1, min: 0, max: 20, step: 0.1, unit: "s", primary: true, drives: ["source.contents"] },
+    { key: "fadeOut", label: "Fade out", control: "seconds", default: 0, min: 0, max: 20, step: 0.1, unit: "s", help: "Fades away at the end (0 = stays until it ends).", drives: ["source.contents"] },
+    { key: "blend", label: "Mix with what's below", control: "choice", default: "normal", choices: [{ value: "normal", label: "Cover" }, { value: "add", label: "Add light" }, { value: "screen", label: "Lighten" }, { value: "multiply", label: "Tint" }], drives: ["blendMode"] },
+    { key: "glow", label: "Glow", control: "slider", default: 0, min: 0, max: 100, drives: ["effects.glow"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 6, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint"] },
   ],
   generate: (ctx) => {
@@ -328,14 +339,21 @@ export const colorWash: RecipeDef = {
     const b = Math.min(100, Math.max(0, num(p.brightness, 70)));
     const fade = Math.max(0, num(p.fade, 1));
     const end = showEnd(ctx, num(p.seconds, 6));
-    const contents: ShapeContents[] = ctx.targets.map((tg) => ({
-      path: { kind: "region", ref: tg.ref },
-      fill: {
-        color: staticProp(col),
-        opacity: fade > 0 ? animated(`${ctx.instanceId}_w${tg.region.id}`, [kf(ctx.startTime, 0, "bezier", true), kf(ctx.startTime + sec(fade), b, "bezier", true)], b) : staticProp(b),
-      },
-    }));
-    return [{ role: "wash", layer: { ...baseLayer(ctx, `Color — ${ctx.targets.length} region${ctx.targets.length === 1 ? "" : "s"}`, contents, [], end), blendMode: "normal" } }];
+    const fadeOut = Math.max(0, num(p.fadeOut, 0));
+    const contents: ShapeContents[] = ctx.targets.map((tg) => {
+      const kfs: Keyframe<number>[] = [];
+      if (fade > 0) kfs.push(kf(ctx.startTime, 0, "bezier", true), kf(ctx.startTime + sec(fade), b, "bezier", true));
+      if (fadeOut > 0) {
+        const outStart = Math.max(ctx.startTime + sec(fade), end - sec(fadeOut));
+        if (!kfs.length) kfs.push(kf(ctx.startTime, b, "bezier", true));
+        kfs.push(kf(outStart, b, "bezier", true), kf(Math.max(outStart + 1, end), 0, "bezier", true));
+      }
+      return { path: { kind: "region", ref: tg.ref }, fill: { color: staticProp(col), opacity: kfs.length ? animated(`${ctx.instanceId}_w${tg.region.id}`, kfs, b) : staticProp(b) } };
+    });
+    const blend = (["normal", "add", "screen", "multiply"] as const).find((m) => m === p.blend) ?? "normal";
+    const diag = Math.hypot(ctx.comp.width, ctx.comp.height);
+    const effects = num(p.glow, 0) > 0 ? [glowEffect("glow", num(p.glow, 0), Math.round(diag * 0.01))] : [];
+    return [{ role: "wash", layer: { ...baseLayer(ctx, `Color — ${ctx.targets.length} region${ctx.targets.length === 1 ? "" : "s"}`, contents, effects, end), blendMode: blend } }];
   },
 };
 
@@ -350,8 +368,16 @@ const regionMask = (id: string, ref: { role: string; index?: number }, feather =
   opacity: staticProp(100),
 });
 
-const fadeOpacity = (base: string, start: Flicks, fade: number, value = 100): AnimProp<number> =>
-  fade > 0 ? animated(base, [kf(start, 0, "bezier", true), kf(start + sec(fade), value, "bezier", true)], value) : staticProp(value);
+const fadeOpacity = (base: string, start: Flicks, fade: number, value = 100, end?: Flicks, fadeOut = 0): AnimProp<number> => {
+  const kfs: Keyframe<number>[] = [];
+  if (fade > 0) kfs.push(kf(start, 0, "bezier", true), kf(start + sec(fade), value, "bezier", true));
+  if (fadeOut > 0 && end !== undefined) {
+    const outStart = Math.max(start + sec(fade), end - sec(fadeOut));
+    if (!kfs.length) kfs.push(kf(start, value, "bezier", true));
+    kfs.push(kf(outStart, value, "bezier", true), kf(Math.max(outStart + 1, end), 0, "bezier", true));
+  }
+  return kfs.length ? animated(base, kfs, value) : staticProp(value);
+};
 
 export const mediaFill: RecipeDef = {
   id: "media-fill",
@@ -367,6 +393,8 @@ export const mediaFill: RecipeDef = {
     { key: "spread", label: "With several parts", control: "choice", default: "across", primary: true, choices: [{ value: "across", label: "One picture across all" }, { value: "each", label: "A copy in each" }], drives: ["transform", "masks"] },
     { key: "fade", label: "Fade in", control: "seconds", default: 0.5, min: 0, max: 10, step: 0.1, unit: "s", primary: true, drives: ["transform.opacity"] },
     { key: "opacity", label: "Strength", control: "slider", default: 100, min: 0, max: 100, unit: "%", drives: ["transform.opacity"] },
+    { key: "fadeOut", label: "Fade out", control: "seconds", default: 0, min: 0, max: 10, step: 0.1, unit: "s", help: "Fades away at the end (0 = stays until it ends).", drives: ["transform.opacity"] },
+    { key: "softness", label: "Edge softness", control: "slider", default: 2, min: 0, max: 60, unit: "px", help: "Softens the edges of the parts.", drives: ["masks"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 10, min: 0.5, max: 3600, step: 0.5, unit: "s", drives: ["outPoint"] },
   ],
   generate: (ctx) => {
@@ -402,9 +430,9 @@ export const mediaFill: RecipeDef = {
           position: staticProp([b.x + b.w / 2, b.y + b.h / 2, 0] as const, true),
           scale: staticProp(scale),
           rotation: staticProp([0, 0, 0] as const),
-          opacity: fadeOpacity(`${ctx.instanceId}_o${gi}`, ctx.startTime, num(p.fade, 0.5), num(p.opacity, 100)),
+          opacity: fadeOpacity(`${ctx.instanceId}_o${gi}`, ctx.startTime, num(p.fade, 0.5), num(p.opacity, 100), Math.max(end, ctx.startTime + 1), num(p.fadeOut, 0)),
         },
-        masks: targets.filter((t) => t.region.path.closed).map((t, i) => regionMask(`m${i}`, t.ref)),
+        masks: targets.filter((t) => t.region.path.closed).map((t, i) => regionMask(`m${i}`, t.ref, Math.max(0, num(p.softness, 2)))),
         effects: [],
       };
       return { role: `media-${gi}`, layer };
@@ -426,7 +454,16 @@ export const textOnSurface: RecipeDef = {
     { key: "color", label: "Color", control: "color", default: [1, 1, 1, 1], primary: true, drives: ["source.doc.color"] },
     { key: "fade", label: "Fade in", control: "seconds", default: 0.8, min: 0, max: 10, step: 0.1, unit: "s", primary: true, drives: ["transform.opacity"] },
     { key: "size", label: "Size", control: "slider", default: 0, min: 0, max: 600, unit: "px", help: "0 sizes the text to fit the part.", drives: ["source.doc.size"] },
-    { key: "weight", label: "Weight", control: "choice", default: "700", choices: [{ value: "400", label: "Regular" }, { value: "700", label: "Bold" }, { value: "900", label: "Heavy" }], drives: ["source.doc.weight"] },
+    { key: "weight", label: "Weight", control: "choice", default: "700", choices: [{ value: "300", label: "Light" }, { value: "400", label: "Regular" }, { value: "600", label: "Semibold" }, { value: "700", label: "Bold" }, { value: "900", label: "Heavy" }], drives: ["source.doc.weight"] },
+    { key: "align", label: "Line up", control: "choice", default: "center", choices: [{ value: "left", label: "Left" }, { value: "center", label: "Centre" }, { value: "right", label: "Right" }], drives: ["source.doc.align"] },
+    { key: "lineHeight", label: "Line spacing", control: "slider", default: 1.15, min: 0.7, max: 3, step: 0.05, help: "For several lines: the gap between them, as a multiple of the size.", drives: ["source.doc.lineHeight"] },
+    { key: "tracking", label: "Letter spacing", control: "slider", default: 0, min: -20, max: 100, unit: "px", drives: ["source.doc.tracking"] },
+    { key: "outline", label: "Outline", control: "toggle", default: false, drives: ["source.doc.stroke"] },
+    { key: "outlineColor", label: "Outline colour", control: "color", default: [0, 0, 0, 1], drives: ["source.doc.stroke"] },
+    { key: "outlineWidth", label: "Outline width", control: "slider", default: 4, min: 0.5, max: 40, step: 0.5, unit: "px", drives: ["source.doc.stroke"] },
+    { key: "offsetX", label: "Move sideways", control: "slider", default: 0, min: -100, max: 100, unit: "%", help: "Of the part's width.", drives: ["transform.position"] },
+    { key: "offsetY", label: "Move up/down", control: "slider", default: 0, min: -100, max: 100, unit: "%", help: "Of the part's height.", drives: ["transform.position"] },
+    { key: "fadeOut", label: "Fade out", control: "seconds", default: 0, min: 0, max: 10, step: 0.1, unit: "s", drives: ["transform.opacity"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 8, min: 0.5, max: 3600, step: 0.5, unit: "s", drives: ["outPoint"] },
   ],
   generate: (ctx) => {
@@ -442,7 +479,17 @@ export const textOnSurface: RecipeDef = {
       name: `Text: ${lines[0]!.slice(0, 24)}`,
       source: {
         kind: "text",
-        doc: { text, font: String(p.font ?? "Segoe UI"), weight: Number(p.weight ?? 700), size: staticProp(size), color: staticProp(color(p.color, [1, 1, 1, 1])), align: "center", lineHeight: 1.15, tracking: 0 },
+        doc: {
+          text,
+          font: String(p.font ?? "Segoe UI"),
+          weight: Number(p.weight ?? 700),
+          size: staticProp(size),
+          color: staticProp(color(p.color, [1, 1, 1, 1])),
+          align: p.align === "left" || p.align === "right" ? p.align : "center",
+          lineHeight: Math.max(0.5, num(p.lineHeight, 1.15)),
+          tracking: num(p.tracking, 0),
+          ...(p.outline === true ? { stroke: { color: staticProp(color(p.outlineColor, [0, 0, 0, 1])), width: staticProp(Math.max(0, num(p.outlineWidth, 4))) } } : {}),
+        },
       },
       startTime: ctx.startTime,
       inPoint: ctx.startTime,
@@ -456,10 +503,10 @@ export const textOnSurface: RecipeDef = {
       blendMode: "normal",
       transform: {
         anchor: staticProp([0, 0, 0] as const),
-        position: staticProp([b.x + b.w / 2, b.y + b.h / 2, 0] as const, true),
+        position: staticProp([b.x + b.w / 2 + (b.w * num(p.offsetX, 0)) / 100, b.y + b.h / 2 - (b.h * num(p.offsetY, 0)) / 100, 0] as const, true),
         scale: staticProp([100, 100, 100] as const),
         rotation: staticProp([0, 0, 0] as const),
-        opacity: fadeOpacity(`${ctx.instanceId}_t`, ctx.startTime, num(p.fade, 0.8)),
+        opacity: fadeOpacity(`${ctx.instanceId}_t`, ctx.startTime, num(p.fade, 0.8), 100, Math.max(end, ctx.startTime + 1), num(p.fadeOut, 0)),
       },
       masks: [],
       effects: [],
@@ -495,6 +542,8 @@ export const moveWithBeat: RecipeDef = {
     { key: "rest", label: "Between beats", control: "slider", default: 8, min: 0, max: 80, unit: "%", help: "How bright the parts stay between beats.", drives: ["source.contents"] },
     { key: "order", label: "Chase direction", control: "choice", default: "left-right", choices: ORDER_CHOICES, drives: ["source.contents"] },
     { key: "glow", label: "Glow", control: "slider", default: 45, min: 0, max: 100, drives: ["effects.glow"] },
+    { key: "glowSize", label: "Glow size", control: "slider", default: 100, min: 10, max: 400, unit: "%", help: "How far the glow spreads.", drives: ["effects.glow"] },
+    { key: "seed", label: "Shuffle", control: "seed", default: 1, help: "A different random chase order (when the direction is Random).", drives: ["source.contents"] },
   ],
   generate: (ctx) => {
     const p = ctx.params;
@@ -517,7 +566,7 @@ export const moveWithBeat: RecipeDef = {
       const t = place.start + Math.round(b / Math.max(1e-6, place.stretch));
       if (t >= place.inPoint && t < place.outPoint && t >= ctx.startTime) beats.push(t);
     });
-    const ordered = orderTargets(ctx.targets, String(p.order ?? "left-right"), 1);
+    const ordered = orderTargets(ctx.targets, String(p.order ?? "left-right"), num(p.seed, 1) | 0);
     const chase = p.pattern === "chase";
     const diag = Math.hypot(ctx.comp.width, ctx.comp.height);
     const contents: ShapeContents[] = ordered.map((tg, i) => {
@@ -531,7 +580,7 @@ export const moveWithBeat: RecipeDef = {
       return { path: { kind: "region", ref: tg.ref }, fill: { color: staticProp(col), opacity: animated(`${ctx.instanceId}_b${tg.region.id}`, clean, rest) } };
     });
     const end = Math.min(ctx.comp.duration, place.outPoint);
-    return [{ role: "beat", layer: baseLayer(ctx, `Beat — ${ordered.length} region${ordered.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 45), Math.round(diag * 0.01))], end) }];
+    return [{ role: "beat", layer: baseLayer(ctx, `Beat — ${ordered.length} region${ordered.length === 1 ? "" : "s"}`, contents, [glowEffect("glow", num(p.glow, 45), Math.round((diag * 0.01 * num(p.glowSize, 100)) / 100))], end) }];
   },
 };
 
@@ -551,6 +600,8 @@ const simLayer = (ctx: RecipeContext, name: string, sim: SimSettings, end: Flick
   blendMode: glow ? "add" : "normal",
 });
 
+const bandOf = (v: unknown, d: "top" | "bottom" | "whole"): "top" | "bottom" | "whole" => (v === "top" || v === "bottom" || v === "whole" ? v : d);
+
 const lighter = (c: RGBA): RGBA => [c[0] + (1 - c[0]) * 0.6, c[1] + (1 - c[1]) * 0.6, c[2] + (1 - c[2]) * 0.6, 1];
 
 export const smokeRising: RecipeDef = {
@@ -569,6 +620,15 @@ export const smokeRising: RecipeDef = {
     { key: "wind", label: "Wind", control: "slider", default: 0, min: -100, max: 100, help: "Negative blows left, positive blows right.", drives: ["source.sim"] },
     { key: "linger", label: "Lingers for", control: "seconds", default: 3, min: 0.3, max: 20, step: 0.1, unit: "s", drives: ["source.sim"] },
     { key: "glow", label: "Glowing (adds light)", control: "toggle", default: false, drives: ["blendMode"] },
+    { key: "opacity", label: "Strength", control: "slider", default: 90, min: 5, max: 100, unit: "%", help: "Shows at once (no new simulation).", drives: ["source.sim"] },
+    { key: "ownColor2", label: "Own colour where thickest", control: "toggle", default: false, help: "Off: a lighter shade of the colour.", drives: ["source.sim"] },
+    { key: "color2", label: "Colour where thickest", control: "color", default: [1, 1, 1, 1], drives: ["source.sim"] },
+    { key: "band", label: "Comes from", control: "choice", default: "bottom", choices: [{ value: "bottom", label: "Bottom edge" }, { value: "whole", label: "The whole part" }, { value: "top", label: "Top edge" }], drives: ["source.sim"] },
+    { key: "push", label: "Push out of the part", control: "slider", default: 90, min: 0, max: 400, unit: "px/s", drives: ["source.sim"] },
+    { key: "updraft", label: "Updraft", control: "slider", default: 0, min: -100, max: 100, help: "Positive lifts all the smoke; negative pushes it down.", drives: ["source.sim"] },
+    { key: "gusts", label: "Gusts", control: "slider", default: 30, min: 0, max: 100, unit: "%", drives: ["source.sim"] },
+    { key: "preroll", label: "Already smoking at the start", control: "seconds", default: 1, min: 0, max: 10, step: 0.1, unit: "s", help: "Seconds simulated before it starts, so there's smoke from the first moment.", drives: ["source.sim"] },
+    { key: "stopAfter", label: "Stops giving off smoke after", control: "seconds", default: 0, min: 0, max: 600, step: 0.1, unit: "s", help: "0 = keeps smoking until the end.", drives: ["source.sim"] },
     { key: "quality", label: "Detail", control: "choice", default: "normal", choices: QUALITY_CHOICES, drives: ["source.sim"] },
     { key: "seed", label: "Variation", control: "seed", default: 1, drives: ["source.sim"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 10, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint"] },
@@ -580,11 +640,17 @@ export const smokeRising: RecipeDef = {
       type: "smoke",
       seed: Math.round(num(p.seed, 1)),
       quality: (["draft", "normal", "high"].includes(String(p.quality)) ? p.quality : "normal") as SimSettings["quality"],
-      emitters: ctx.targets.map((tg) => ({ source: { kind: "region" as const, ref: tg.ref }, band: "bottom" as const, amount: num(p.amount, 60), velocity: [0, -90] as const })),
+      emitters: ctx.targets.map((tg) => ({
+        source: { kind: "region" as const, ref: tg.ref },
+        band: bandOf(p.band, "bottom"),
+        amount: num(p.amount, 60),
+        velocity: [0, -num(p.push, 90)] as const,
+        ...(num(p.stopAfter, 0) > 0 ? { to: num(p.preroll, 1) + num(p.stopAfter, 0) } : {}),
+      })),
       containers: [],
-      preroll: 1,
-      forces: { rise: num(p.rise, 55), gravity: 0, wind: [num(p.wind, 0) * 2, 0], swirl: num(p.swirl, 45), turbulence: 30, linger: num(p.linger, 3) },
-      look: { color: col, color2: lighter(col), opacity: 90, glow: !!p.glow },
+      preroll: Math.max(0, num(p.preroll, 1)),
+      forces: { rise: num(p.rise, 55), gravity: 0, wind: [num(p.wind, 0) * 2, -num(p.updraft, 0) * 2], swirl: num(p.swirl, 45), turbulence: num(p.gusts, 30), linger: num(p.linger, 3) },
+      look: { color: col, color2: p.ownColor2 === true ? color(p.color2, [1, 1, 1, 1]) : lighter(col), opacity: num(p.opacity, 90), glow: !!p.glow },
     };
     return [{ role: "smoke", layer: simLayer(ctx, `Smoke — ${ctx.targets.length} part${ctx.targets.length === 1 ? "" : "s"}`, sim, showEnd(ctx, num(p.seconds, 10)), !!p.glow) }];
   },
@@ -603,6 +669,15 @@ export const waterFill: RecipeDef = {
     { key: "mode", label: "Water", control: "choice", default: "fill", primary: true, choices: [{ value: "fill", label: "Fills the parts" }, { value: "pour", label: "Pours down from them" }], drives: ["source.sim"] },
     { key: "amount", label: "Flow", control: "slider", default: 60, min: 5, max: 100, unit: "%", primary: true, drives: ["source.sim"] },
     { key: "gravity", label: "Weight", control: "slider", default: 50, min: 5, max: 100, unit: "%", primary: true, help: "How strongly the water falls.", drives: ["source.sim"] },
+    { key: "opacity", label: "Strength", control: "slider", default: 92, min: 5, max: 100, unit: "%", help: "Shows at once (no new simulation).", drives: ["source.sim"] },
+    { key: "ownColor2", label: "Own highlight colour", control: "toggle", default: false, help: "Off: a lighter shade of the water colour.", drives: ["source.sim"] },
+    { key: "color2", label: "Highlight colour", control: "color", default: [0.85, 0.95, 1, 1], drives: ["source.sim"] },
+    { key: "glow", label: "Glowing (adds light)", control: "toggle", default: false, drives: ["blendMode"] },
+    { key: "band", label: "Comes from", control: "choice", default: "auto", choices: [{ value: "auto", label: "Top when filling, bottom when pouring" }, ...[{ value: "bottom", label: "Bottom edge" }, { value: "whole", label: "The whole part" }, { value: "top", label: "Top edge" }]], drives: ["source.sim"] },
+    { key: "push", label: "Push out of the part", control: "slider", default: 80, min: 0, max: 400, unit: "px/s", drives: ["source.sim"] },
+    { key: "sideways", label: "Sideways push", control: "slider", default: 0, min: -300, max: 300, unit: "px/s", help: "Negative to the left, positive to the right.", drives: ["source.sim"] },
+    { key: "gusts", label: "Choppiness", control: "slider", default: 10, min: 0, max: 100, unit: "%", drives: ["source.sim"] },
+    { key: "stopAfter", label: "Stops flowing after", control: "seconds", default: 0, min: 0, max: 600, step: 0.1, unit: "s", help: "0 = keeps flowing until the end.", drives: ["source.sim"] },
     { key: "quality", label: "Detail", control: "choice", default: "normal", choices: QUALITY_CHOICES, drives: ["source.sim"] },
     { key: "seed", label: "Variation", control: "seed", default: 1, drives: ["source.sim"] },
     { key: "seconds", label: "Duration", control: "seconds", default: 10, min: 0.5, max: 600, step: 0.5, unit: "s", drives: ["outPoint"] },
@@ -616,13 +691,19 @@ export const waterFill: RecipeDef = {
       type: "water",
       seed: Math.round(num(p.seed, 1)),
       quality: (["draft", "normal", "high"].includes(String(p.quality)) ? p.quality : "normal") as SimSettings["quality"],
-      emitters: refs.map((source) => ({ source, band: fill ? ("top" as const) : ("bottom" as const), amount: num(p.amount, 60), velocity: [0, 80] as const })),
+      emitters: refs.map((source) => ({
+        source,
+        band: p.band && p.band !== "auto" ? bandOf(p.band, "top") : fill ? ("top" as const) : ("bottom" as const),
+        amount: num(p.amount, 60),
+        velocity: [num(p.sideways, 0), num(p.push, 80)] as const,
+        ...(num(p.stopAfter, 0) > 0 ? { to: num(p.stopAfter, 0) } : {}),
+      })),
       containers: fill ? refs : [],
       preroll: 0,
-      forces: { rise: 0, gravity: num(p.gravity, 50), wind: [0, 0], swirl: 0, turbulence: 10, linger: 0 },
-      look: { color: col, color2: lighter(col), opacity: 92, glow: false },
+      forces: { rise: 0, gravity: num(p.gravity, 50), wind: [0, 0], swirl: 0, turbulence: num(p.gusts, 10), linger: 0 },
+      look: { color: col, color2: p.ownColor2 === true ? color(p.color2, [0.85, 0.95, 1, 1]) : lighter(col), opacity: num(p.opacity, 92), glow: !!p.glow },
     };
-    return [{ role: "water", layer: simLayer(ctx, `Water — ${ctx.targets.length} part${ctx.targets.length === 1 ? "" : "s"}`, sim, showEnd(ctx, num(p.seconds, 10)), false) }];
+    return [{ role: "water", layer: simLayer(ctx, `Water — ${ctx.targets.length} part${ctx.targets.length === 1 ? "" : "s"}`, sim, showEnd(ctx, num(p.seconds, 10)), !!p.glow) }];
   },
 };
 

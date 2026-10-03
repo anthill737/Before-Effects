@@ -7,7 +7,7 @@
  */
 import type { PropValue } from "@be/core";
 import type { Gpu } from "./gpu.ts";
-import { BLUR, DOWNSAMPLE, GLOW_COMBINE, THRESHOLD } from "./shaders.ts";
+import { BLUR, DOWNSAMPLE, GLOW_COMBINE, MELT, THRESHOLD } from "./shaders.ts";
 
 export interface EffectContext {
   readonly gpu: Gpu;
@@ -103,7 +103,27 @@ export const GlowEffect: EffectDef = {
   },
 };
 
-const registry = new Map<string, EffectDef>([GaussianBlurEffect, GlowEffect].map((e) => [e.type, e]));
+/**
+ * Melt: the layer sags and drips downward by up to `distance` layer pixels as `amount` goes 0 → 1
+ * (animate it). `drip` is how much thin drips run ahead of the slump.
+ */
+export const MeltEffect: EffectDef = {
+  type: "melt",
+  title: "Melt",
+  expand: (p) => n(p.distance, 300),
+  render: (input, p, ctx) => {
+    const amount = Math.min(1, Math.max(0, n(p.amount, 0)));
+    if (amount <= 0) return input;
+    const { gpu, encoder } = ctx;
+    // The distance as a fraction of the (padded) texture's height.
+    const reach = (n(p.distance, 300) * ctx.scale) / Math.max(1, input.height);
+    const out = gpu.acquire(input.width, input.height, input.format, "melt");
+    gpu.pass(encoder, MELT, out, [input.createView(), gpu.samplerLinear, { buffer: gpu.uniform(new Float32Array([amount, Math.min(1, Math.max(0, n(p.drip, 0.6))), n(p.seed, 1), reach])) }]);
+    return out;
+  },
+};
+
+const registry = new Map<string, EffectDef>([GaussianBlurEffect, GlowEffect, MeltEffect].map((e) => [e.type, e]));
 
 export const getEffect = (type: string): EffectDef | undefined => registry.get(type);
 export const registerEffect = (def: EffectDef): void => {
