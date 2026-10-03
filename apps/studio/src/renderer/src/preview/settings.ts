@@ -70,7 +70,8 @@ const KEY = `be.preview.${window.be?.app.kind ?? "editor"}`;
 const load = (): PreviewSettings => {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<PreviewSettings>), autoFraction: 1 };
+    // An enlarged preview hides the side panels; it's for the moment, so each launch starts normal.
+    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<PreviewSettings>), autoFraction: 1, maximized: false };
   } catch {
     // ignore unreadable preferences
   }

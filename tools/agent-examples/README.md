@@ -89,3 +89,9 @@ Methods are grouped by name. MCP tool names use `_` instead of `.`, so `project.
   - Monitor the export while hand edits are made, with a screen recording.
   - Check retries, conflicts, all-or-nothing transactions, a reconnected adapter and event stream, and an app restart.
   - Run it with `node tools/agent-examples/acceptance.mjs`. Results go to `<data folder>\Renders\agent-acceptance`.
+- `full-demo.mjs`: a recorded tour of the whole app, used by hand the way a person would, ending with the full show played on the house.
+  - It covers house setup, your own areas, media, light effects, moving parts, Blender simulations, Rapier physics, particles, an agent edit, two blended projectors, export and the show.
+  - Long waits are fast-forwarded and labelled on screen.
+  - Run it with `node tools/agent-examples/full-demo.mjs [photo]`. Without a photo argument it uses the first one in `<data folder>\Venue`.
+  - The recording, the exported show and `report.json` go to `<data folder>\Renders\full-demo` and `<data folder>\Renders`.
+  - `effects-demo.mjs` and `house-demo.mjs` are shorter recorded tours.
