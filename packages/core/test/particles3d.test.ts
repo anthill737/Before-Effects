@@ -5,6 +5,8 @@ import {
   emitterPoint,
   emptyProject,
   FRACTURE_PRESETS,
+  GLASS,
+  glassShards,
   History,
   newComposition,
   PARTICLE_PRESETS,
@@ -157,5 +159,35 @@ describe("breaking apart", () => {
     expect(new Set(explode.map((b) => b.release)).size).toBe(1);
     expect(Math.max(...explode.map((b) => b.velocity![2]))).toBeGreaterThan(5);
     expect(explode.length).toBeGreaterThan(crumble.length * 0.4);
+  });
+
+  it("shatters like glass: shards from an impact point that cover the pane exactly, holes left empty", () => {
+    const area = (p: readonly (readonly number[])[]) => Math.abs(p.reduce((s, q, i) => s + q[0]! * p[(i + 1) % p.length]![1]! - p[(i + 1) % p.length]![0]! * q[1]!, 0)) / 2;
+    const pane: [number, number][] = [[0, 0], [300, 0], [300, 220], [0, 220]];
+    const shards = glassShards(pane, [], 22, 1);
+    expect(shards.length).toBeGreaterThan(60);
+    // Tiny slivers (under 4 px²) are dropped; everything else is covered.
+    expect(Math.abs(shards.reduce((s, p) => s + area(p), 0) / (300 * 220) - 1)).toBeLessThan(0.001);
+    // Narrow wedges, not blocks: many shards are much longer than they are wide.
+    const long = shards.filter((p) => {
+      const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+      const span = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      return (span * span) / Math.max(1e-6, area(p)) > 5;
+    });
+    expect(long.length).toBeGreaterThan(shards.length * 0.4);
+    expect(glassShards(pane, [], 22, 1)).toEqual(shards);
+    const hole: [number, number][] = [[120, 80], [180, 80], [180, 140], [120, 140]];
+    const holed = glassShards(pane, [hole], 22, 1);
+    expect(Math.abs(holed.reduce((s, p) => s + area(p), 0) / (300 * 220 - 60 * 60) - 1)).toBeLessThan(0.001);
+  });
+
+  it("the glass preset is a thin, clear pane that breaks into shards with real physics", () => {
+    const h = setup();
+    const scene = areaScene(h.project, { sceneId: "g", idPrefix: "g", name: "g", ref: { role: "areas", regionIds: ["door"] }, venueId: "v", canvas, collapse: true, fracture: FRACTURE_PRESETS.shatter.fracture });
+    const pane = scene.objects["g-area"]!;
+    expect(pane.geometry).toMatchObject({ kind: "area", depth: GLASS.thicknessCm / 100 });
+    expect(pane.material?.opacity).toBe(GLASS.opacity);
+    const shards = resolveScene3D(h.project, scene, { venueId: "v", canvas, fps: 30, frames: 150 }).physics!.bodies.filter((b) => b.kind === "fragment");
+    expect(shards.length).toBeGreaterThan(40);
   });
 });

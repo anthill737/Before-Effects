@@ -37,7 +37,7 @@ export const use3D = create<{ objectId: string | null }>(() => ({ objectId: null
 
 export const COLLAPSE_EFFECT = { id: "collapse-3d", title: FRACTURE_PRESETS.collapse.title, description: FRACTURE_PRESETS.collapse.description };
 export type BreakPreset = keyof typeof FRACTURE_PRESETS;
-/** Breaking apart with real physics: collapse & rebuild, explode, crumble (cards in the effects list). */
+/** Breaking apart with real physics: collapse & rebuild, explode, crumble, shatter (cards in the effects list). */
 export const BREAK_EFFECTS = (Object.keys(FRACTURE_PRESETS) as BreakPreset[]).map((k) => ({ id: k === "collapse" ? COLLAPSE_EFFECT.id : `${k}-3d`, preset: k, title: FRACTURE_PRESETS[k].title, description: FRACTURE_PRESETS[k].description }));
 /** Particles drawn by rule in 3D (cards in the effects list). */
 export const PARTICLE_EFFECTS = (Object.keys(PARTICLE_PRESETS) as ParticleKind[]).map((k) => ({ id: `particles-${k}`, kind: k, title: PARTICLE_PRESETS[k].title, description: PARTICLE_PRESETS[k].description }));
@@ -120,7 +120,7 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean, pres
     text: collapse
       ? preset === "collapse"
         ? `“${name}”: the area breaks apart ${DEFAULT_FRACTURE.collapseAt} s in and flies back at ${DEFAULT_FRACTURE.rebuildAt} s. Adjust it on the right; look around it in “3D projection”.`
-        : `“${name}”: the area ${preset === "explode" ? "explodes" : "crumbles"} ${fracture.collapseAt} s in, with real physics. Adjust it on the right; look around it in “3D projection”.`
+        : `“${name}”: the area ${preset === "explode" ? "explodes" : preset === "shatter" ? "shatters like glass" : "crumbles"} ${fracture.collapseAt} s in, with real physics. Adjust it on the right; look around it in “3D projection”.`
       : `“${name}” is now a 3D solid ${Math.round(0.3 * 100)} cm thick. Adjust it on the right; look around it in “3D projection”.`,
   });
   return layerId;

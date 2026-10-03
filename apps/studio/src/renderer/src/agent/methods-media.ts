@@ -123,8 +123,8 @@ method({
 method({
   name: "scene3d.createFromAreas",
   summary:
-    "Give areas thickness as a 3D solid (photo on its front, inside, ledge, ground, key light, fill), optionally breaking apart with real physics (Rapier): collapse (falls and flies back), explode (bursts toward the audience) or crumble (top first, piles up). Adds a 3D layer at the playhead.",
-  params: z.object({ areas: z.array(z.string()).min(1), collapse: z.boolean().optional(), preset: z.enum(["collapse", "explode", "crumble"]).optional(), thicknessCm: z.number().min(1).max(500).optional() }),
+    "Give areas thickness as a 3D solid (photo on its front, inside, ledge, ground, key light, fill), optionally breaking apart with real physics (Rapier): collapse (falls and flies back), explode (bursts toward the audience) crumble (top first, piles up) or shatter (like a pane of glass: thin, clear shards burst out from where it's struck). Adds a 3D layer at the playhead.",
+  params: z.object({ areas: z.array(z.string()).min(1), collapse: z.boolean().optional(), preset: z.enum(["collapse", "explode", "crumble", "shatter"]).optional(), thicknessCm: z.number().min(1).max(500).optional() }),
   mutates: true,
   example: { areas: ["Wall 1"], collapse: true, preset: "explode", thicknessCm: 30 },
   run: (p, ctx) => {
@@ -222,7 +222,7 @@ method({
     thicknessCm: z.number().min(1).max(500).optional(),
     material: z.object({ style: z.enum(["photo", "color", "shadow"]), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1) }).partial().optional(),
     physics: z.object({ body: z.enum(["dynamic", "static"]), mass: z.number().min(0.01).max(1e6), friction: z.number().min(0).max(2), bounce: z.number().min(0).max(1) }).partial().nullable().optional(),
-    fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(0).max(20), spin: z.number().min(0).max(10) }).partial().nullable().optional(),
+    fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(0).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass"]) }).partial().nullable().optional(),
     light: z.object({ type: z.enum(["directional", "spot", "point", "ambient"]), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), intensity: z.number().min(0).max(100), castShadow: z.boolean(), target: vec3, angle: z.number().min(1).max(89), softness: z.number().min(0).max(1) }).partial().optional(),
   }),
   mutates: true,

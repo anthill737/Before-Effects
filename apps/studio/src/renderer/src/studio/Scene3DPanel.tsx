@@ -444,6 +444,15 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
           />
           {fr && (
             <>
+              <Field label="Breaks like" help="Glass: shards radiating from where it's struck. For a clear, thin pane also lower its strength and thickness above.">
+                <div className="segmented" role="radiogroup" aria-label="Breaks like">
+                  {(["pieces", "glass"] as const).map((k) => (
+                    <button key={k} role="radio" aria-checked={(fr.pattern ?? "pieces") === k} className={(fr.pattern ?? "pieces") === k ? "on" : ""} onClick={() => setFr({ pattern: k }, k === "glass" ? "Break like glass" : "Break into pieces", "pattern")}>
+                      {k === "glass" ? "Glass shards" : "Pieces"}
+                    </button>
+                  ))}
+                </div>
+              </Field>
               <Field label="Piece size" help="Smaller pieces: more of them (up to 600).">
                 <Slider label="Piece size" value={fr.pieceSize} min={15} max={300} step={1} unit="cm" onChange={(v) => setFr({ pieceSize: v }, "Change piece size", "size")} />
               </Field>

@@ -87,6 +87,8 @@ export interface Fracture3D {
   readonly spin: number;
   /** Seconds over which the pieces let go, from the top down (0 or absent = all at once). */
   readonly stagger?: number;
+  /** How it breaks: irregular pieces (absent), or glass — shards radiating from an impact point. */
+  readonly pattern?: "pieces" | "glass";
 }
 
 export interface Light3D {
@@ -337,6 +339,63 @@ export const fracture = (outline: readonly Vec2[], holes: readonly (readonly Vec
   return pieces;
 };
 
+/**
+ * Break an outline like glass: cracks radiating from an impact point, crossed by jagged rings —
+ * splinters near the impact, long narrow wedges toward the edge, some cut again across a diagonal.
+ * `size` (canvas pixels) sets the spacing of the first rings. Seeded and deterministic; holes stay
+ * empty.
+ */
+export const glassShards = (outline: readonly Vec2[], holes: readonly (readonly Vec2[])[], size: number, seed: number): Vec2[][] => {
+  const key = simHash(stableJson({ glass: 1, outline, holes, size, seed }));
+  const hit = fractureCache.get(key);
+  if (hit) return hit;
+  const r = (k: number, i = 0, j = 0) => rand01(seed, i, j, k);
+  const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  // Struck a little off-centre.
+  const impact: Vec2 = [x0 + (x1 - x0) * (0.36 + 0.28 * r(1)), y0 + (y1 - y0) * (0.34 + 0.3 * r(2))];
+  const reach = 1.05 * Math.max(...[[x0, y0], [x1, y0], [x0, y1], [x1, y1]].map(([x, y]) => Math.hypot(x! - impact[0], y! - impact[1])));
+  const step = Math.max(6, size);
+  const spokes = Math.max(10, Math.min(28, Math.round(9 + (2.2 * reach) / step)));
+  const angle = Array.from({ length: spokes }, (_, i) => ((i + 0.2 + 0.6 * r(3, i)) / spokes) * 2 * Math.PI);
+  const radii: number[] = [];
+  for (let rad = step * 0.4; rad < reach; rad *= 1.45 + 0.4 * r(4, radii.length)) radii.push(rad);
+  radii.push(reach);
+  const at = (i: number, k: number): Vec2 => {
+    const s = i % spokes;
+    const rad = radii[k]! * (k === radii.length - 1 ? 1 : 0.8 + 0.4 * r(5, s, k));
+    return [impact[0] + Math.cos(angle[s]!) * rad, impact[1] + Math.sin(angle[s]!) * rad];
+  };
+  const cells: Vec2[][] = [];
+  for (let i = 0; i < spokes; i++) {
+    cells.push([impact, at(i, 0), at(i + 1, 0)]);
+    for (let k = 0; k + 1 < radii.length; k++) {
+      const q: Vec2[] = [at(i, k), at(i, k + 1), at(i + 1, k + 1), at(i + 1, k)];
+      if (r(6, i, k) < 0.45) cells.push([q[0]!, q[1]!, q[2]!], [q[0]!, q[2]!, q[3]!]);
+      else cells.push(q);
+    }
+  }
+  const ring = (pts: readonly Vec2[]): [number, number][] => pts.map((p) => [p[0], p[1]]);
+  const open = (rg: [number, number][]): Vec2[] => (rg.length > 1 && rg[0]![0] === rg.at(-1)![0] && rg[0]![1] === rg.at(-1)![1] ? rg.slice(0, -1) : rg) as Vec2[];
+  const pieces: Vec2[][] = [];
+  try {
+    const whole = polygonClipping.difference([ring(outline)], ...holes.filter((h) => h.length >= 3).map((h) => [ring(h)]));
+    for (const c of cells) {
+      for (const poly of polygonClipping.intersection([ring(c)], whole)) {
+        const o = open(poly[0]!);
+        if (o.length >= 3 && Math.abs(polyArea(o)) > 4) pieces.push(ccw(o));
+      }
+      if (pieces.length >= MAX_FRAGMENTS) break;
+    }
+  } catch {
+    // Degenerate outline: fall back to ordinary pieces.
+    return fracture(outline, holes, size, seed);
+  }
+  fractureCache.set(key, pieces);
+  if (fractureCache.size > 24) fractureCache.delete(fractureCache.keys().next().value!);
+  return pieces;
+};
+
 // ---------------------------------------------------------------------------------------------
 // Resolving a scene for rendering and physics
 
@@ -444,7 +503,7 @@ const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }
     const outline = closedPoints(r.path);
     const holes = regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
     if (outline.length < 3) continue;
-    const polys = fr ? fracture(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] })) : solidWithHoles(outline, holes);
+    const polys = fr ? (fr.pattern === "glass" ? glassShards : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] })) : solidWithHoles(outline, holes);
     for (const poly of polys) {
       const w = poly.outline.map((p) => canvasToWorld(p, canvas));
       const c = polyCentroid(w);
@@ -676,7 +735,7 @@ export const ballObject = (id: Id, name: string, radius: number, position: Vec3,
 
 export const DEFAULT_FRACTURE: Fracture3D = { pieceSize: 70, seed: 1, collapseAt: 1, rebuildAt: 5, rebuildSeconds: 2, push: 0.6, spin: 0.25 };
 /** Ways an area breaks apart, all with real physics (Rapier). */
-export const FRACTURE_PRESETS: Record<"collapse" | "explode" | "crumble", { title: string; description: string; fracture: Fracture3D }> = {
+export const FRACTURE_PRESETS: Record<"collapse" | "explode" | "crumble" | "shatter", { title: string; description: string; fracture: Fracture3D }> = {
   collapse: { title: "Collapse & rebuild (3D)", description: "The area becomes a solid slab that breaks into pieces, falls onto a ledge with real physics, then flies back.", fracture: DEFAULT_FRACTURE },
   explode: {
     title: "Explode (3D)",
@@ -689,7 +748,14 @@ export const FRACTURE_PRESETS: Record<"collapse" | "explode" | "crumble", { titl
     // A nudge off the wall, so each piece peels away in front of those still holding.
     fracture: { pieceSize: 35, seed: 1, collapseAt: 1, rebuildAt: null, rebuildSeconds: 2, push: 0.8, spin: 0.4, stagger: 1.8 },
   },
+  shatter: {
+    title: "Shatter like glass (3D)",
+    description: "The area shatters like a pane of glass — thin, see-through shards burst out from where it's struck, tumble and fall — real physics.",
+    fracture: { pieceSize: 22, seed: 1, collapseAt: 1, rebuildAt: null, rebuildSeconds: 2, push: 2.6, spin: 1.2, pattern: "glass" },
+  },
 };
+/** What a glass shatter is made of: a thin pane (cm) and a clear, glossy material. */
+export const GLASS = { thicknessCm: 1.2, opacity: 0.6, roughness: 0.06, metalness: 0.15 };
 
 export const DEFAULT_PHYSICS: Physics3D = { body: "dynamic", mass: 2000, friction: 0.7, bounce: 0.15 };
 
@@ -712,14 +778,16 @@ export const areaScene = (
 ): Scene3D => {
   const p = o.idPrefix;
   const b = areaBounds(project, o.ref, o.venueId) ?? { x0: o.canvas.width * 0.25, x1: o.canvas.width * 0.75, y0: o.canvas.height * 0.25, y1: o.canvas.height * 0.75 };
-  const depth = o.depth ?? 0.3;
+  // Glass is a thin, clear, glossy pane.
+  const glass = !!o.collapse && o.fracture?.pattern === "glass";
+  const depth = o.depth ?? (glass ? GLASS.thicknessCm / 100 : 0.3);
   const [lx0, ly] = canvasToWorld([b.x0, b.y1], o.canvas);
   const [lx1, top] = canvasToWorld([b.x1, b.y0], o.canvas);
   const width = lx1 - lx0;
   const cx = (lx0 + lx1) / 2;
   const ledgeH = ly > 0.05 && ly <= 1.5 ? ly : 0.3;
   const objects: Object3D[] = [
-    mesh(`${p}-area`, "Wall (3D)", { kind: "area", ref: o.ref, depth }, [0, 0, 0], { style: "photo", color: staticProp(grey(1)) }, {
+    mesh(`${p}-area`, glass ? "Glass (3D)" : "Wall (3D)", { kind: "area", ref: o.ref, depth }, [0, 0, 0], { style: "photo", color: staticProp(grey(1)), ...(glass ? { opacity: GLASS.opacity, roughness: GLASS.roughness, metalness: GLASS.metalness } : {}) }, {
       physics: o.collapse ? DEFAULT_PHYSICS : { ...DEFAULT_PHYSICS, body: "static" },
       ...(o.collapse ? { fracture: o.fracture ?? DEFAULT_FRACTURE } : {}),
     }),
