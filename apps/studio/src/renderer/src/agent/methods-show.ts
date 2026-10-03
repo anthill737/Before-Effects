@@ -38,7 +38,7 @@ import { addRegion } from "../space/actions.ts";
 import { KIND_CHOICES } from "../space/traceStore.ts";
 import { recipeOpsFor } from "../studio/actions.ts";
 import { assignMedia, refForAreas, replaceMedia } from "../studio/assign.ts";
-import { importMediaFiles } from "../studio/media.ts";
+import { analyseBeats, assetLayerOps, importMediaFiles } from "../studio/media.ts";
 import { meltAreas } from "../studio/melt.ts";
 import { newEmptyScene, newSceneCopy, openShow, pickScene, showComp } from "../studio/ScenesBar.tsx";
 import { activeVenue, currentComp, useStudio } from "../studio/store.ts";
@@ -528,12 +528,14 @@ method({
   params: z.object({ effect: z.string(), areas: z.array(z.string()).min(1), settings: z.record(z.string(), z.unknown()).optional(), startSeconds: z.number().min(0).optional(), name: z.string().optional() }),
   mutates: true,
   example: { effect: "edge-trace", areas: ["Wall 1"], settings: { color: "#ffd27a", lapSeconds: 3 } },
-  run: (p, ctx) => {
+  run: async (p, ctx) => {
     const def = getRecipe(p.effect);
     if (!def) throw new AgentError("not_found", `No effect "${p.effect}". See effects.catalog.`);
     const ids = areaIds(p.areas);
     const { params, problems } = normalizeSettings(def, p.settings);
     if (problems.length) throw new AgentError("invalid_params", problems.join(" "));
+    // Music-driven: like the editor, find the beat and make sure the music is in the scene.
+    const musicOps = def.id === "move-with-beat" ? await prepareMusic(params) : [];
     const instanceId = newId("rcp");
     const planned = recipeOpsFor(def.id, ids, instanceId, params);
     if (!planned) throw new AgentError("rejected", "That effect can't be planned for those areas.");
@@ -542,10 +544,39 @@ method({
         ? { ...o, args: { ...(o.args as object), ...(p.startSeconds !== undefined ? { startTime: snapToFrame(secondsToTime(p.startSeconds), scene().frameRate) } : {}), ...(p.name ? { label: p.name } : {}) } }
         : o,
     ) as Op[];
-    ctx.edit(() => st().apply(ops, { label: `Add ${def.title}` }));
-    return { effect: contentInfo(instanceId), revision: currentRevision() };
+    ctx.edit(() => st().apply([...musicOps, ...ops], { label: `Add ${def.title}` }));
+    return { effect: contentInfo(instanceId), ...(musicOps.length ? { note: "The music wasn't in this scene, so it was added from the start (as the editor does)." } : {}), revision: currentRevision() };
   },
 });
+
+/**
+ * For "Move with the beat": resolve the music (settings.musicId, else the scene's music), find its
+ * beat if that hasn't been done yet, and return the operation that adds it to the scene if it isn't
+ * there (the effect follows the music where it sits on the timeline).
+ */
+const prepareMusic = async (params: Record<string, unknown>): Promise<Op[]> => {
+  const comp = scene();
+  const p = project();
+  const given = typeof params.musicId === "string" && params.musicId ? assetId(params.musicId) : undefined;
+  const inScene = comp.layerOrder.map((id) => comp.layers[id]?.source).find((s) => s?.kind === "audio");
+  const id = given ?? (inScene?.kind === "audio" ? inScene.assetId : undefined);
+  if (!id) throw new AgentError("rejected", "Move with the beat needs music: import it with assets.import and pass settings.musicId (or add music to this scene first).");
+  const asset = p.assets[id]!;
+  if (asset.kind !== "audio" && !asset.audioPath) throw new AgentError("rejected", `“${asset.name}” has no sound to find a beat in.`);
+  params.musicId = id;
+  if (!asset.analysis?.beats.length) {
+    const found = await analyseBeats(asset);
+    if (!found?.beats.length) throw new AgentError("rejected", `No beat could be found in “${asset.name}”. Try other music.`);
+  }
+  const placed = comp.layerOrder.some((lid) => {
+    const s = comp.layers[lid]?.source;
+    return (s?.kind === "audio" || s?.kind === "footage") && s.assetId === id;
+  });
+  if (placed) return [];
+  const made = assetLayerOps(st().project!.assets[id]!, 0);
+  if (!made) throw new AgentError("rejected", "The music couldn't be added to this scene.");
+  return made.ops;
+};
 
 method({
   name: "effects.update",

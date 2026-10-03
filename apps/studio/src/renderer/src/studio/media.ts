@@ -103,6 +103,16 @@ export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean
 /** Put an asset in the show as its own layer (music/sound from the start; pictures and video full-frame). */
 export const addAssetLayer = (asset: Asset, at?: Flicks, opts: { source?: OpSource; group?: string; select?: boolean } = {}): string | null => {
   const s = useStudio.getState();
+  const made = assetLayerOps(asset, at);
+  if (!made) return null;
+  if (!s.apply(made.ops, { label: `Add ${asset.name}`, ...(opts.source ? { source: opts.source } : {}), ...(opts.group ? { group: opts.group } : {}) })) return null;
+  if (opts.select !== false) useStudio.setState({ selection: { regionIds: [], recipeId: null, layerId: made.id } });
+  return made.id;
+};
+
+/** The operation that adds an asset as its own layer in the current scene (not applied). */
+export const assetLayerOps = (asset: Asset, at?: Flicks): { id: string; ops: Op[] } | null => {
+  const s = useStudio.getState();
   const comp = currentComp(s);
   if (!comp) return null;
   const start = at ?? (asset.kind === "audio" ? 0 : s.time);
@@ -130,9 +140,7 @@ export const addAssetLayer = (asset: Asset, at?: Flicks, opts: { source?: OpSour
       },
     });
   }
-  if (!s.apply(ops, { label: `Add ${asset.name}`, ...(opts.source ? { source: opts.source } : {}), ...(opts.group ? { group: opts.group } : {}) })) return null;
-  if (opts.select !== false) useStudio.setState({ selection: { regionIds: [], recipeId: null, layerId: id } });
-  return id;
+  return { id, ops };
 };
 
 /** Most recent imported asset of the given kinds. */
