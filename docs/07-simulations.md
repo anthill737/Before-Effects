@@ -20,7 +20,7 @@ The simulation **prepares in the background**:
 | Option | Verdict |
 |---|---|
 | **Own WebGPU solvers (chosen)** | Run on the same GPU device as the renderer and need no install. They are deterministic by design and fast: about 10 ms per frame at Normal detail on this PC. Results go straight into the layer pipeline (masks, blend modes, projector warp). |
-| Mantaflow / Blender (CLI) | Excellent quality, but it means a heavy extra install, slow round trips through files, and tooling that isn't friendly to non-experts. It could become an optional "film quality" path later. |
+| Mantaflow / Blender (CLI) | Excellent quality, but it means a heavy extra install, slow round trips through files, and tooling that isn't friendly to non-experts. Now offered alongside, for 3D smoke, fire, water and cloth around the house: see [12-blender.md](12-blender.md). |
 | EmberGen / Houdini | Paid, separate apps. Not an integration for an ease-of-use-first tool. |
 | WebGL demo solvers (e.g. PavelDoGreat, MIT) | Look-alike, real time, but WebGL, non-deterministic, and they don't fill containers. |
 

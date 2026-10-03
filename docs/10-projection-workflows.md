@@ -142,7 +142,6 @@ These are measurements on one machine. No comparison with After Effects has been
 - **Not built yet:**
   - smoke and water in 3D (they are still 2D simulations)
   - a full keyframe lane and curve editor for layers (3D values have keyframes, easing presets and timeline diamonds)
-  - Blender links
   - the external-agent API and MCP adapter beyond the current bridge
   - multiple projectors and edge blending
 - **Needs checking:**

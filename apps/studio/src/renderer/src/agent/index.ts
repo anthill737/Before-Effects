@@ -2,4 +2,5 @@
 import "./methods-show.ts";
 import "./methods-media.ts";
 import "./methods-house.ts";
+import "./methods-blender.ts";
 export { currentRevision, dispatch, startAgentHost } from "./core.ts";

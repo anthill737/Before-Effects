@@ -293,6 +293,17 @@ export interface BeApi {
     cancel(requestId: string): Promise<boolean>;
     onProgress(handler: (p: DetectProgress) => void): () => void;
   };
+  /** Blender: simulated effects and linked .blend files, rendered in the background. */
+  readonly blender: {
+    status(refresh?: boolean): Promise<{ found: boolean; path: string | null; version: string | null; running: string[] }>;
+    choose(): Promise<{ path: string; version: string } | null>;
+    run(jobId: string, spec: BlenderRunSpec): Promise<{ ok: true; video: string; blendMtime: number } | { ok: false; code: string; message: string }>;
+    cancel(jobId: string): Promise<boolean>;
+    open(blend: string): Promise<{ ok: boolean; message?: string }>;
+    mtime(file: string): Promise<number | null>;
+    chooseBlend(): Promise<string | null>;
+    onProgress(handler: (p: { jobId: string; stage: string; done: number; total: number }) => void): () => void;
+  };
   readonly displays: {
     list(): Promise<DisplayInfo[]>;
     identify(): Promise<void>;
@@ -367,4 +378,10 @@ export interface DetectProgress {
   stage: string;
   fraction: number;
   text: string;
+}
+
+export interface BlenderRunSpec {
+  mode: "build" | "render";
+  exchange: { fps: number; frames: number; output: { blend: string; frames: string; cache: string } } & Record<string, unknown>;
+  video: string;
 }

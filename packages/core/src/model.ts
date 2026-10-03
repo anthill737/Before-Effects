@@ -477,6 +477,8 @@ export interface Project {
   readonly recipes: Readonly<Record<Id, RecipeInstance>>;
   /** Editable 3D scenes shown by 3D layers (creative geometry, separate from the venue). */
   readonly scenes3d?: Readonly<Record<Id, import("./world3d.ts").Scene3D>>;
+  /** Jobs done in Blender: simulated effects and linked .blend files. */
+  readonly blenderLinks?: Readonly<Record<Id, import("./blender.ts").BlenderLink>>;
 }
 
 // ---------------------------------------------------------------------------------------------

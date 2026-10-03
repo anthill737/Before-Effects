@@ -2,6 +2,7 @@
 import { type AnimProp, defaultAudio, evalProp, formatSecondsFriendly, keyAt, type Layer, type PropValue, secondsToTime, type Vec3 } from "@be/core";
 import { ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { layerLocal, setLayerValue, toggleLayerKey } from "./layerKeys.ts";
+import { BlenderLinkSection } from "./BlenderPanel.tsx";
 import { currentComp, useStudio } from "./store.ts";
 
 /** ◆: add a keyframe at the playhead (starting animation) or remove the one there. */
@@ -40,11 +41,13 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
   const hasSound = layer.source.kind === "audio" || !!asset?.audioPath;
   const audio = layer.audio ?? (hasSound ? defaultAudio() : undefined);
 
+  const madeInBlender = Object.values(project.blenderLinks ?? {}).find((l) => l.layerId === layer.id);
   return (
     <div className="inspector-body">
       <div className="panel-head">
         <h2>{layer.name}</h2>
       </div>
+      {madeInBlender && <BlenderLinkSection link={madeInBlender} />}
       <p className="muted small">
         {layer.source.kind === "audio" ? "Sound" : layer.source.kind === "text" ? "Text" : asset?.kind === "video" ? "Video" : asset?.kind === "image" ? "Picture" : "Layer"} · {formatSecondsFriendly(layer.inPoint)}–{formatSecondsFriendly(layer.outPoint)}
         {asset ? ` · ${asset.name}` : ""}

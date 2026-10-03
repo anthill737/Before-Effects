@@ -16,6 +16,14 @@ import { useThumb } from "./thumbs.ts";
 
 const KIND_ICON: Record<string, string> = { image: "🖼", video: "🎞", audio: "♪", font: "A", model: "⬚", lut: "◐" };
 
+/** Which effects simulate something, and how: real physics, or a look made procedurally. */
+const SIM_KIND: Record<string, string> = {
+  "collapse-3d": "physical: rigid pieces simulated with Rapier",
+  "smoke-rising": "procedural: a smoke look, not a fluid simulation — for real smoke use Smoke (Blender) on an area",
+  "water-fill": "procedural: a water look, not a fluid simulation — for real water use Water pouring (Blender)",
+  "crack-rebuild": "procedural: drawn cracks — for real breaking use Collapse & rebuild (3D)",
+};
+
 const ANIMATIONS = ["edge-trace", "sequence-light-up", "pulse", "neon-outline", "color-wash", "move-with-beat", "smoke-rising", "water-fill", "crack-rebuild", "text-on-surface"];
 
 const fmt = (a: Asset) => {
@@ -208,11 +216,12 @@ export const ContentPanel = () => {
                     : void applyEffect(r.id)
                   : useStudio.getState().toast({ kind: "info", text: `Drag “${r.title}” onto an area, or select areas and click it.` })
               }
-              title={r.description}
+              title={`${r.description}${SIM_KIND[r.id] ? ` (${SIM_KIND[r.id]})` : ""}`}
               role="button"
               tabIndex={0}
             >
               {r.title}
+              {SIM_KIND[r.id] && <span className="badge">{SIM_KIND[r.id]!.startsWith("physical") ? "physical" : "procedural"}</span>}
             </div>
           ))}
       </div>

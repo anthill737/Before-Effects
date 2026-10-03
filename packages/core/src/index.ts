@@ -28,3 +28,4 @@ export * from "./houseDetect.ts";
 export * from "./houseRefine.ts";
 export * from "./areaShapes.ts";
 export * from "./parts3d.ts";
+export * from "./blender.ts";

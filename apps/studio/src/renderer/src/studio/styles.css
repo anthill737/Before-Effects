@@ -502,3 +502,8 @@ body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px;
 .curve-picture { width: 100%; height: 64px; background: #0f1319; border-radius: 6px; }
 .curve-picture .axes { stroke: #3a4250; stroke-width: 1; fill: none; }
 .curve-picture .curve { stroke: var(--accent); stroke-width: 2.5; fill: none; }
+
+/* Blender */
+.badge { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 8px; background: #2c3a52; color: #a9c8ff; vertical-align: middle; margin-left: 4px; }
+.blender-progress { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; margin: 6px 0; }
+.blender-progress .progress-bar { grid-column: 1 / -1; }

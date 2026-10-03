@@ -92,6 +92,8 @@ const [packaged] = await packager({
   asar: { unpack: "**/out/main/{mcp-bridge.js,assistant-test-cli.js,agent-mcp.js,agent-cli.js,heic-worker.js,detect-host.js,chunks/*.js}", unpackDir: "node_modules" },
   prune: false,
   icon: join(studio, "build", "icon.ico"),
+  // The script that runs inside Blender for simulated effects (resources/blender).
+  extraResource: [join(studio, "resources", "blender")],
   electronVersion,
   appVersion: version,
   appCopyright: "Personal use",

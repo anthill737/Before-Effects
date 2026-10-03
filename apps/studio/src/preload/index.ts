@@ -74,6 +74,16 @@ const api: BeApi = {
     cancel: (requestId) => ipcRenderer.invoke("detect:cancel", requestId),
     onProgress: (handler) => on("detect:progress", handler),
   },
+  blender: {
+    status: (refresh) => ipcRenderer.invoke("blender:status", refresh),
+    choose: () => ipcRenderer.invoke("blender:choose"),
+    run: (jobId, spec) => ipcRenderer.invoke("blender:run", jobId, spec),
+    cancel: (jobId) => ipcRenderer.invoke("blender:cancel", jobId),
+    open: (blend) => ipcRenderer.invoke("blender:open", blend),
+    mtime: (file) => ipcRenderer.invoke("blender:mtime", file),
+    chooseBlend: () => ipcRenderer.invoke("blender:chooseBlend"),
+    onProgress: (handler) => on("blender:progress", handler),
+  },
   displays: {
     list: () => ipcRenderer.invoke("displays:list"),
     identify: () => ipcRenderer.invoke("displays:identify"),

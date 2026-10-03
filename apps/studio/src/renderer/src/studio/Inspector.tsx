@@ -28,6 +28,7 @@ import { contentForArea, reorderAssignment } from "./assign.ts";
 import { AssignmentControls, TimingFields } from "./AssignmentPanel.tsx";
 import { makeArea3D, use3D } from "./actions3d.ts";
 import { animatePart, moveChoices, partFor, partsLayer } from "./parts.ts";
+import { BlenderEffectButtons } from "./BlenderPanel.tsx";
 import { Scene3DPanel } from "./Scene3DPanel.tsx";
 
 /** Make the selected areas 3D: a solid with thickness, or one that collapses and rebuilds. */
@@ -291,6 +292,7 @@ const RegionPanel = () => {
         ))}
       </div>
       {regs.length === 1 && regs[0]!.path.closed && !regs[0]!.proposal && regs[0]!.kind !== "exclusion" && <MakeItMove regionId={regs[0]!.id} />}
+      {regs.every((r) => r.path.closed && !r.proposal) && <BlenderEffectButtons regionIds={regs.map((r) => r.id)} />}
       <Make3D ids={ids} />
       <h3 className="subhead">In this scene{scene ? ` (${scene.name})` : ""}</h3>
       {onThese.length === 0 && <p className="muted small">Nothing yet. Drag a picture, video or animation onto the area.</p>}

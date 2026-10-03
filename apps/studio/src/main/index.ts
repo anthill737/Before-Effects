@@ -14,6 +14,7 @@ import { cancelAllEncodes, health, paths, registerFileIpc } from "./files.ts";
 import { registerMediaImportIpc } from "./mediaImport.ts";
 import { registerAgentApi, shutdownAgentApi } from "./agentApi.ts";
 import { registerHouseDetect, shutdownHouseDetect } from "./houseDetect.ts";
+import { registerBlender, shutdownBlender } from "./blender.ts";
 import { registerAssistantIpc, shutdownAssistant } from "./assistant.ts";
 import { registerRenderQueue, shutdownRenders } from "./renderQueue.ts";
 import { initLog, log } from "./log.ts";
@@ -104,6 +105,7 @@ const shutdown = () => {
   shutdownAssistant();
   shutdownAgentApi();
   shutdownHouseDetect();
+  shutdownBlender();
   closeSecondary();
   stopAll();
 };
@@ -111,6 +113,7 @@ const shutdown = () => {
 app.whenReady().then(() => {
   log(`ready (mode ${mode}, packaged ${app.isPackaged}, ffmpeg ${health().ffmpeg.ok ? "ok" : "MISSING"})`);
   registerHouseDetect();
+  registerBlender();
   const win = createEditor(mode);
   // The external-agent API starts with the app when it's enabled (Settings → Agent access).
   if (mode === "studio" || mode === "uitest") void registerAgentApi(mode);
