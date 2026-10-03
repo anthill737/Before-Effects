@@ -126,6 +126,17 @@ export const strikeTimes = (count: number, firstAt: number, every: number, seed:
   return out;
 };
 
+/** Strike moments typed as text ("1.5, 4, 9.25"): seconds from the effect's start, in order. */
+export const strikeAt = (text: unknown): number[] =>
+  typeof text === "string"
+    ? text
+        .split(/[\s,;]+/)
+        .filter((w) => w !== "")
+        .map(Number)
+        .filter((t) => Number.isFinite(t) && t >= 0)
+        .sort((a, b) => a - b)
+    : [];
+
 /** A strike's flickers: [offset seconds, brightness 0..1]. The first is the brightest, then dimmer, then one more. */
 export const flickers = (count: number, seed: number, strike: number): Array<[number, number]> => {
   const rng = new SeededStream(seed, 6000 + strike);
@@ -210,6 +221,7 @@ export const lightning: RecipeDef = {
     { key: "flash", label: "Flash brightness", control: "slider", default: 90, min: 0, max: 100, unit: "%", primary: true, help: "How strongly the flash shows at its brightest (0: only the bolt).", drives: ["source.contents", "transform.opacity"] },
     { key: "crack", label: "Crack of the strike", control: "toggle", default: true, primary: true, help: "A sound right as the bolt hits." },
     { key: "thunder", label: "Thunder", control: "toggle", default: true, primary: true, help: "Thunder rolling in after each strike." },
+    { key: "times", label: "Strike at", control: "text", default: "", help: "Exact moments, in seconds from the effect's start, separated by commas (e.g. 1.5, 4, 9.25). Leave empty to use Strikes and Time between strikes.", drives: ["source.contents"] },
     { key: "flickers", label: "Flickers per strike", control: "slider", default: 3, min: 1, max: 6, step: 1, help: "Real lightning flashes two or three times in about a second.", drives: ["source.contents"] },
     { key: "firstAt", label: "First strike after", control: "seconds", default: 0.5, min: 0, max: 60, step: 0.1, unit: "s", drives: ["source.contents"] },
     { key: "flashPicture", label: "White house picture", control: "media", default: "", accepts: ["image", "video"], help: "For “The house goes white”: your own white picture of the house (lined up with the building), or the one Before Effects makes from the building photo.", drives: ["source"] },
@@ -243,7 +255,8 @@ export const lightning: RecipeDef = {
     const style = (STYLE_CHOICES.find((c) => c.value === p.style)?.value ?? "pieces") as BoltStyle;
     const seconds = num(p.seconds, 20);
     const end = Math.min(ctx.comp.duration, ctx.startTime + sec(seconds));
-    const times = strikeTimes(Math.round(num(p.strikes, 3)), num(p.firstAt, 0.5), num(p.every, 6), seed).filter((t) => ctx.startTime + sec(t) < end);
+    const given = strikeAt(p.times);
+    const times = (given.length ? given : strikeTimes(Math.round(num(p.strikes, 3)), num(p.firstAt, 0.5), num(p.every, 6), seed)).filter((t) => ctx.startTime + sec(t) < end);
     const nFlick = Math.max(1, Math.round(num(p.flickers, 3)));
     const flashB = Math.min(100, Math.max(0, num(p.flash, 90)));
     const diag = Math.hypot(ctx.comp.width, ctx.comp.height);

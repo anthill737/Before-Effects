@@ -17,6 +17,7 @@ import {
   secondsToTime,
   soundHits,
   soundPart,
+  strikeAt,
   strikeTimes,
   thunderSamples,
   timeToSeconds,
@@ -76,6 +77,18 @@ describe("lightning & thunder", () => {
     for (let i = 1; i < t.length; i++) expect(t[i]! - t[i - 1]!).toBeGreaterThanOrEqual(0.8 * 3 * 0.65);
     expect(strikeTimes(5, 0.5, 3, 1)).toEqual(t);
     expect(strikeTimes(5, 0.5, 3, 2)).not.toEqual(t);
+  });
+
+  it("strikes at exact moments when they're typed in", () => {
+    expect(strikeAt("4, 1.5;9.25  x -2")).toEqual([1.5, 4, 9.25]);
+    const { layers } = setup({ times: "2, 7.5", crack: false, thunder: false });
+    const bolts = Object.values(layers).filter((l) => l.name.startsWith("Lightning bolt"));
+    expect(bolts).toHaveLength(2);
+    const flash = Object.values(layers).find((l) => l.name.startsWith("Lightning flash"))!;
+    if (flash.source.kind !== "shape") throw new Error("shape expected");
+    const op = flash.source.contents[0]!.fill!.opacity;
+    expect(evalKeyframes(op, secondsToTime(7.5))).toBeGreaterThan(50);
+    expect(evalKeyframes(op, secondsToTime(5))).toBe(0);
   });
 
   it("flickers: brightest first, within about a second", () => {
