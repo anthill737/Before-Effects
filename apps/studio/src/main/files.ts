@@ -33,7 +33,20 @@ const atomicWrite = (target: string, data: string | Uint8Array) => {
 };
 
 const sessions = new Map<string, EncodeSession>();
+/** The sound each export mixed for its encoder (a working file beside the video). */
+const mixes = new Map<string, string>();
 let sessionCounter = 0;
+
+/** An export's mixed sound is only needed while it encodes: remove it (and any copy kept when it was
+ *  overwritten) once the video is finished or cancelled, retrying while the encoder lets go of it. */
+const dropMix = (path: string | undefined, tries = 5) => {
+  if (!path) return;
+  try {
+    for (const p of [path, `${path}.bak`]) rmSync(p, { force: true });
+  } catch {
+    if (tries > 0) setTimeout(() => dropMix(path, tries - 1), 1500);
+  }
+};
 
 const toUserError = (e: unknown): Error => {
   if (e instanceof MediaError) return new Error(`${e.userMessage} ${e.action}`);
@@ -64,6 +77,7 @@ export const registerFileIpc = () => {
       const s = await EncodeSession.start(spec);
       const id = `enc${++sessionCounter}`;
       sessions.set(id, s);
+      if (spec.audioPath) mixes.set(id, spec.audioPath);
       return { id, bytesPerFrame: s.bytesPerFrame };
     } catch (e) {
       throw toUserError(e);
@@ -82,11 +96,18 @@ export const registerFileIpc = () => {
     const s = sessions.get(id);
     if (!s) throw new Error("That export was already finished or cancelled.");
     sessions.delete(id);
-    return s.finish();
+    try {
+      return await s.finish();
+    } finally {
+      dropMix(mixes.get(id));
+      mixes.delete(id);
+    }
   });
   ipcMain.handle("encode:cancel", (_e, id: string) => {
     sessions.get(id)?.cancel();
     sessions.delete(id);
+    dropMix(mixes.get(id));
+    mixes.delete(id);
   });
 
   ipcMain.handle("media:presets", () => availablePresets());
