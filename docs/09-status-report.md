@@ -1,5 +1,32 @@
 # Before Effects: status report (2026-10-02)
 
+> **Update (2026-10-03):** the four parts of the latest brief are in, in order.
+> 1. **The external-agent API**, with 106 tools. Its acceptance run passes 14/14 on the packaged app.
+> 2. **Automatic house setup**, moving architectural parts, and keyframes on ordinary layers.
+> 3. **Blender integration.**
+>    - Effects: smoke, fire, water, cloth reveal and break apart.
+>    - Linked `.blend` files, kept editable through the editable 3D import.
+>    - Rapier motion is transferred to Blender.
+>    - Every setting is adjustable in the inspector.
+>
+>    Broader 3D effects:
+>    - Particles: sparks, embers, snow and confetti.
+>    - Explode and Crumble with Rapier.
+>    - Melt.
+>
+>    Each effect is labelled physical or procedural.
+> 4. **Several projectors:** edge blending, outputs that stay in step, blackout, and recovery when a display disconnects.
+>
+> Totals:
+> - 261 unit tests pass.
+> - The full journey (139 steps) passed apart from 4 keyframe steps, which failed only because an earlier step left the projector view open. That's fixed, and they pass in the re-run.
+> - The recorded effects demo passes in the packaged app.
+>
+> Details:
+> - [docs/12-blender.md](12-blender.md)
+> - [docs/13-effects-and-settings.md](13-effects-and-settings.md): what is simulated, and what updates when
+> - [docs/14-multiple-projectors.md](14-multiple-projectors.md)
+
 > **Update (2026-10-02):** the scope is now projection-first. Building areas, content assigned to areas, scenes and the show, editable internal 3D with Rapier physics (collapse and rebuild), and timeline editing (bar lengths, collapse/rebuild markers, keyframes with easing) are in the app. Both acceptance workflows pass in the packaged app. Evidence, measurements and limits: [docs/10-projection-workflows.md](10-projection-workflows.md). Totals on the final code: **213 unit tests** and **99 journey steps** (development build) pass. The embedded AI assistant is deferred.
 
 ## Start it
@@ -50,6 +77,7 @@ Final run on 2026-10-02: **199 unit tests pass** and **all 71 journey steps pass
 ## Needs hardware testing
 
 - A real projector on a second output: full-screen placement, alignment accuracy, keep-light-off on the building, HAP playback in a media server.
+- Two or more real projectors: physical overlap and blend quality, black-level matching, and reconnecting a display (written, but untested without unplugging one).
 - GPU portability: tested only on this PC's GPU. Simulation reproducibility is per machine and driver.
 - Google Drive for desktop: install and sign in, then send an export.
 
