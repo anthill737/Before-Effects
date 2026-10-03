@@ -1,6 +1,6 @@
 /** Google Drive (through Drive for desktop): paths in My Drive, and project packages. */
 import { describe, expect, it } from "vitest";
-import { driveKind, driveRelative, driveResolve, myDriveCandidates, type PackageManifest, packagePlan, packageProblems, projectForPackage, projectFromPackage, safeFolderName } from "../src/shared/drive.ts";
+import { driveFolderInput, driveKind, driveRelative, driveResolve, myDriveCandidates, type PackageManifest, packagePlan, packageProblems, projectForPackage, projectFromPackage, repeatedFolder, safeFolderName, untangleMyDrive } from "../src/shared/drive.ts";
 
 describe("paths in My Drive", () => {
   it("finds Drive for desktop's drive letters first, then a mirrored folder", () => {
@@ -24,6 +24,37 @@ describe("paths in My Drive", () => {
     expect(driveResolve("G:\\My Drive", "../Other")).toBeNull();
     expect(driveResolve("G:\\My Drive", "a/../../b")).toBeNull();
     expect(driveResolve("G:\\My Drive", "C:/Windows")).toBeNull();
+  });
+
+  it("reads a typed or picked folder as a place in My Drive", () => {
+    const md = "G:\\My Drive";
+    expect(driveFolderInput(md, "G:\\My Drive\\Before Effects")).toBe("Before Effects");
+    expect(driveFolderInput(md, "Before Effects/Exports")).toBe("Before Effects/Exports");
+    // Typing My Drive's own name in front doesn't make a folder called "My Drive" inside it.
+    expect(driveFolderInput(md, "My Drive/Before Effects")).toBe("Before Effects");
+    expect(driveFolderInput(md, " /Shows\\Before Effects/ ")).toBe("Shows/Before Effects");
+    // Outside My Drive, My Drive itself, or nothing.
+    expect(driveFolderInput(md, "D:\\Before Effects")).toBeNull();
+    expect(driveFolderInput(md, "G:\\My Drive")).toBeNull();
+    expect(driveFolderInput(md, "My Drive")).toBeNull();
+    expect(driveFolderInput(md, "../Other")).toBeNull();
+  });
+
+  it("notices a folder nested in one with the same name", () => {
+    expect(repeatedFolder("Before Effects/Before Effects/Exports")).toBe("Before Effects/Before Effects");
+    expect(repeatedFolder("before effects/Before Effects")).toBe("before effects/Before Effects");
+    expect(repeatedFolder("Before Effects/Exports")).toBeNull();
+    expect(repeatedFolder("Shows/Before Effects/Shows")).toBeNull();
+  });
+
+  it("untangles a folder inside My Drive that was saved as My Drive itself", () => {
+    // Picked G:\My Drive\Before Effects as "My Drive": it was meant as Before Effects' folder.
+    expect(untangleMyDrive("G:\\My Drive", "G:\\My Drive\\Before Effects")).toEqual({ folder: "Before Effects" });
+    expect(untangleMyDrive("G:\\My Drive", "g:/my drive/")).toEqual({ myDrive: null });
+    // A real other location (or no Drive found) is left alone.
+    expect(untangleMyDrive("G:\\My Drive", "E:\\Mirror\\My Drive")).toBeNull();
+    expect(untangleMyDrive(null, "G:\\My Drive\\Before Effects")).toBeNull();
+    expect(untangleMyDrive("G:\\My Drive", undefined)).toBeNull();
   });
 
   it("knows what kind of file it is", () => {

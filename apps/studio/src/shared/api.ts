@@ -71,6 +71,14 @@ export interface DriveStatus {
   /** The folder and its Media, Projects and Exports subfolders exist. */
   readonly ready: boolean;
   readonly paths?: { readonly base: string; readonly media: string; readonly projects: string; readonly exports: string };
+  /** The same folders as places in My Drive ("Before Effects/Exports"). */
+  readonly places?: { readonly base: string; readonly media: string; readonly projects: string; readonly exports: string };
+  /** Kinds with a folder of their own (not the subfolder of Before Effects' folder). */
+  readonly custom?: { readonly media: boolean; readonly projects: boolean; readonly exports: boolean };
+  /** Likely mistakes in the folders (a folder nested in one with the same name). */
+  readonly warnings?: readonly string[];
+  /** What the last change did, when it wasn't exactly what was asked. */
+  readonly notice?: string;
   /** Local caches (never in Drive). */
   readonly cache?: string;
   readonly uploadNote?: string;
@@ -453,8 +461,10 @@ export interface BeApi {
   };
   readonly drive: {
     status(): Promise<DriveStatus>;
-    /** Before Effects' folder in My Drive (relative, or a full path inside My Drive). */
-    setFolder(folder: string): Promise<DriveStatus>;
+    /** Before Effects' folder ("folder") or one kind's own folder, in My Drive (relative or a full path inside it); null: the default. */
+    setFolder(folder: string | null, kind?: "folder" | "media" | "projects" | "exports"): Promise<DriveStatus>;
+    /** Pick that folder in a folder chooser that starts in Drive (null if cancelled). */
+    chooseFolder(kind?: "folder" | "media" | "projects" | "exports"): Promise<DriveStatus | null>;
     /** Where My Drive is when it isn't found by itself (null: find it). */
     setMyDrive(path: string | null): Promise<DriveStatus>;
     list(where?: string, opts?: { recursive?: boolean; max?: number }): Promise<{ folder: string; entries: DriveEntry[]; more: boolean }>;

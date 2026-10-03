@@ -44,9 +44,10 @@ method({
 
 method({
   name: "drive.setFolder",
-  summary: "Choose Before Effects' folder in My Drive (relative, e.g. \"Before Effects\" or \"Shows/Before Effects\", or a full path inside My Drive). Media, Projects and Exports are made inside it.",
-  params: z.object({ folder: z.string().min(1) }),
-  run: (p) => wrap(() => window.be.drive.setFolder(p.folder)),
+  summary:
+    "Where things go in Google Drive. kind folder (default): Before Effects' folder (Media, Projects and Exports are made inside it). kind exports, projects or media: that kind's own folder instead of its subfolder. folder: a place in My Drive (\"Before Effects\", \"Shows/Exports\") or a full path inside it; null puts it back to the default.",
+  params: z.object({ folder: z.string().min(1).nullable(), kind: z.enum(["folder", "exports", "projects", "media"]).optional() }),
+  run: (p) => wrap(() => window.be.drive.setFolder(p.folder, p.kind)),
 });
 
 method({

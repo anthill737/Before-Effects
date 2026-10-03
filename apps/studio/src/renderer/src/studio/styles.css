@@ -334,6 +334,11 @@ textarea.text-input { resize: vertical; font: inherit; }
 /* ---- Renders ------------------------------------------------------------------------------ */
 .renders-btn.busy { border-color: #ffc56b88; color: #ffd99a; }
 .popover.renders { left: auto; right: 0; width: 440px; max-height: 70vh; overflow-x: hidden; overflow-y: auto; white-space: normal; }
+.popover.drive { width: 520px; }
+.popover.drive .subhead { margin: 4px 0 0; }
+.drive-folders { display: grid; gap: 4px; }
+.drive-folder { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.drive-folder .link { text-align: left; min-width: 0; }
 .render-job { border-top: 1px solid var(--line); padding: 8px 0; display: grid; gap: 6px; }
 .render-job progress { width: 100%; }
 .render-job.failed { border-left: 3px solid var(--danger); padding-left: 8px; }

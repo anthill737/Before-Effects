@@ -145,7 +145,8 @@ const api: BeApi = {
   },
   drive: {
     status: () => ipcRenderer.invoke("drive:status"),
-    setFolder: (f) => ipcRenderer.invoke("drive:setFolder", f),
+    setFolder: (f, kind) => ipcRenderer.invoke("drive:setFolder", f, kind),
+    chooseFolder: (kind) => ipcRenderer.invoke("drive:chooseFolder", kind),
     setMyDrive: (p) => ipcRenderer.invoke("drive:setMyDrive", p),
     list: (where, opts) => ipcRenderer.invoke("drive:list", where, opts),
     copyInto: (src, to, name, folder) => ipcRenderer.invoke("drive:copyInto", src, to, name, folder),

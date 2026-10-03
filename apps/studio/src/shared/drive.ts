@@ -50,6 +50,37 @@ export const driveResolve = (myDrive: string, rel: string): string | null => {
   return [norm(myDrive), ...parts].join("\\");
 };
 
+/**
+ * A folder someone typed or picked, as a place in My Drive ("Before Effects/Exports"), or null when it
+ * isn't inside My Drive (or is My Drive itself). A typed "My Drive/…" means the same place as "…".
+ */
+export const driveFolderInput = (myDrive: string, input: string): string | null => {
+  const t = input.trim();
+  if (/^[a-zA-Z]:|^[\\/]{2}/.test(t)) return driveRelative(myDrive, t) || null;
+  const parts = t.split(/[\\/]+/).filter((x) => x && x !== ".");
+  if (parts[0]?.toLowerCase() === "my drive") parts.shift();
+  return parts.length && driveResolve(myDrive, parts.join("/")) ? parts.join("/") : null;
+};
+
+/** The first folder name repeated straight inside itself ("Before Effects/Before Effects"), usually a mistake. */
+export const repeatedFolder = (rel: string): string | null => {
+  const parts = rel.split("/").filter(Boolean);
+  for (let i = 1; i < parts.length; i++) if (parts[i]!.toLowerCase() === parts[i - 1]!.toLowerCase()) return parts.slice(0, i + 1).join("/");
+  return null;
+};
+
+/**
+ * A folder inside My Drive saved as My Drive's own location (picked by mistake for Before Effects'
+ * folder) makes everything land one level too deep. Given where My Drive really is, the setting meant:
+ * that folder is Before Effects' folder. Returns the corrected setting, or null when it's fine.
+ */
+export const untangleMyDrive = (found: string | null, chosen: string | undefined): { folder: string } | { myDrive: null } | null => {
+  if (!found || !chosen) return null;
+  const rel = driveRelative(found, chosen);
+  if (rel === null) return null;
+  return rel === "" ? { myDrive: null } : { folder: rel };
+};
+
 /** What a file is, from its name (for listings). */
 export const driveKind = (name: string): "video" | "image" | "audio" | "project" | "package" | "other" => {
   const ext = /\.[^./\\]+$/.exec(name.toLowerCase())?.[0] ?? "";

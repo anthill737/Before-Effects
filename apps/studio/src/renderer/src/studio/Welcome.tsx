@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createProjectFromPhoto } from "../space/actions.ts";
 import { openAfterEffectsProject } from "./aeImport.ts";
 import { AeImportDialog } from "./AeImportDialog.tsx";
+import { openPackageFromDrive, plainError } from "./drive.ts";
 import { checkRecovery, openProjectFile } from "./persistence.ts";
 import { useStudio } from "./store.ts";
 
@@ -44,6 +45,13 @@ export const Welcome = () => {
       <div className="welcome-secondary">
         <button className="ghost" onClick={() => void openProjectFile()}>
           Open a saved show…
+        </button>
+        <button
+          className="ghost"
+          title="A show saved to Google Drive with “Save show to Drive”: its media are copied to this computer"
+          onClick={() => void openPackageFromDrive().catch((e) => useStudio.getState().toast({ kind: "error", text: plainError(e) }))}
+        >
+          Open a show from Google Drive…
         </button>
         {recovery && (
           <button

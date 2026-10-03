@@ -8,6 +8,15 @@ import type { DriveStatus } from "../../../shared/api.ts";
 import { importFromDrive, openPackageFromDrive, plainError, savePackageToDrive } from "./drive.ts";
 import { useStudio } from "./store.ts";
 
+type Kind = "folder" | "exports" | "projects" | "media";
+const ROWS: Array<{ kind: Kind; label: string; hint: string }> = [
+  { kind: "folder", label: "Before Effects' folder", hint: "The other folders are made inside it unless you choose your own" },
+  { kind: "exports", label: "Finished exports", hint: "Where “Send to Google Drive” puts exported videos" },
+  { kind: "projects", label: "Show packages", hint: "Where “Save show to Drive” puts a show and its media" },
+  { kind: "media", label: "Media you save", hint: "Where files sent to Drive by agents go" },
+];
+const place = (rel: string) => ["My Drive", ...rel.split("/").filter(Boolean)].join(" › ");
+
 const size = (b: number) => (b < 1e6 ? `${Math.max(1, Math.round(b / 1e3))} KB` : b < 1e9 ? `${(b / 1e6).toFixed(0)} MB` : `${(b / 1e9).toFixed(1)} GB`);
 
 export const DriveButton = () => {
@@ -24,17 +33,12 @@ export const DriveButton = () => {
 
 const DrivePanel = ({ onClose }: { onClose: () => void }) => {
   const [st, setSt] = useState<DriveStatus | null>(null);
-  const [folder, setFolder] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [armed, setArmed] = useState(false);
   const hasShow = useStudio((s) => !!s.project);
   const dirty = useStudio((s) => s.dirty);
-  const refresh = () =>
-    void window.be.drive.status().then((s) => {
-      setSt(s);
-      setFolder(s.folder);
-    });
+  const refresh = () => void window.be.drive.status().then(setSt);
   useEffect(refresh, []);
   const run = async (label: string, fn: () => Promise<string | null>) => {
     setBusy(label);
@@ -65,9 +69,8 @@ const DrivePanel = ({ onClose }: { onClose: () => void }) => {
             className="ghost small-btn"
             onClick={() =>
               void run("locate", async () => {
-                const p = await window.be.files.chooseFolder("Where is My Drive? (the “My Drive” folder Google Drive for desktop made)");
-                if (p) await window.be.drive.setMyDrive(p);
-                return null;
+                const p = await window.be.files.chooseFolder("Where is My Drive? Choose the “My Drive” folder itself (not a folder inside it)");
+                return p ? ((await window.be.drive.setMyDrive(p)).notice ?? null) : null;
               })
             }
           >
@@ -81,14 +84,49 @@ const DrivePanel = ({ onClose }: { onClose: () => void }) => {
             My Drive: {st.myDrive} ·{" "}
             {st.app === "running" ? "Google Drive for desktop is running" : <span className="warn">Google Drive for desktop isn't running — start it so files upload and download</span>}
           </p>
-          <label className="row gap small">
-            <span>Before Effects' folder</span>
-            <input className="grow" value={folder} onChange={(e) => setFolder(e.target.value)} aria-label="Before Effects' folder in My Drive" />
-            <button className="ghost small-btn" disabled={!folder.trim() || folder === st.folder || !!busy} onClick={() => void run("folder", async () => (await window.be.drive.setFolder(folder.trim()), `Using “My Drive/${folder.trim()}”.`))}>
-              Use
-            </button>
-          </label>
-          <p className="muted small">Media, Projects and Exports are kept inside it. Caches and working files stay on this computer ({st.cache}), never in Drive.</p>
+          <h3 className="subhead">Where things go in your Drive</h3>
+          <div className="drive-folders">
+            {ROWS.map(({ kind, label, hint }) => {
+              const rel = kind === "folder" ? st.places?.base : st.places?.[kind];
+              const full = kind === "folder" ? st.paths?.base : st.paths?.[kind];
+              const own = kind !== "folder" && st.custom?.[kind];
+              return (
+                <div key={kind} className="drive-folder" title={hint}>
+                  <span className="small">{label}</span>
+                  <button className="link small ellipsis" title={`${full}\nOpen it`} onClick={() => full && void window.be.files.openPath(full)}>
+                    {rel !== undefined ? place(rel) : "…"}
+                  </button>
+                  <span className="row gap">
+                    <button
+                      className="ghost small-btn"
+                      disabled={!!busy}
+                      onClick={() =>
+                        void run(kind, async () => {
+                          const r = await window.be.drive.chooseFolder(kind);
+                          if (!r) return null;
+                          const now = kind === "folder" ? r.places?.base : r.places?.[kind];
+                          return r.notice ?? `${label}: ${place(now ?? "")}.`;
+                        })
+                      }
+                    >
+                      Choose…
+                    </button>
+                    {(own || (kind === "folder" && st.folder !== "Before Effects")) && (
+                      <button className="link small" disabled={!!busy} title="Back to the usual place" onClick={() => void run(kind, async () => (await window.be.drive.setFolder(null, kind), null))}>
+                        Reset
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {st.warnings?.map((w) => (
+            <p key={w} className="warn small">
+              {w}
+            </p>
+          ))}
+          <p className="muted small">Caches and working files stay on this computer ({st.cache}), never in Drive.</p>
           <div className="row gap wrap">
             <button
               className="ghost small-btn"

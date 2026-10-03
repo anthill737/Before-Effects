@@ -23,6 +23,7 @@ import {
   DRIVE_UPLOAD_NOTE,
   type DriveSubfolder,
   driveKind,
+  driveFolderInput,
   driveRelative,
   driveResolve,
   myDriveCandidates,
@@ -32,7 +33,9 @@ import {
   packageProblems,
   projectForPackage,
   projectFromPackage,
+  repeatedFolder,
   safeFolderName,
+  untangleMyDrive,
 } from "../shared/drive.ts";
 import { paths } from "./files.ts";
 import { log } from "./log.ts";
@@ -40,18 +43,32 @@ import { log } from "./log.ts";
 interface DriveSettings {
   /** Before Effects' folder, relative to My Drive. */
   folder: string;
+  /** Where one kind of thing goes instead of its subfolder of `folder` (places in My Drive). */
+  folders?: Partial<Record<DriveSubfolder, string>>;
   /** My Drive's location when it isn't found by itself (or a stand-in folder for tests). */
   myDrive?: string;
 }
 const settingsFile = () => join(app.getPath("userData"), "drive.json");
+const writeSettings = (s: DriveSettings) => writeFileSync(settingsFile(), JSON.stringify(s, null, 1));
+const detectMyDrive = () => myDriveCandidates(homedir()).find((c) => existsSync(c)) ?? null;
 const readSettings = (): DriveSettings => {
+  let s: DriveSettings;
   try {
-    return { folder: DRIVE_DEFAULT_FOLDER, ...JSON.parse(readFileSync(settingsFile(), "utf8")) };
+    s = { folder: DRIVE_DEFAULT_FOLDER, ...JSON.parse(readFileSync(settingsFile(), "utf8")) };
   } catch {
     return { folder: DRIVE_DEFAULT_FOLDER };
   }
+  // A folder inside My Drive saved as My Drive itself put everything one level too deep: it was meant
+  // as Before Effects' folder.
+  const fix = untangleMyDrive(detectMyDrive(), s.myDrive);
+  if (fix) {
+    const { myDrive: wrong, ...rest } = s;
+    s = "folder" in fix ? { ...rest, folder: fix.folder } : rest;
+    writeSettings(s);
+    log(`drive: ${wrong} is inside My Drive, so it's now Before Effects' folder (${s.folder}), not My Drive`);
+  }
+  return s;
 };
-const writeSettings = (s: DriveSettings) => writeFileSync(settingsFile(), JSON.stringify(s, null, 1));
 
 /** Journey tests only: My Drive is this folder (whether or not it exists, to test an unreachable Drive). */
 let testMyDrive: string | null = null;
@@ -64,7 +81,7 @@ export const myDrive = (): string | null => {
   if (testMyDrive !== null) return testMyDrive;
   const s = readSettings();
   if (s.myDrive && existsSync(s.myDrive)) return s.myDrive;
-  return myDriveCandidates(homedir()).find((c) => existsSync(c)) ?? null;
+  return detectMyDrive();
 };
 
 /** Is Google Drive for desktop running (or at least installed)? */
@@ -76,12 +93,14 @@ const driveApp = (): Promise<DriveStatus["app"]> =>
     });
   });
 
-const folderPaths = (root: string, folder: string) => {
-  const base = driveResolve(root, folder) ?? join(root, DRIVE_DEFAULT_FOLDER);
-  return { base, media: join(base, DRIVE_SUBFOLDERS.media), projects: join(base, DRIVE_SUBFOLDERS.projects), exports: join(base, DRIVE_SUBFOLDERS.exports) };
+const KINDS = Object.keys(DRIVE_SUBFOLDERS) as DriveSubfolder[];
+const folderPaths = (root: string, s: DriveSettings) => {
+  const base = driveResolve(root, s.folder) ?? join(root, DRIVE_DEFAULT_FOLDER);
+  const at = (k: DriveSubfolder) => (s.folders?.[k] ? driveResolve(root, s.folders[k]!) : null) ?? join(base, DRIVE_SUBFOLDERS[k]);
+  return { base, media: at("media"), projects: at("projects"), exports: at("exports") };
 };
 
-export const driveStatus = async (): Promise<DriveStatus> => {
+export const driveStatus = async (notice?: string): Promise<DriveStatus> => {
   const s = readSettings();
   const root = myDrive();
   const appState = await driveApp();
@@ -96,16 +115,52 @@ export const driveStatus = async (): Promise<DriveStatus> => {
           ? "Google Drive for desktop isn't installed. Install it from google.com/drive/download and sign in; your Drive then appears as a folder Before Effects can use."
           : "Google Drive for desktop is installed but My Drive isn't showing. Open it and sign in (and, in its settings, keep My Drive streamed or mirrored).",
     };
-  const f = folderPaths(root, s.folder);
-  return { app: appState, myDrive: root, folder: s.folder, ready: existsSync(f.base), paths: f, cache: paths().cache, uploadNote: DRIVE_UPLOAD_NOTE };
+  const f = folderPaths(root, s);
+  const rel = (p: string) => driveRelative(root, p) ?? p;
+  const places = { base: rel(f.base), media: rel(f.media), projects: rel(f.projects), exports: rel(f.exports) };
+  const warnings = [...new Set(Object.values(places).map(repeatedFolder).filter((x): x is string => !!x))].map(
+    (x) => `“My Drive/${x}” is a folder inside another folder with the same name — usually picked by mistake. Choose the outer one if so.`,
+  );
+  return {
+    app: appState,
+    myDrive: root,
+    folder: s.folder,
+    ready: existsSync(f.base),
+    paths: f,
+    places,
+    custom: Object.fromEntries(KINDS.map((k) => [k, !!s.folders?.[k]])) as Record<DriveSubfolder, boolean>,
+    cache: paths().cache,
+    uploadNote: DRIVE_UPLOAD_NOTE,
+    ...(warnings.length ? { warnings } : {}),
+    ...(notice ? { notice } : {}),
+  };
 };
 
-/** Before Effects' folder and its Media, Projects and Exports subfolders (made if missing). */
+/** Where things go: Before Effects' folder (`kind` "folder"), or one kind's own folder (null: back to its subfolder). */
+export const driveSetFolder = async (input: string | null, kind: "folder" | DriveSubfolder = "folder"): Promise<DriveStatus> => {
+  const root = myDrive();
+  if (!root) throw new Error((await driveStatus()).problem ?? "Google Drive isn't available.");
+  const s = readSettings();
+  if (input === null) {
+    if (kind === "folder") s.folder = DRIVE_DEFAULT_FOLDER;
+    else if (s.folders) delete s.folders[kind];
+  } else {
+    const rel = driveFolderInput(root, input);
+    if (rel === null) throw new Error(`Choose a folder inside your Google Drive (My Drive is ${root}).`);
+    if (kind === "folder") s.folder = rel;
+    else s.folders = { ...s.folders, [kind]: rel };
+  }
+  writeSettings(s);
+  await ensureDriveFolders().catch(() => undefined);
+  return driveStatus();
+};
+
+/** Before Effects' folder and its Media, Projects and Exports folders (made if missing). */
 export const ensureDriveFolders = async () => {
   const root = myDrive();
   if (!root) throw new Error((await driveStatus()).problem ?? "Google Drive isn't available.");
-  const f = folderPaths(root, readSettings().folder);
-  for (const d of [f.media, f.projects, f.exports]) await mkdir(d, { recursive: true });
+  const f = folderPaths(root, readSettings());
+  for (const d of [f.base, f.media, f.projects, f.exports]) await mkdir(d, { recursive: true });
   return f;
 };
 
@@ -248,20 +303,31 @@ export const drivePackageOpen = async (where: string): Promise<{ project: string
 
 export const registerDriveIpc = () => {
   ipcMain.handle("drive:status", () => driveStatus());
-  ipcMain.handle("drive:setFolder", async (_e, folder: string) => {
-    const root = myDrive();
-    const rel = root && /^[a-zA-Z]:[\\/]/.test(folder) ? driveRelative(root, folder) : folder.replace(/^[\\/]+/, "");
-    if (rel === null || rel === "" || (root && !driveResolve(root, rel))) throw new Error("Choose a folder inside My Drive.");
-    writeSettings({ ...readSettings(), folder: rel });
-    await ensureDriveFolders().catch(() => undefined);
-    return driveStatus();
-  });
+  ipcMain.handle("drive:setFolder", (_e, folder: string | null, kind?: "folder" | DriveSubfolder) => driveSetFolder(folder, kind));
   ipcMain.handle("drive:setMyDrive", async (_e, p: string | null) => {
+    // A folder inside the My Drive Drive for desktop made is where things should go, not My Drive itself.
+    const fix = p ? untangleMyDrive(detectMyDrive(), p) : null;
     const s = readSettings();
-    if (p) s.myDrive = p;
-    else delete s.myDrive;
+    delete s.myDrive;
+    if (p && !fix) s.myDrive = p;
+    if (fix && "folder" in fix) s.folder = fix.folder;
     writeSettings(s);
-    return driveStatus();
+    return driveStatus(fix && "folder" in fix ? `That folder is inside My Drive, so Before Effects keeps its things there (My Drive/${fix.folder}).` : undefined);
+  });
+  ipcMain.handle("drive:chooseFolder", async (e, kind: "folder" | DriveSubfolder = "folder") => {
+    const root = myDrive();
+    if (!root) throw new Error((await driveStatus()).problem ?? "Google Drive isn't available.");
+    const f = folderPaths(root, readSettings());
+    const current = kind === "folder" ? f.base : f[kind];
+    const what = { folder: "Before Effects' folder", exports: "the folder for finished exports", projects: "the folder for show packages", media: "the folder for media you save to Drive" }[kind];
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, {
+      title: `Choose ${what} in Google Drive`,
+      buttonLabel: "Use this folder",
+      defaultPath: existsSync(current) ? current : root,
+      properties: ["openDirectory", "createDirectory", "promptToCreate"],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return driveSetFolder(r.filePaths[0], kind);
   });
   ipcMain.handle("drive:list", (_e, where?: string, opts?: { recursive?: boolean; max?: number }) => driveList(where, opts));
   ipcMain.handle("drive:copyInto", (_e, src: string, to: DriveSubfolder, name?: string, folder?: string) => driveCopyInto(src, to, name, folder));
@@ -271,7 +337,7 @@ export const registerDriveIpc = () => {
   ipcMain.handle("drive:chooseFiles", async (e, kind: "media" | "package") => {
     const root = myDrive();
     const win = BrowserWindow.fromWebContents(e.sender);
-    const start = root ? folderPaths(root, readSettings().folder)[kind === "package" ? "projects" : "media"] : undefined;
+    const start = root ? folderPaths(root, readSettings())[kind === "package" ? "projects" : "media"] : undefined;
     const r = await dialog.showOpenDialog(win!, {
       title: kind === "package" ? "Open a project package from Google Drive (choose its package.json)" : "Bring in media from Google Drive",
       ...(start && existsSync(start) ? { defaultPath: start } : root ? { defaultPath: root } : {}),
