@@ -261,6 +261,9 @@ method({
       .object({
         shape: z.enum(["cubes", "columns", "rows"]),
         size: z.number().min(5).max(1000),
+        height: z.number().min(5).max(1000).nullable().describe("block height in cm (blocks shaped like the stones they cover); null: square"),
+        bond: z.number().min(0).max(1).describe("every other row shifted by this much of a block's width (0.5: brickwork)"),
+        offset: z.tuple([z.number(), z.number()]).nullable().describe("where the grid starts (canvas px), to line blocks up with the joints in the picture"),
         gap: z.number().min(0).max(100),
         motion: z.enum(["push", "turn"]),
         pattern: z.enum(["pulse", "ripple", "wave", "random", "checker"]),
@@ -323,7 +326,9 @@ method({
     if (p.blocks === null) changes.blocks = null;
     else if (p.blocks) {
       if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", "Only building areas given thickness can move as blocks.");
-      const bl: Blocks3D = { ...(o.blocks ?? DEFAULT_BLOCKS), ...p.blocks } as Blocks3D;
+      const merged = { ...(o.blocks ?? DEFAULT_BLOCKS), ...p.blocks } as Record<string, unknown>;
+      for (const k of ["height", "offset"]) if (merged[k] === null) delete merged[k];
+      const bl = merged as unknown as Blocks3D;
       if (bl.stopAt !== null && bl.stopAt <= bl.startAt) throw new AgentError("invalid_params", "stopAt must be after startAt (or null to keep moving).");
       changes.blocks = bl;
     }

@@ -123,8 +123,15 @@ export interface Fracture3D {
 export interface Blocks3D {
   /** cubes: a grid · columns: full-height strips · rows: full-width strips. */
   readonly shape: "cubes" | "columns" | "rows";
-  /** Block size in cm (= canvas pixels). */
+  /** Block size in cm (= canvas pixels): the width, and the height unless `height` is set. */
   readonly size: number;
+  /** Block height (cm), for blocks shaped like the stones or bricks they cover. Set (or `bond`/`offset`):
+   *  blocks keep exactly their size, lined up from `offset`, cut where the area ends. */
+  readonly height?: number;
+  /** Every other row shifted by this much of a block's width (0.5: half-brick courses, like real brickwork). */
+  readonly bond?: number;
+  /** Where the grid starts (cm on the canvas), so the blocks line up with the joints in the picture. */
+  readonly offset?: Vec2;
   /** Gap between blocks (cm). */
   readonly gap: number;
   /** push: toward the audience (and back) · turn: about their own middle, like slats. */
@@ -570,8 +577,8 @@ export const brickPieces = (outline: readonly Vec2[], holes: readonly (readonly 
  * Cut an outline (minus holes) into blocks: a grid of squares, full-height columns or full-width
  * rows, `size` apart with `gap` between them (canvas pixels). Blocks are clipped to the outline.
  */
-export const blockCells = (outline: readonly Vec2[], holes: readonly (readonly Vec2[])[], b: Pick<Blocks3D, "shape" | "size" | "gap">): Vec2[][] => {
-  const key = simHash(stableJson({ blocks: 1, outline, holes, shape: b.shape, size: b.size, gap: b.gap }));
+export const blockCells = (outline: readonly Vec2[], holes: readonly (readonly Vec2[])[], b: Pick<Blocks3D, "shape" | "size" | "gap" | "height" | "bond" | "offset">): Vec2[][] => {
+  const key = simHash(stableJson({ blocks: 1, outline, holes, shape: b.shape, size: b.size, gap: b.gap, height: b.height ?? null, bond: b.bond ?? 0, offset: b.offset ?? null }));
   const hit = fractureCache.get(key);
   if (hit) return hit;
   const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
@@ -587,8 +594,43 @@ export const blockCells = (outline: readonly Vec2[], holes: readonly (readonly V
   const ring = (pts: readonly Vec2[]): [number, number][] => pts.map((p) => [p[0], p[1]]);
   const open = (rg: [number, number][]): Vec2[] => (rg.length > 1 && rg[0]![0] === rg.at(-1)![0] && rg[0]![1] === rg.at(-1)![1] ? rg.slice(0, -1) : rg) as Vec2[];
   const cells: Vec2[][] = [];
+  const exact = b.height !== undefined || !!b.bond || !!b.offset;
   try {
     const whole = polygonClipping.difference([ring(outline)], ...holes.filter((h) => h.length >= 3).map((h) => [ring(h)]));
+    const keep = (ax: number, ay: number, bx: number, by: number) => {
+      for (const poly of polygonClipping.intersection([[[ax, ay], [bx, ay], [bx, by], [ax, by]]], whole)) {
+        const o = open(poly[0]!);
+        if (o.length >= 3 && Math.abs(polyArea(o)) > 4) cells.push(ccw(o));
+      }
+    };
+    if (exact) {
+      // Blocks of exactly their size (scaled up only if there would be too many), lined up from the
+      // offset, every other row shifted by the bond, cut where the area ends.
+      let w = Math.max(4, b.size), h = Math.max(4, b.height ?? b.size);
+      while ((b.shape === "rows" ? 1 : Math.ceil((x1 - x0) / w) + 1) * (b.shape === "columns" ? 1 : Math.ceil((y1 - y0) / h) + 1) > MAX_FRAGMENTS) {
+        w *= 1.15;
+        h *= 1.15;
+      }
+      const [ox, oy] = b.offset ?? [x0, y0];
+      const gw = b.shape === "rows" ? 0 : Math.min(gap * 2, w * 0.45) / 2, gh = b.shape === "columns" ? 0 : Math.min(gap * 2, h * 0.45) / 2;
+      const rows = b.shape === "columns" ? [[y0, y1, 0]] : Array.from({ length: Math.floor((y1 - oy) / h) - Math.floor((y0 - oy) / h) + 1 }, (_, k) => {
+        const j = Math.floor((y0 - oy) / h) + k;
+        return [oy + j * h, oy + (j + 1) * h, j];
+      });
+      for (const [ay, by, j] of rows) {
+        const shift = b.shape === "columns" ? 0 : (((((j as number) % 2) + 2) % 2) * (b.bond ?? 0) * w);
+        if (b.shape === "rows") {
+          keep(x0, (ay as number) + gh, x1, (by as number) - gh);
+          continue;
+        }
+        const sx = ox + shift;
+        for (let i = Math.floor((x0 - sx) / w); sx + i * w < x1; i++) keep(sx + i * w + gw, (ay as number) + gh, sx + (i + 1) * w - gw, (by as number) - gh);
+      }
+      if (!cells.length) return [ccw([...outline])];
+      fractureCache.set(key, cells);
+      if (fractureCache.size > 24) fractureCache.delete(fractureCache.keys().next().value!);
+      return cells;
+    }
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
         const ax = x0 + i * cw + gx, bx = x0 + (i + 1) * cw - gx;
@@ -767,7 +809,7 @@ const flicks = (s: number) => Math.round(s * FLICKS_PER_SECOND);
 
 const piecesCache = new WeakMap<Geometry3D, { fracture: Fracture3D | undefined; cut: string; venue: unknown; w: number; h: number; camD: number; pieces: ResolvedPiece[] }>();
 /** What decides how blocks cut the surface (their motion settings don't change the pieces). */
-const blockCut = (b: Blocks3D | undefined) => (b ? `${b.shape}|${b.size}|${b.gap}` : "");
+const blockCut = (b: Blocks3D | undefined) => (b ? `${b.shape}|${b.size}|${b.gap}|${b.height ?? ""}|${b.bond ?? 0}|${b.offset?.join(",") ?? ""}` : "");
 
 /**
  * The object's pieces in its own space (metres). Kept while the area, the venue and the way it

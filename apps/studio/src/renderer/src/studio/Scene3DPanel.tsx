@@ -554,8 +554,20 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
               <Field label="Shape" help="Cubes: a grid. Columns: tall strips. Rows: wide strips.">
                 <Choice label="Shape" value={bl.shape} choices={[{ value: "cubes", label: "Cubes" }, { value: "columns", label: "Columns" }, { value: "rows", label: "Rows" }]} onChange={(v) => setBl({ shape: v as Blocks3D["shape"] }, "Change the block shape", "shape")} />
               </Field>
-              <Field label="Size" help="Smaller blocks: more of them (up to 600).">
+              <Field label={bl.height !== undefined ? "Width" : "Size"} help="Smaller blocks: more of them (up to 600).">
                 <Slider label="Block size" value={bl.size} min={10} max={300} step={1} unit="cm" onChange={(v) => setBl({ size: v }, "Change block size", "size")} />
+              </Field>
+              <Field label="Height" help="Shape the blocks like the stones or bricks they cover. 0: square blocks that fit the area.">
+                <Slider label="Block height" value={bl.height ?? 0} min={0} max={300} step={1} unit="cm" onChange={(v) => setBl(v > 0 ? { height: v } : { height: undefined }, "Change block height", "height")} />
+              </Field>
+              <Field label="Brick bond" help="Every other row shifted along, like brickwork (50%: half a brick).">
+                <Slider label="Brick bond" value={Math.round((bl.bond ?? 0) * 100)} min={0} max={100} step={1} unit="%" onChange={(v) => setBl({ bond: v / 100 }, "Change brick bond", "bond")} />
+              </Field>
+              <Field label="Line up" help="Slide the grid across and down so the blocks sit on the joints in the picture.">
+                <div className="row gap">
+                  <Slider label="Line up across" value={Math.round(bl.offset?.[0] ?? 0) % Math.max(1, Math.round(bl.size))} min={0} max={Math.round(bl.size)} step={1} unit="cm" onChange={(v) => setBl({ offset: [v, bl.offset?.[1] ?? 0] }, "Line up blocks", "offset")} />
+                  <Slider label="Line up down" value={Math.round(bl.offset?.[1] ?? 0) % Math.max(1, Math.round(bl.height ?? bl.size))} min={0} max={Math.round(bl.height ?? bl.size)} step={1} unit="cm" onChange={(v) => setBl({ offset: [bl.offset?.[0] ?? 0, v] }, "Line up blocks", "offset")} />
+                </div>
               </Field>
               <Field label="Gap" help="Space between the blocks, where the dark inside shows.">
                 <Slider label="Gap between blocks" value={bl.gap} min={0} max={30} step={0.5} unit="cm" onChange={(v) => setBl({ gap: v }, "Change the gap", "gap")} />

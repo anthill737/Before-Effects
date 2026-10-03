@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { evalProp } from "../src/anim.ts";
 import { DEFAULT_TIMING, partMotion, partSolidDepth } from "../src/parts3d.ts";
 import { FLICKS_PER_SECOND } from "../src/time.ts";
-import { alongSight, eulerDegToQuat, placePoint, showCamera, solidWithHoles } from "../src/world3d.ts";
+import { alongSight, blockCells, eulerDegToQuat, placePoint, showCamera, solidWithHoles } from "../src/world3d.ts";
 import type { Vec3 } from "../src/model.ts";
 
 const door = { x0: 2, x1: 3, y0: 0.5, y1: 2.6 };
@@ -102,5 +102,22 @@ describe("pieces that stand out toward the audience", () => {
       expect(Math.abs(q[0])).toBeLessThan(Math.abs(p[0]));
     }
     expect(alongSight(p, 0, D, canvas)).toEqual(p);
+  });
+});
+
+describe("blocks shaped like the stones they cover", () => {
+  const wall: [number, number][] = [[0, 0], [200, 0], [200, 90], [0, 90]];
+  it("keep their exact size, lined up from the offset, cut where the area ends", () => {
+    const cells = blockCells(wall, [], { shape: "cubes", size: 60, height: 30, gap: 0, offset: [10, 0] });
+    const boxes = cells.map((c) => [Math.min(...c.map((p) => p[0])), Math.min(...c.map((p) => p[1])), Math.max(...c.map((p) => p[0])), Math.max(...c.map((p) => p[1]))]);
+    // Three courses 30 high; joints at x = 10, 70, 130, 190 (the first and last blocks cut by the wall's edges).
+    expect(new Set(boxes.map((b) => Math.round(b[1]!)))).toEqual(new Set([0, 30, 60]));
+    expect(boxes.filter((b) => Math.round(b[1]!) === 0).map((b) => [Math.round(b[0]!), Math.round(b[2]!)])).toEqual([[0, 10], [10, 70], [70, 130], [130, 190], [190, 200]]);
+  });
+  it("shift every other course by the bond, like brickwork", () => {
+    const cells = blockCells(wall, [], { shape: "cubes", size: 60, height: 30, gap: 0, bond: 0.5, offset: [0, 0] });
+    const starts = (y: number) => cells.filter((c) => Math.round(Math.min(...c.map((p) => p[1]))) === y).map((c) => Math.round(Math.min(...c.map((p) => p[0])))).sort((a, b) => a - b);
+    expect(starts(0)).toEqual([0, 60, 120, 180]);
+    expect(starts(30)).toEqual([0, 30, 90, 150]);
   });
 });
