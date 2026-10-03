@@ -389,9 +389,13 @@ export class SceneHost implements ExternalSourceRenderer {
           Object.assign(sh.camera, { left: -R, right: R, top: R, bottom: -R, near: 0.1, far: 200 });
           sh.camera.updateProjectionMatrix();
         } else {
-          // A point or spot light can be right up against what it lights (a lantern by a column).
-          Object.assign(sh.camera, { near: 0.05, far: 200 });
+          // A point or spot light can be right up against what it lights (a lantern by a column); its
+          // shadow map is a cube of distances, so a small filter and its own bias.
+          Object.assign(sh.camera, { near: 0.05, far: 60 });
           sh.camera.updateProjectionMatrix();
+          sh.radius = 1 + L.softness * 2;
+          sh.bias = -0.002;
+          sh.normalBias = 0.03;
         }
       }
       b.scene.add(light);
