@@ -38,6 +38,7 @@ import { addRegion } from "../space/actions.ts";
 import { KIND_CHOICES } from "../space/traceStore.ts";
 import { recipeOpsFor } from "../studio/actions.ts";
 import { assignMedia, refForAreas, replaceMedia } from "../studio/assign.ts";
+import { ensureHits, prepareLightning } from "../studio/lightningSounds.ts";
 import { analyseBeats, assetLayerOps, importMediaFiles } from "../studio/media.ts";
 import { meltAreas } from "../studio/melt.ts";
 import { newEmptyScene, newSceneCopy, openShow, pickScene, showComp } from "../studio/ScenesBar.tsx";
@@ -404,6 +405,7 @@ method({
       seconds: a.meta.duration ? r2(timeToSeconds(a.meta.duration)) : undefined,
       sound: !!a.audioPath || a.kind === "audio",
       bpm: a.analysis ? r2(a.analysis.bpm) : undefined,
+      hits: a.analysis?.hits?.length ? a.analysis.hits.map((h) => ({ atSeconds: r2(timeToSeconds(h.at)), peakSeconds: r2(timeToSeconds(h.peak)), level: h.level })) : undefined,
       missing: !!a.missing,
       reference: venue().referenceAssetId === a.id,
     })),
@@ -536,6 +538,8 @@ method({
     if (problems.length) throw new AgentError("invalid_params", problems.join(" "));
     // Music-driven: like the editor, find the beat and make sure the music is in the scene.
     const musicOps = def.id === "move-with-beat" ? await prepareMusic(params) : [];
+    // Lightning: the chosen crack and thunder sounds are analysed (their hits found); missing ones are made.
+    if (def.id === "lightning") Object.assign(params, await prepareLightning(soundIds(params)));
     const instanceId = newId("rcp");
     const planned = recipeOpsFor(def.id, ids, instanceId, params);
     if (!planned) throw new AgentError("rejected", "That effect can't be planned for those areas.");
@@ -548,6 +552,12 @@ method({
     return { effect: contentInfo(instanceId), ...(musicOps.length ? { note: "The music wasn't in this scene, so it was added from the start (as the editor does)." } : {}), revision: currentRevision() };
   },
 });
+
+/** Sound settings given by name or path become media ids. */
+const soundIds = (params: Record<string, unknown>): Record<string, unknown> => {
+  for (const key of ["crackSound", "thunderSound"]) if (typeof params[key] === "string" && params[key]) params[key] = assetId(params[key] as string);
+  return params;
+};
 
 /**
  * For "Move with the beat": resolve the music (settings.musicId, else the scene's music), find its
@@ -583,11 +593,17 @@ method({
   summary: "Change an effect's settings, start time or areas (this scene only).",
   params: z.object({ id: z.string(), settings: z.record(z.string(), z.unknown()).optional(), startSeconds: z.number().min(0).optional(), areas: z.array(z.string()).optional(), name: z.string().optional() }),
   mutates: true,
-  run: (p, ctx) => {
+  run: async (p, ctx) => {
     const inst = instance(p.id);
     const def = getRecipe(inst.recipeId)!;
     const { params, problems } = normalizeSettings(def, p.settings);
     if (problems.length) throw new AgentError("invalid_params", problems.join(" "));
+    if (def.id === "lightning")
+      for (const key of ["crackSound", "thunderSound"]) {
+        const id = soundIds(params)[key];
+        const a = typeof id === "string" ? project().assets[id] : undefined;
+        if (a) await ensureHits(a);
+      }
     const args: Record<string, unknown> = { instanceId: inst.id };
     if (Object.keys(params).length) args.params = params;
     if (p.startSeconds !== undefined) args.startTime = snapToFrame(secondsToTime(p.startSeconds), scene().frameRate);

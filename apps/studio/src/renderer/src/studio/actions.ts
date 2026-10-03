@@ -3,6 +3,7 @@
  * shortcuts. Each turns one creative intent into validated operations: one undo step each.
  */
 import { type Binding, getRecipe, listRecipes, newId, type Project, type RecipeDef, type RegionKind, type RegionRef, snapToFrame } from "@be/core";
+import { prepareLightning } from "./lightningSounds.ts";
 import { addAssetLayer, analyseBeats, importMediaFiles, latestAsset } from "./media.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
@@ -91,7 +92,8 @@ export const applyRecipeToSelection = (recipeId: string, regionIdsOverride?: rea
 
 /**
  * Apply an effect, first gathering anything it needs from the person: a picture or video for
- * "Show a picture or video", music (with its beat found) for "Move with the beat".
+ * "Show a picture or video", music (with its beat found) for "Move with the beat", the crack and
+ * thunder sounds for "Lightning & thunder".
  */
 export const applyEffect = async (recipeId: string): Promise<string | null> => {
   const s = useStudio.getState();
@@ -126,6 +128,7 @@ export const applyEffect = async (recipeId: string): Promise<string | null> => {
     }
     return applyRecipeToSelection(recipeId, regionIds, { musicId: a.id });
   }
+  if (recipeId === "lightning") return applyRecipeToSelection(recipeId, regionIds, await prepareLightning());
   return applyRecipeToSelection(recipeId, regionIds);
 };
 

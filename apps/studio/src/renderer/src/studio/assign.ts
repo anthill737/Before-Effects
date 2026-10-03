@@ -70,12 +70,15 @@ export const assignMedia = (assetId: string, areaIds: readonly string[], mode: "
   return id;
 };
 
+/** Effects that always cover all the chosen areas together (one storm, not one per window). */
+const TOGETHER = new Set(["lightning"]);
+
 /** Drop handling: one area → assign at once; several selected areas → ask repeat or span. */
 export const dropOnArea = async (payload: DragPayload, areaId: string, at: { x: number; y: number }) => {
   const s = useStudio.getState();
   const sel = s.selection.regionIds;
   const areaIds = sel.includes(areaId) && sel.length > 1 ? [...sel] : [areaId];
-  if (areaIds.length > 1 && (payload.kind === "asset" || payload.kind === "effect")) {
+  if (areaIds.length > 1 && (payload.kind === "asset" || (payload.kind === "effect" && !TOGETHER.has(payload.id)))) {
     useDropChoice.setState({ pending: { payload, areaIds, x: at.x, y: at.y } });
     return;
   }

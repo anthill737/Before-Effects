@@ -90,6 +90,20 @@ export interface AudioAnalysis {
   readonly downbeatOffset: number;
   /** Strength of each beat 0..1 (onset strength), parallel to `beats`. */
   readonly strengths: readonly number[];
+  /** The loud moments (a thunder clap, a crash), in time order: where each starts and how big it is. */
+  readonly hits?: readonly SoundHit[];
+}
+
+/** One loud moment in a sound: a sudden rise well above what came before. */
+export interface SoundHit {
+  /** Where to start playing so the hit lands at once (just before it rises), in the file's own time. */
+  readonly at: Flicks;
+  /** Its loudest moment. */
+  readonly peak: Flicks;
+  /** Loudness at the peak (dB below full scale, 50 ms average). */
+  readonly level: number;
+  /** How long it stays within 20 dB of its peak. */
+  readonly length: Flicks;
 }
 
 export interface Asset {

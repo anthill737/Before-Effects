@@ -19,6 +19,8 @@ export * from "./ae-json.ts";
 export * from "./ae-import.ts";
 export * from "./simulation.ts";
 export * from "./recipes-crack.ts";
+export * from "./recipes-lightning.ts";
+export * from "./thunder.ts";
 export * from "./areas.ts";
 export * from "./recipes-area.ts";
 export * from "./scenes.ts";

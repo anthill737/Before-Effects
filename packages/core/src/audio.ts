@@ -6,14 +6,16 @@
  *   tempo            autocorrelation of the envelope in 60–200 BPM, with a gentle preference for ~120
  *   beats            dynamic-programming beat tracking (Ellis 2007), consistent tempo with onset alignment
  *   downbeats        the bar phase (assumed 4/4) where beats carry the most energy
+ *   hits             sudden loud moments (a thunder clap, a crash): 50 ms loudness rising 8 dB over
+ *                    the half second before, so effects can line up with the big moment of a sound
  *
  * Pure and deterministic. The result is saved with the project (Asset.analysis), so preview and
  * export always use the same beats, and the person can correct them.
  */
-import type { AudioAnalysis } from "./model.ts";
+import type { AudioAnalysis, SoundHit } from "./model.ts";
 import { FLICKS_PER_SECOND } from "./time.ts";
 
-export const ANALYSIS_VERSION = 1;
+export const ANALYSIS_VERSION = 2;
 const N = 1024;
 const HOP = 512;
 
@@ -182,10 +184,46 @@ export const trackBeats = (env: Float64Array, rate: number, bpm: number, tightne
   return beats.reverse();
 };
 
+/**
+ * The loud moments of a sound, in time order (at most `max`, the loudest kept): each where a 50 ms
+ * window is 8 dB louder than anything in the half second before it, and no more than 30 dB below
+ * the loudest part of the file. Starts at least 0.6 s apart.
+ */
+export const soundHits = (mono: Float32Array, sampleRate: number, max = 24): SoundHit[] => {
+  const win = Math.max(1, Math.round(sampleRate * 0.05));
+  const db: number[] = [];
+  for (let i = 0; i + win <= mono.length; i += win) {
+    let e = 0;
+    for (let j = 0; j < win; j++) e += mono[i + j]! ** 2;
+    db.push(10 * Math.log10(e / win + 1e-12));
+  }
+  if (!db.length) return [];
+  const loudest = Math.max(...db);
+  const floor = Math.max(-45, loudest - 30);
+  const back = 10, ahead = 30;
+  const f = (w: number): number => Math.round(((w * win) / sampleRate) * FLICKS_PER_SECOND);
+  const out: SoundHit[] = [];
+  let last = -Infinity;
+  // Before the file starts counts as silence, so a sound that opens on its hit has that hit.
+  for (let i = 0; i < db.length; i++) {
+    let before = -120;
+    for (let j = Math.max(0, i - back); j < i; j++) before = Math.max(before, db[j]!);
+    if (db[i]! < floor || db[i]! - before < 8 || i - last < 12) continue;
+    let p = i;
+    for (let j = i; j < Math.min(db.length, i + ahead); j++) if (db[j]! > db[p]!) p = j;
+    let k = p;
+    while (k < db.length && db[k]! > db[p]! - 20) k++;
+    out.push({ at: f(Math.max(0, i - 1)), peak: f(p), level: Math.round(db[p]! * 10) / 10, length: f(k - p) });
+    last = i;
+  }
+  return out.sort((a, b) => b.level - a.level).slice(0, max).sort((a, b) => a.at - b.at);
+};
+
 /** Full analysis of a mono signal. */
 export const analyzeMusic = (mono: Float32Array, sampleRate: number): AudioAnalysis => {
   const { env, rate } = onsetEnvelope(mono, sampleRate);
-  if (env.length < 16) return { version: ANALYSIS_VERSION, bpm: 0, beats: [], downbeatOffset: 0, strengths: [] };
+  const hits = soundHits(mono, sampleRate);
+  if (env.length < 16) return { version: ANALYSIS_VERSION, bpm: 0, beats: [], downbeatOffset: 0, strengths: [], hits };
   const bpm = estimateTempo(env, rate);
   const frames = trackBeats(env, rate, bpm);
   const strengths = frames.map((f) => Math.max(env[f] ?? 0, env[f - 1] ?? 0, env[f + 1] ?? 0));
@@ -206,7 +244,7 @@ export const analyzeMusic = (mono: Float32Array, sampleRate: number): AudioAnaly
   }
   // Frame centre → seconds → flicks (the analysis window is centred on the frame).
   const beats = frames.map((f) => Math.round(((f * HOP + N / 2) / sampleRate) * FLICKS_PER_SECOND));
-  return { version: ANALYSIS_VERSION, bpm: Math.round(bpm * 10) / 10, beats, downbeatOffset: bestPhase, strengths: strengths.map((s) => Math.round(s * 1000) / 1000) };
+  return { version: ANALYSIS_VERSION, bpm: Math.round(bpm * 10) / 10, beats, downbeatOffset: bestPhase, strengths: strengths.map((s) => Math.round(s * 1000) / 1000), hits };
 };
 
 /** Mix interleaved/planar channels down to mono. */

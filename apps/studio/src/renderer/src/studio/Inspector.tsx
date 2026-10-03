@@ -223,12 +223,22 @@ const ParamControl = ({ spec, value, onChange, customized, instId }: { spec: Rec
       const options = Object.values(project.assets).filter((a) => (kinds as readonly string[]).includes(a.kind) || (kinds.includes("audio") && !!a.audioPath));
       control = (
         <div className="row gap wrap">
-          <select className="select" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} aria-label={spec.label}>
+          <select
+            className="select"
+            value={String(value ?? "")}
+            onChange={async (e) => {
+              // A sound's hits are found first, so effects that start at its biggest hit line up.
+              const picked = project.assets[e.target.value];
+              if (picked && (picked.kind === "audio" || picked.audioPath) && !picked.analysis?.hits) await analyseBeats(picked);
+              onChange(e.target.value);
+            }}
+            aria-label={spec.label}
+          >
             <option value="">Choose…</option>
             {options.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
-                {a.analysis ? ` · ${Math.round(a.analysis.bpm)} BPM` : ""}
+                {a.analysis && spec.key === "musicId" ? ` · ${Math.round(a.analysis.bpm)} BPM` : ""}
               </option>
             ))}
           </select>
@@ -238,7 +248,7 @@ const ParamControl = ({ spec, value, onChange, customized, instId }: { spec: Rec
               const added = await importMediaFiles();
               const pick = added.find((a) => (kinds as readonly string[]).includes(a.kind));
               if (pick) {
-                if (pick.kind === "audio") await analyseBeats(pick);
+                if (pick.kind === "audio" || pick.audioPath) await analyseBeats(pick);
                 onChange(pick.id);
               }
             }}
