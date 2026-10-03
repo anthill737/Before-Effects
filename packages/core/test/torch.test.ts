@@ -36,7 +36,7 @@ describe("torch flames", () => {
     expect(core.transform.scale.keyframes ?? []).toHaveLength(0);
     // The flame sits in the lantern and its size changes over time on its own.
     expect(core.transform.position.value[0]).toBeCloseTo(125);
-    const sy = (s: number) => (evalProp(core.transform.scale, secondsToTime(s)) as number[])[1]!;
+    const sy = (s: number) => (evalProp(core.transform.scale, secondsToTime(s)) as readonly number[])[1]!;
     const samples = Array.from({ length: 40 }, (_, i) => sy(i * 0.07));
     expect(Math.max(...samples) - Math.min(...samples)).toBeGreaterThan(4);
     expect(sy(1.234)).toBe(sy(1.234));
