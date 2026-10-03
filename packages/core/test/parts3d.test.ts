@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { evalProp } from "../src/anim.ts";
-import { DEFAULT_TIMING, partMotion } from "../src/parts3d.ts";
+import { DEFAULT_TIMING, partMotion, partSolidDepth } from "../src/parts3d.ts";
 import { FLICKS_PER_SECOND } from "../src/time.ts";
-import { eulerDegToQuat, placePoint, solidWithHoles } from "../src/world3d.ts";
+import { alongSight, eulerDegToQuat, placePoint, showCamera, solidWithHoles } from "../src/world3d.ts";
 import type { Vec3 } from "../src/model.ts";
 
 const door = { x0: 2, x1: 3, y0: 0.5, y1: 2.6 };
@@ -53,6 +53,25 @@ describe("moving parts", () => {
   });
 });
 
+describe("turning parts", () => {
+  it("turn in place, as a pillar as deep as it is wide", () => {
+    const col = { x0: 1, x1: 1.5, y0: 0, y1: 4 };
+    const turn = { kind: "turn", axis: "vertical", turns: 1 } as const;
+    const d = partSolidDepth("column", turn, col);
+    expect(d).toBeCloseTo(0.5, 9);
+    expect(partSolidDepth("door", { kind: "swing", hinge: "left", direction: "in", angle: 90 }, col)).toBeLessThan(0.1);
+    const m = partMotion(turn, { start: 0, move: 4, hold: 0, back: false }, col, d, 0.25, "c");
+    expect(m.pivot).toEqual([1.25, 2, -0.25]);
+    // A quarter turn in: the front face now looks sideways, but the solid is still over its own spot.
+    const q = eulerDegToQuat([0, 90, 0]);
+    for (const corner of [[1, 2, 0], [1.5, 2, 0], [1, 2, -0.5], [1.5, 2, -0.5]] as Vec3[]) {
+      const p = placePoint(corner, [0, 0, 0], q, [1, 1, 1], m.pivot);
+      expect(p[0]).toBeGreaterThanOrEqual(1 - 1e-9);
+      expect(p[0]).toBeLessThanOrEqual(1.5 + 1e-9);
+    }
+  });
+});
+
 describe("solids with openings", () => {
   it("keeps openings inside as holes and cuts away openings on the edge", () => {
     const facade: [number, number][] = [[0, 0], [100, 0], [100, 60], [0, 60]];
@@ -63,5 +82,25 @@ describe("solids with openings", () => {
     const holes = r.flatMap((p) => p.holes);
     expect(holes).toHaveLength(1);
     expect(area).toBeCloseTo(100 * 60 - 30 * 30, 3);
+  });
+});
+
+describe("pieces that stand out toward the audience", () => {
+  const canvas = { width: 1920, height: 1080 } as const;
+  it("still sit exactly on their picture as the show camera sees them", () => {
+    const cam = showCamera(canvas, 1.6);
+    const D = cam.eye[2];
+    const p: [number, number] = [3.12, 5.1]; // a column's corner on the building front (metres)
+    for (const out of [0.5, 1.5, 3]) {
+      const q = alongSight(p, out, D, canvas);
+      // Back along the line of sight from the camera to the building front: the same spot.
+      const t = D / (D - out);
+      const back = [cam.eye[0] + (q[0] - cam.eye[0]) * t, cam.eye[1] + (q[1] - cam.eye[1]) * t];
+      expect(back[0]).toBeCloseTo(p[0], 9);
+      expect(back[1]).toBeCloseTo(p[1], 9);
+      // Nearer the camera it is drawn smaller, toward the middle.
+      expect(Math.abs(q[0])).toBeLessThan(Math.abs(p[0]));
+    }
+    expect(alongSight(p, 0, D, canvas)).toEqual(p);
   });
 });

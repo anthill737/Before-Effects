@@ -6,7 +6,7 @@
  */
 import { type AnimProp, type Blocks3D, DEFAULT_BLOCKS, DEFAULT_FRACTURE, evalProp, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, type RGBA, type Scene3D, timeToSeconds, type Vec3 } from "@be/core";
 import { type ReactNode, useState } from "react";
-import { addObject, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
+import { addAreaObject, addObject, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { PartEditor } from "./PartEditor.tsx";
 import { EditableSection, JobProgressFor } from "./BlenderPanel.tsx";
@@ -153,6 +153,22 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
                 {label}
               </button>
             ))}
+            <div className="hint">A traced area as its own piece:</div>
+            {Object.values(activeVenue(useStudio.getState())?.regions ?? {})
+              .filter((r) => r.path.closed)
+              .map((r) => (
+                <button
+                  key={r.id}
+                  role="menuitem"
+                  className="list-item"
+                  onClick={() => {
+                    setAdding(false);
+                    addAreaObject(layer, r.id, r.name);
+                  }}
+                >
+                  {r.name}
+                </button>
+              ))}
           </div>
         )}
       </span>
@@ -331,9 +347,36 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
           </>
         )}
         {o.geometry?.kind === "area" && (
-          <Field label="Thickness" help="How deep the solid is behind the building front.">
-            <Slider label="Thickness" value={Math.round(o.geometry.depth * 100)} min={2} max={200} step={1} unit="cm" onChange={(v) => up({ geometry: { ...o.geometry, depth: v / 100 } }, "Change thickness", "depth")} />
-          </Field>
+          <>
+            <Field label="Thickness" help="How deep the solid is behind its front.">
+              <Slider label="Thickness" value={Math.round(o.geometry.depth * 100)} min={2} max={200} step={1} unit="cm" onChange={(v) => up({ geometry: { ...o.geometry, depth: v / 100 } }, "Change thickness", "depth")} />
+            </Field>
+            <Field label="Stands out" help="How far its front stands out toward the audience (a column in front of a porch, a roof overhang). From the audience it stays on its picture; lights and shadows see the real solid.">
+              <Slider label="Stands out" value={Math.round((o.geometry.standOut ?? 0) * 100)} min={0} max={500} step={1} unit="cm" onChange={(v) => up({ geometry: { ...o.geometry, standOut: v / 100 } }, "Change stand-out", "standout")} />
+            </Field>
+            <Field label="Cut out of it" help="Areas that are their own pieces in this scene: they're cut out of this one so the solids don't overlap.">
+              <div className="col">
+                {Object.values(activeVenue(useStudio.getState())?.regions ?? {})
+                  .filter((r) => r.path.closed && !(o.geometry?.kind === "area" && o.geometry.ref.regionIds?.includes(r.id)))
+                  .map((r) => {
+                    const g = o.geometry as Extract<Object3D["geometry"], { kind: "area" }>;
+                    const cut = g.cut?.regionIds ?? [];
+                    return (
+                      <Toggle
+                        key={r.id}
+                        label={r.name}
+                        value={cut.includes(r.id)}
+                        onChange={(v) => {
+                          const next = v ? [...cut, r.id] : cut.filter((x) => x !== r.id);
+                          const { cut: _old, ...rest } = g;
+                          up({ geometry: next.length ? { ...rest, cut: { role: "areas", regionIds: next } } : rest }, v ? `Cut ${r.name} out` : `Don't cut ${r.name} out`, "cut");
+                        }}
+                      />
+                    );
+                  })}
+              </div>
+            </Field>
+          </>
         )}
         {o.geometry?.kind === "box" && (
           <Vec3Sliders label="Box size" value={o.geometry.size} min={[0.05, 0.05, 0.05]} max={[W * 2, H * 2, 20]} step={0.05} unit="m" onChange={(v) => up({ geometry: { kind: "box", size: v } }, "Change box size", "box")} />

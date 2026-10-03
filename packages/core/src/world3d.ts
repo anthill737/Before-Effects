@@ -73,8 +73,14 @@ export const pictureMix = (m: Pick<Material3D, "shading" | "matchPicture">, glow
 };
 
 export type Geometry3D =
-  /** A traced building area given thickness. Its front sits on the building front (z = 0). */
-  | { readonly kind: "area"; readonly ref: RegionRef; readonly depth: number }
+  /**
+   * A traced building area given thickness. Its front sits on the building front (z = 0), or `standOut`
+   * metres out toward the audience (a column in front of a porch, a roof overhang) — drawn along the
+   * show camera's lines of sight, so from the audience it still sits exactly on its picture while
+   * lights and shadows treat it as the real solid. `cut`: other areas cut out of it (room for the parts
+   * that are their own pieces, e.g. a wall with its columns and doors as separate solids).
+   */
+  | { readonly kind: "area"; readonly ref: RegionRef; readonly depth: number; readonly standOut?: number; readonly cut?: RegionRef }
   | { readonly kind: "box"; readonly size: Vec3 }
   | { readonly kind: "sphere"; readonly radius: number }
   | { readonly kind: "plane"; readonly size: Vec2 }
@@ -680,11 +686,25 @@ export const canvasToWorld = (p: Vec2, c: Canvas): Vec2 => [(p[0] - c.width / 2)
 export interface ResolvedPiece {
   readonly outline: readonly Vec2[];
   readonly holes: readonly (readonly Vec2[])[];
-  /** Rest position of the piece's centre in the object's space (front face at z = 0). */
+  /** Rest position of the piece's centre in the object's space (front face at z = 0, or at the stand-out). */
   readonly center: Vec3;
   readonly depth: number;
   readonly area: number;
+  /** A piece standing out along the camera's lines of sight: its back face is the outline × `scale`,
+   *  moved by `shift` (piece-local metres) — a slightly tapered solid. Absent: front and back match. */
+  readonly back?: { readonly scale: number; readonly shift: Vec2 };
 }
+
+/**
+ * Where a point of the building front appears when it stands `z` metres out toward the show camera
+ * (`camD` metres away, looking at the middle of the canvas), so that the camera still sees it on its
+ * picture: along the line of sight, (camD − z) / camD of the way.
+ */
+export const alongSight = (p: Vec2, z: number, camD: number, canvas: Canvas): Vec2 => {
+  const ax = 0, ay = (canvas.height * METERS_PER_PIXEL) / 2;
+  const k = Math.max(0.01, (camD - z) / camD);
+  return [ax + (p[0] - ax) * k, ay + (p[1] - ay) * k];
+};
 
 export interface ResolvedObject {
   readonly object: Object3D;
@@ -745,7 +765,7 @@ export interface ResolvedScene3D {
 const seconds = (t: Flicks) => t / FLICKS_PER_SECOND;
 const flicks = (s: number) => Math.round(s * FLICKS_PER_SECOND);
 
-const piecesCache = new WeakMap<Geometry3D, { fracture: Fracture3D | undefined; cut: string; venue: unknown; w: number; h: number; pieces: ResolvedPiece[] }>();
+const piecesCache = new WeakMap<Geometry3D, { fracture: Fracture3D | undefined; cut: string; venue: unknown; w: number; h: number; camD: number; pieces: ResolvedPiece[] }>();
 /** What decides how blocks cut the surface (their motion settings don't change the pieces). */
 const blockCut = (b: Blocks3D | undefined) => (b ? `${b.shape}|${b.size}|${b.gap}` : "");
 
@@ -753,42 +773,52 @@ const blockCut = (b: Blocks3D | undefined) => (b ? `${b.shape}|${b.size}|${b.gap
  * The object's pieces in its own space (metres). Kept while the area, the venue and the way it
  * breaks are unchanged, so editing a light or a colour never rebuilds the pieces.
  */
-const piecesFor = (project: Project, o: Object3D, canvas: Canvas, venueId: Id | undefined): ResolvedPiece[] => {
+const piecesFor = (project: Project, o: Object3D, canvas: Canvas, venueId: Id | undefined, camD = 0): ResolvedPiece[] => {
   const g = o.geometry;
   if (!g || g.kind !== "area") return [];
   const venue = venueId ? project.venues[venueId] : undefined;
   const hit = piecesCache.get(g);
   const cut = o.fracture ? "" : blockCut(o.blocks);
-  if (hit && hit.fracture === o.fracture && hit.cut === cut && hit.venue === venue && hit.w === canvas.width && hit.h === canvas.height) return hit.pieces;
-  const pieces = computePieces(project, g, o.fracture, canvas, venueId, o.fracture ? undefined : o.blocks);
-  piecesCache.set(g, { fracture: o.fracture, cut, venue, w: canvas.width, h: canvas.height, pieces });
+  if (hit && hit.fracture === o.fracture && hit.cut === cut && hit.venue === venue && hit.w === canvas.width && hit.h === canvas.height && hit.camD === camD) return hit.pieces;
+  const pieces = computePieces(project, g, o.fracture, canvas, venueId, o.fracture ? undefined : o.blocks, camD);
+  piecesCache.set(g, { fracture: o.fracture, cut, venue, w: canvas.width, h: canvas.height, camD, pieces });
   return pieces;
 };
 
-const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }>, fr: Fracture3D | undefined, canvas: Canvas, venueId: Id | undefined, blocks?: Blocks3D): ResolvedPiece[] => {
+const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }>, fr: Fracture3D | undefined, canvas: Canvas, venueId: Id | undefined, blocks?: Blocks3D, camD = 0): ResolvedPiece[] => {
   const regions = refRegions(project, g.ref, venueId).filter((r) => r.path.closed);
   const vid = venueId ?? project.activeVenueId;
   const venue = vid ? project.venues[vid] : undefined;
   const depth = Math.max(0.01, g.depth);
+  // Areas cut out of this solid (their own pieces in the scene).
+  const cuts = g.cut ? refRegions(project, g.cut, venueId).filter((r) => r.path.closed).map((r) => closedPoints(r.path)).filter((h) => h.length >= 3) : [];
+  const out0 = Math.max(0, g.standOut ?? 0);
+  const standing = out0 > 0 && camD > out0;
   const out: ResolvedPiece[] = [];
   for (const r of regions) {
     const outline = closedPoints(r.path);
-    const holes = regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
+    const holes = [...regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3), ...cuts];
     if (outline.length < 3) continue;
     const polys = fr
       ? (fr.pattern === "glass" ? glassShards : fr.pattern === "bricks" ? brickPieces : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
       : blocks
         ? blockCells(outline, holes, blocks).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
         : solidWithHoles(outline, holes);
+    // Standing out: the front moves along the camera's lines of sight (it still covers its picture),
+    // and the back, `depth` behind it, along them too — a slightly tapered solid.
+    const front = (p: Vec2): Vec2 => (standing ? alongSight(canvasToWorld(p, canvas), out0, camD, canvas) : canvasToWorld(p, canvas));
+    const kRatio = standing ? (camD - out0 + depth) / (camD - out0) : 1;
+    const axis: Vec2 = [0, (canvas.height * METERS_PER_PIXEL) / 2];
     for (const poly of polys) {
-      const w = poly.outline.map((p) => canvasToWorld(p, canvas));
+      const w = poly.outline.map(front);
       const c = polyCentroid(w);
       out.push({
         outline: w.map((p) => [p[0] - c[0], p[1] - c[1]] as Vec2),
-        holes: poly.holes.map((h) => h.map((p) => canvasToWorld(p, canvas)).map((p) => [p[0] - c[0], p[1] - c[1]] as Vec2)),
-        center: [c[0], c[1], -depth / 2],
+        holes: poly.holes.map((h) => h.map(front).map((p) => [p[0] - c[0], p[1] - c[1]] as Vec2)),
+        center: [c[0], c[1], out0 - depth / 2],
         depth,
         area: Math.abs(polyArea(w)),
+        ...(standing ? { back: { scale: kRatio, shift: [(c[0] - axis[0]) * (kRatio - 1), (c[1] - axis[1]) * (kRatio - 1)] as Vec2 } } : {}),
       });
     }
   }
@@ -860,7 +890,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
   for (const id of scene.objectOrder) {
     const o = scene.objects[id];
     if (!o) continue;
-    const pieces = piecesFor(project, o, canvas, opts.venueId);
+    const pieces = piecesFor(project, o, canvas, opts.venueId, Math.max(0.2, scene.cameraDistance ?? 1.6) * canvas.width * METERS_PER_PIXEL);
     const ph = o.kind === "mesh" ? o.physics : undefined;
     let poseIndex = -1;
     if (ph && o.geometry) {
@@ -1005,6 +1035,11 @@ export const lightObject = (id: Id, name: string, light: Partial<Light3D>, posit
 
 export const boxObject = (id: Id, name: string, size: Vec3, position: Vec3, physics?: Physics3D): Object3D =>
   mesh(id, name, { kind: "box", size }, position, {}, physics ? { physics } : {});
+
+/** A traced area as its own solid in a scene (the building photo on it), optionally standing out toward
+ *  the audience and with other areas cut out of it. Fixed in place until given physics. */
+export const areaObject = (id: Id, name: string, ref: RegionRef, opts: { depth?: number; standOut?: number; cut?: RegionRef } = {}): Object3D =>
+  mesh(id, name, { kind: "area", ref, depth: Math.max(0.01, opts.depth ?? 0.25), ...(opts.standOut ? { standOut: opts.standOut } : {}), ...(opts.cut ? { cut: opts.cut } : {}) }, [0, 0, 0], { style: "photo", color: staticProp<RGBA>([1, 1, 1, 1]), roughness: 0.9 });
 
 export const ballObject = (id: Id, name: string, radius: number, position: Vec3, physics?: Physics3D): Object3D =>
   mesh(id, name, { kind: "sphere", radius }, position, { color: staticProp<RGBA>([0.9, 0.5, 0.2, 1]), roughness: 0.4 }, physics ? { physics } : {});

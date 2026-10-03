@@ -95,11 +95,15 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
   const holes = piece.holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
   const tris = THREE.ShapeUtils.triangulateShape(contour, holes);
   const all = [...contour, ...holes.flat()];
+  // A piece standing out along the camera's lines of sight has a slightly larger back face.
+  const bk = piece.back;
+  const atBack = (x: number, y: number): [number, number] => (bk ? [x * bk.scale + bk.shift[0], y * bk.scale + bk.shift[1]] : [x, y]);
   const tri = (a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2, z: number, facing: 1 | -1) => {
     const area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     const [p, q] = (area > 0) === (facing > 0) ? [b, c] : [c, b];
     for (const v of [a, p, q]) {
-      pos.push(v.x, v.y, z);
+      const [x, y] = facing > 0 ? [v.x, v.y] : atBack(v.x, v.y);
+      pos.push(x, y, z);
       uv.push(...uvOf(v.x, v.y));
     }
   };
@@ -115,9 +119,10 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
       const a = r[i]!, b = r[(i + 1) % r.length]!;
       // Outward normal of edge a→b for a CCW ring is (dy, −dx).
       const nx = (b.y - a.y) * outward, ny = -(b.x - a.x) * outward;
+      const [abx, aby] = atBack(a.x, a.y), [bbx, bby] = atBack(b.x, b.y);
       const quad = [
-        [a.x, a.y, d], [b.x, b.y, d], [b.x, b.y, -d],
-        [a.x, a.y, d], [b.x, b.y, -d], [a.x, a.y, -d],
+        [a.x, a.y, d], [b.x, b.y, d], [bbx, bby, -d],
+        [a.x, a.y, d], [bbx, bby, -d], [abx, aby, -d],
       ];
       for (let t = 0; t < 6; t += 3) {
         const [p0, p1, p2] = [quad[t]!, quad[t + 1]!, quad[t + 2]!];
@@ -127,8 +132,10 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
         const ordered = cx * nx + cy * ny >= 0 ? [p0, p1, p2] : [p0, p2, p1];
         for (const v of ordered) {
           pos.push(v[0]!, v[1]!, v[2]!);
-          // The picture straight through the solid: a side shows the picture at that edge.
-          uv.push(...uvOf(v[0]!, v[1]!));
+          // The picture straight through the solid: a side shows the picture at that edge (the front
+          // edge's spot, however the back tapers).
+          const front = v[2]! > 0 ? [v[0]!, v[1]!] : bk ? [(v[0]! - bk.shift[0]) / bk.scale, (v[1]! - bk.shift[1]) / bk.scale] : [v[0]!, v[1]!];
+          uv.push(...uvOf(front[0]!, front[1]!));
         }
       }
     }

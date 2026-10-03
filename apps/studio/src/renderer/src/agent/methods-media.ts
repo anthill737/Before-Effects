@@ -4,9 +4,11 @@
  */
 import {
   type AnimProp,
+  areaObject,
   evalProp,
   framesIn,
   keyAt,
+  newId,
   type Layer,
   type Light3D,
   type Material3D,
@@ -89,7 +91,7 @@ const objectInfo = (o: Object3D, t: number) => ({
   rotation: evalProp(o.rotation, t),
   scale: evalProp(o.scale, t),
   animated: ["position", "rotation", "scale"].filter((k) => ((o as unknown as Record<string, AnimProp>)[k]!.keyframes?.length ?? 0) > 0),
-  ...(o.geometry ? { geometry: o.geometry.kind === "area" ? { kind: "area", areas: o.geometry.ref, thicknessCm: Math.round(o.geometry.depth * 100) } : o.geometry } : {}),
+  ...(o.geometry ? { geometry: o.geometry.kind === "area" ? { kind: "area", areas: o.geometry.ref, thicknessCm: Math.round(o.geometry.depth * 100), standOutCm: Math.round((o.geometry.standOut ?? 0) * 100), ...(o.geometry.cut ? { cutOut: o.geometry.cut } : {}) } : o.geometry } : {}),
   ...(o.material ? { material: { style: o.material.style, ...(o.material.assetId ? { image: o.material.assetId } : {}), color: evalProp(o.material.color, t), roughness: o.material.roughness, metalness: o.material.metalness, glow: evalProp(o.material.glow, t), opacity: o.material.opacity, ...(o.material.style === "photo" || o.material.style === "image" ? { shading: o.material.shading ?? 1, matchPicture: o.material.matchPicture ?? true } : {}) } } : {}),
   ...(o.physics ? { physics: o.physics } : {}),
   ...(o.fracture ? { fracture: o.fracture } : {}),
@@ -194,13 +196,30 @@ method({
 
 method({
   name: "scene3d.objectAdd",
-  summary: "Add an object: box (falls), ball (falls and bounces), ledge (fixed obstacle) or spot light.",
-  params: z.object({ scene: z.string(), kind: z.enum(["box", "ball", "ledge", "light"]) }),
+  summary:
+    "Add an object: box (falls), ball (falls and bounces), ledge (fixed obstacle), spot light, or area — a traced area as its own solid in this scene (the building photo on it; give it a picture, physics or breaking with scene3d.objectUpdate). An area can stand out toward the audience (standOutCm: a column in front of a porch — it stays on its picture from the audience while lights and shadows see the real solid) and have other areas cut out of it (cutOut: room for parts that are their own pieces).",
+  params: z.object({
+    scene: z.string(),
+    kind: z.enum(["box", "ball", "ledge", "light", "area"]),
+    area: z.union([z.string(), z.array(z.string()).min(1)]).optional().describe("kind area: the area(s) by name or id"),
+    name: z.string().optional(),
+    thicknessCm: z.number().min(1).max(500).optional(),
+    standOutCm: z.number().min(0).max(2000).optional(),
+    cutOut: z.array(z.string()).optional().describe("kind area: areas cut out of it"),
+  }),
   mutates: true,
   run: async (p, ctx) => {
     const { scene, layer } = scene3d(p.scene);
     const before = new Set(scene.objectOrder);
-    ctx.edit(() => addObject(needLayer(layer, scene), p.kind));
+    if (p.kind === "area") {
+      if (!p.area) throw new AgentError("invalid_params", "An area object needs area (an area's name or id).");
+      const ids = areaIds([p.area].flat());
+      const cut = p.cutOut?.length ? { role: "areas", regionIds: areaIds(p.cutOut) } : undefined;
+      const object = areaObject(newId("obj"), p.name ?? [p.area].flat().join(" + "), { role: "areas", regionIds: ids }, { depth: (p.thicknessCm ?? 25) / 100, ...(p.standOutCm ? { standOut: p.standOutCm / 100 } : {}), ...(cut ? { cut } : {}) });
+      ctx.edit(() => st().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name}` }));
+      return { object: object.id, revision: currentRevision() };
+    }
+    ctx.edit(() => addObject(needLayer(layer, scene), p.kind as "box" | "ball" | "ledge" | "light"));
     const added = project().scenes3d![scene.id]!.objectOrder.find((id) => !before.has(id));
     if (!added) throw new AgentError("rejected", "The object couldn't be added.");
     return { object: added, revision: currentRevision() };
@@ -233,6 +252,8 @@ method({
     rotation: vec3.optional(),
     scale: z.number().min(1).max(10000).optional(),
     thicknessCm: z.number().min(1).max(500).optional(),
+    standOutCm: z.number().min(0).max(2000).optional().describe("area: how far its front stands out toward the audience (it stays on its picture from the audience)"),
+    cutOut: z.array(z.string()).nullable().optional().describe("area: other areas cut out of it (null: none)"),
     material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1), shading: z.number().min(0).max(1).describe("picture surfaces: 0 = the picture itself whichever way it turns, 1 = lit like a real solid (default)"), matchPicture: z.boolean().describe("picture surfaces: facing the audience it shows the picture exactly whatever the lights (default true); false = as the lights really fall on it (a light's own pass)") }).partial().optional(),
     physics: z.object({ body: z.enum(["dynamic", "static"]), mass: z.number().min(0.01).max(1e6), friction: z.number().min(0).max(2), bounce: z.number().min(0).max(1) }).partial().nullable().optional(),
     fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(-20).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass", "bricks"]) }).partial().nullable().optional(),
@@ -272,9 +293,14 @@ method({
     if (p.position) changes.position = at(o.position, p.position as Vec3);
     if (p.rotation) changes.rotation = at(o.rotation, p.rotation as Vec3);
     if (p.scale !== undefined) changes.scale = at(o.scale, [p.scale, p.scale, p.scale] as Vec3);
-    if (p.thicknessCm !== undefined) {
-      if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", `“${o.name}” isn't a building area, so it has no thickness.`);
-      changes.geometry = { ...o.geometry, depth: p.thicknessCm / 100 };
+    if (p.thicknessCm !== undefined || p.standOutCm !== undefined || p.cutOut !== undefined) {
+      if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", `“${o.name}” isn't a building area, so it has no thickness, stand-out or cut-outs.`);
+      const g = { ...o.geometry } as Record<string, unknown>;
+      if (p.thicknessCm !== undefined) g.depth = p.thicknessCm / 100;
+      if (p.standOutCm !== undefined) g.standOut = p.standOutCm / 100;
+      if (p.cutOut === null || (p.cutOut && !p.cutOut.length)) delete g.cut;
+      else if (p.cutOut) g.cut = { role: "areas", regionIds: areaIds(p.cutOut) };
+      changes.geometry = g;
     }
     if (p.material) {
       if (!o.material) throw new AgentError("invalid_params", `“${o.name}” has no material (is it a light?).`);

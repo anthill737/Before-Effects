@@ -5,6 +5,7 @@
  */
 import {
   type AnimProp,
+  areaObject,
   areaScene,
   ballObject,
   BLOCK_PRESETS,
@@ -223,6 +224,14 @@ export const addObject = (layer: Layer, kind: "box" | "ball" | "light" | "ledge"
           ? boxObject(id, "Ledge", [W * 0.4, 0.25, 1], [0, H * 0.3, 0.5], { body: "static", mass: 1000, friction: 0.8, bounce: 0.1 })
           : lightObject(id, "Spot light", { type: "spot", target: [0, H / 2, 0], intensity: staticProp(4), angle: 30 }, [W * 0.4, H + 2, 7]);
   if (s.apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name.toLowerCase()}` })) use3D.setState({ objectId: id });
+};
+
+/** A traced area as its own piece in the layer's 3D scene (fixed in place; give it physics or breaking after). */
+export const addAreaObject = (layer: Layer, regionId: string, name: string) => {
+  const scene = sceneForLayer(layer);
+  if (!scene) return;
+  const object = areaObject(newId("obj"), name, { role: "areas", regionIds: [regionId] }, { depth: 0.25 });
+  if (useStudio.getState().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${name}` })) use3D.setState({ objectId: object.id });
 };
 
 export const removeObject = (layer: Layer, objectId: string) => {

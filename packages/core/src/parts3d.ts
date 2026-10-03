@@ -134,6 +134,11 @@ const backingMaterial = (b: Backing): Material3D => {
   return { style: "color", color: staticProp<RGBA>([0.03, 0.03, 0.035, 1]), glow: staticProp(0), ...base };
 };
 
+/** How deep a part's solid is: a part that turns is as deep as it is wide (a pillar, not a thin panel),
+ *  so it turns in place about its own middle instead of sweeping its edges out like a door on a hinge. */
+export const partSolidDepth = (kind: RegionKind, motion: PartMotion, b: { x0: number; x1: number; y0: number; y1: number }): number =>
+  motion.kind === "turn" ? Math.max(partDepth(kind), Math.min(b.x1 - b.x0, b.y1 - b.y0)) : partDepth(kind);
+
 /**
  * A moving part made from a traced area, and the backing behind its opening (two ordinary 3D
  * objects). `facadeDepth` is how thick the facade around it is assumed to be.
@@ -144,7 +149,7 @@ export const partObjects = (
 ): [Object3D, Object3D] | null => {
   const b = partBounds(project, o.regionId, o.venueId, o.canvas);
   if (!b) return null;
-  const depth = partDepth(o.kind);
+  const depth = partSolidDepth(o.kind, o.motion, b);
   const facadeDepth = o.facadeDepth ?? ASSUMED_DEPTH.facade;
   const mv = partMotion(o.motion, o.timing, b, depth, facadeDepth, o.id);
   const fall = o.motion.kind === "fall";
