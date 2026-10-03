@@ -3,7 +3,7 @@
  * shortcuts. Each turns one creative intent into validated operations: one undo step each.
  */
 import { type Binding, getRecipe, listRecipes, newId, type Project, type RecipeDef, type RegionKind, type RegionRef, snapToFrame } from "@be/core";
-import { prepareLightning } from "./lightningSounds.ts";
+import { prepareLightning } from "./lightningAssets.ts";
 import { addAssetLayer, analyseBeats, importMediaFiles, latestAsset } from "./media.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 

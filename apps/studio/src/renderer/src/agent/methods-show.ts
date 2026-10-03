@@ -40,7 +40,7 @@ import { addRegion } from "../space/actions.ts";
 import { KIND_CHOICES } from "../space/traceStore.ts";
 import { recipeOpsFor } from "../studio/actions.ts";
 import { assignMedia, refForAreas, replaceMedia } from "../studio/assign.ts";
-import { ensureHits, prepareLightning } from "../studio/lightningSounds.ts";
+import { ensureHits, prepareLightning } from "../studio/lightningAssets.ts";
 import { analyseBeats, assetLayerOps, importMediaFiles } from "../studio/media.ts";
 import { meltAreas } from "../studio/melt.ts";
 import { glitchAreas, rippleAreas } from "../studio/pictureEffects.ts";
@@ -556,9 +556,9 @@ method({
   },
 });
 
-/** Sound settings given by name or path become media ids. */
+/** Media settings (sounds, the white house picture, a bolt clip) given by name or path become media ids. */
 const soundIds = (params: Record<string, unknown>): Record<string, unknown> => {
-  for (const key of ["crackSound", "thunderSound"]) if (typeof params[key] === "string" && params[key]) params[key] = assetId(params[key] as string);
+  for (const key of ["crackSound", "thunderSound", "flashPicture", "boltClip"]) if (typeof params[key] === "string" && params[key]) params[key] = assetId(params[key] as string);
   return params;
 };
 

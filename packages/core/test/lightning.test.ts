@@ -158,6 +158,47 @@ describe("lightning & thunder", () => {
     expect(roles).toContain("Lightning flash");
   });
 
+  it("pieces of a bolt move to a new place every flicker", () => {
+    const box = { x: 100, y: 200, w: 800, h: 450 };
+    const a = boltStrokes("pieces", box, "random", 1, 0, 0);
+    const b = boltStrokes("pieces", box, "random", 1, 0, 1);
+    expect(a[0]![0]).not.toEqual(b[0]![0]);
+    // Slanting down from high on the house.
+    const main = a[0]!;
+    expect(main.at(-1)![1]).toBeGreaterThan(main[0]![1]);
+    expect(main[0]![1]).toBeLessThan(box.y + box.h * 0.4);
+  });
+
+  it("the house goes white: a picture in the areas, its opacity keyed to the flickers", () => {
+    const history = new History(emptyProject("Test"), createRegistry());
+    const v = venue();
+    history.apply([
+      { type: "venue.add", args: { venue: v } },
+      { type: "comp.add", args: { comp: newComposition({ id: "main", width: 1000, height: 700, durationSeconds: 30, venueId: v.id }) } },
+      { type: "asset.add", args: { asset: { id: "white", kind: "image", name: "white.png", path: "white.png", meta: { width: 2000, height: 1400 } } } },
+      { type: "asset.add", args: { asset: { id: "clip", kind: "video", name: "bolt.mp4", path: "bolt.mp4", meta: { width: 3840, height: 2160, duration: secondsToTime(1.5) } } } },
+      { type: "recipe.apply", args: { instanceId: "L", recipeId: lightning.id, compId: "main", targets: [{ role: "house", regionIds: ["wall", "door"] }], params: { strikes: 1, firstAt: 1, flickers: 3, flash: 90, flashPicture: "white", boltClip: "clip", crack: false, thunder: false } } },
+    ]);
+    const layers = history.project.compositions.main!.layers;
+    const flash = layers[generatedLayerId("L", "flash")]!;
+    expect(flash.source).toEqual({ kind: "footage", assetId: "white", loop: true });
+    expect(flash.blendMode).toBe("normal");
+    expect(flash.masks.map((m) => m.source.kind)).toEqual(["region", "region"]);
+    expect(flash.transform.scale.value[0]).toBeCloseTo(50);
+    const op = (s: number) => evalKeyframes(flash.transform.opacity, secondsToTime(s));
+    expect(op(0.5)).toBe(0);
+    expect(op(1)).toBeCloseTo(90);
+    // The clip: one piece per flicker, screen-blended, each a different place and moment.
+    const pieces = [0, 1, 2].map((v) => layers[generatedLayerId("L", `bolt-0-${v}`)]!);
+    for (const l of pieces) {
+      expect(l.source).toEqual({ kind: "footage", assetId: "clip" });
+      expect(l.blendMode).toBe("screen");
+      expect(timeToSeconds(l.outPoint - l.inPoint)).toBeCloseTo(0.26, 1);
+    }
+    expect(pieces[0]!.transform.position.value).not.toEqual(pieces[1]!.transform.position.value);
+    expect(pieces[0]!.inPoint - pieces[0]!.startTime).not.toBe(pieces[1]!.inPoint - pieces[1]!.startTime);
+  });
+
   it("regenerates identically", () => {
     const { history, layers } = setup();
     history.apply({ type: "recipe.update", args: { instanceId: "L", params: {} } });

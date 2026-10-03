@@ -1,8 +1,15 @@
 /**
  * "Lightning & thunder": strikes that light the chosen areas in a flicker (two or three flashes over
- * a second, like real lightning), a bolt drawn down the house in one of four styles, and thunder a
- * moment later. Ordinary layers: a shape layer for the flash, one per strike for the bolt (strokes
- * with a glow), and a sound layer per strike — all editable afterwards.
+ * a second, like real lightning), a bolt on the house, and thunder a moment later. Ordinary layers,
+ * all editable afterwards.
+ *
+ * The flash: by default the house itself goes white — a bright, nearly grey picture of the house
+ * (made from the building photo, or the person's own, e.g. a white house skin) shown in the areas
+ * with its opacity flickering, the way projection shows usually do it. Or coloured light.
+ *
+ * The bolt: pieces of a bolt placed on the house that move to a new spot every flicker (like a
+ * lightning clip cut up and placed), one of four drawn styles, or the person's own lightning clip —
+ * a different moment of it each flicker, placed, tilted and moved about the house.
  *
  * Two sounds per strike: the crack of the strike right as the bolt hits, and thunder a moment later.
  * Each can be the person's own recording; by default each plays its recording's biggest hit (found by
@@ -13,7 +20,7 @@
  * one spot) · Crazy strike (arcs crawling around a point).
  */
 import { type AnimProp, type Keyframe, staticProp } from "./anim.ts";
-import { type Asset, type AudioSettings, defaultTransform, type EffectInstance, type Layer, packPath, polygonPath, type RGBA, type ShapeContents, type Vec2 } from "./model.ts";
+import { type Asset, type AudioSettings, defaultTransform, type EffectInstance, type Layer, type Mask, packPath, polygonPath, type RGBA, type ShapeContents, type Vec2 } from "./model.ts";
 import { type Bounds, pathBounds } from "./pathmath.ts";
 import { type RecipeContext, type RecipeDef, registerRecipe } from "./recipes.ts";
 import { SeededStream } from "./rng.ts";
@@ -23,7 +30,7 @@ const sec = (s: number): Flicks => secondsToTime(s);
 const num = (v: unknown, d: number): number => (typeof v === "number" && Number.isFinite(v) ? v : d);
 const color = (v: unknown, d: RGBA): RGBA => (Array.isArray(v) && v.length === 4 && v.every((x) => typeof x === "number") ? (v as unknown as RGBA) : d);
 
-export type BoltStyle = "single" | "energetic" | "jagged" | "crazy";
+export type BoltStyle = "pieces" | "single" | "energetic" | "jagged" | "crazy";
 
 /** A jagged line from a to b: the middle pushed sideways again and again (midpoint displacement). */
 const jag = (a: Vec2, b: Vec2, rough: number, depth: number, rng: SeededStream): Vec2[] => {
@@ -52,6 +59,23 @@ export const boltStrokes = (style: BoltStyle, box: Bounds, from: "random" | "lef
   const fx = from === "left" ? 0.2 : from === "right" ? 0.8 : from === "centre" ? 0.5 : 0.15 + 0.7 * base.next();
   const rng = new SeededStream(seed, 2000 + strike * 37 + (style === "single" ? 0 : variant));
   const out: Vec2[][] = [];
+  if (style === "pieces") {
+    // A piece of a bolt high on the house slanting down to one side, in a new place each flicker.
+    const r = new SeededStream(seed, 4000 + strike * 37 + variant);
+    const start: Vec2 = [x0 + W * (variant === 0 ? fx : 0.12 + 0.76 * r.next()), y0 + H * (0.02 + 0.3 * r.next())];
+    const side = r.next() < 0.5 ? -1 : 1;
+    const ang = Math.PI / 2 - side * (0.35 + 0.45 * r.next());
+    const len = H * (0.4 + 0.35 * r.next());
+    const main = jag(start, [start[0] + Math.cos(ang) * len, start[1] + Math.sin(ang) * len], 0.18, 6, r);
+    out.push(main);
+    for (let b = 1 + Math.floor(r.next() * 2); b > 0; b--) {
+      const at = main[Math.floor((0.2 + 0.6 * r.next()) * (main.length - 1))]!;
+      const a2 = ang + (r.next() < 0.5 ? -1 : 1) * (0.4 + 0.5 * r.next());
+      const l2 = len * (0.12 + 0.2 * r.next());
+      out.push(jag(at, [at[0] + Math.cos(a2) * l2, at[1] + Math.sin(a2) * l2], 0.3, 4, r));
+    }
+    return out;
+  }
   if (style === "single" || style === "energetic") {
     const top: Vec2 = [x0 + W * fx, y0 - H * 0.12];
     const ground: Vec2 = [top[0] + W * (base.next() - 0.5) * 0.3, y0 + H];
@@ -163,6 +187,7 @@ const PART_CHOICES = [
 ] as const;
 
 const STYLE_CHOICES = [
+  { value: "pieces", label: "Pieces on the house" },
   { value: "single", label: "Single strike" },
   { value: "energetic", label: "Energetic burst" },
   { value: "jagged", label: "Jagged burst" },
@@ -178,17 +203,23 @@ export const lightning: RecipeDef = {
   suits: ["wall", "roof", "roofline", "garage", "door", "window", "column", "custom"],
   defaultSeconds: 20,
   params: [
-    { key: "style", label: "Bolt", control: "choice", default: "single", choices: STYLE_CHOICES, primary: true, help: "Single strike: one bolt to the ground. Energetic burst: branches like a tree. Jagged burst: a knot of crackling arcs. Crazy strike: arcs crawling about.", drives: ["source.contents"] },
+    { key: "look", label: "Flash", control: "choice", default: "house", choices: [{ value: "house", label: "The house goes white" }, { value: "light", label: "Coloured light" }], primary: true, help: "The house goes white: a bright picture of the house flickers in (its opacity keyed to each strike). Coloured light: the areas fill with the flash colour.", drives: ["source", "masks", "transform.opacity", "source.contents"] },
+    { key: "style", label: "Bolt", control: "choice", default: "pieces", choices: STYLE_CHOICES, primary: true, help: "Pieces on the house: a piece of a bolt in a new spot every flicker. Single strike: one bolt to the ground. Energetic burst: branches like a tree. Jagged burst: a knot of crackling arcs. Crazy strike: arcs crawling about.", drives: ["source.contents"] },
     { key: "strikes", label: "Strikes", control: "slider", default: 3, min: 1, max: 30, step: 1, primary: true, drives: ["source.contents"] },
     { key: "every", label: "Time between strikes", control: "seconds", default: 6, min: 0.8, max: 60, step: 0.1, unit: "s", primary: true, help: "On average; each gap varies a little.", drives: ["source.contents"] },
-    { key: "flash", label: "Flash brightness", control: "slider", default: 85, min: 0, max: 100, unit: "%", primary: true, help: "How brightly the areas light up with each strike (0: only the bolt).", drives: ["source.contents"] },
+    { key: "flash", label: "Flash brightness", control: "slider", default: 90, min: 0, max: 100, unit: "%", primary: true, help: "How strongly the flash shows at its brightest (0: only the bolt).", drives: ["source.contents", "transform.opacity"] },
     { key: "crack", label: "Crack of the strike", control: "toggle", default: true, primary: true, help: "A sound right as the bolt hits." },
     { key: "thunder", label: "Thunder", control: "toggle", default: true, primary: true, help: "Thunder rolling in after each strike." },
     { key: "flickers", label: "Flickers per strike", control: "slider", default: 3, min: 1, max: 6, step: 1, help: "Real lightning flashes two or three times in about a second.", drives: ["source.contents"] },
     { key: "firstAt", label: "First strike after", control: "seconds", default: 0.5, min: 0, max: 60, step: 0.1, unit: "s", drives: ["source.contents"] },
-    { key: "flashColor", label: "Flash colour", control: "color", default: [0.85, 0.9, 1, 1], drives: ["source.contents"] },
-    { key: "bolt", label: "Draw the bolt", control: "toggle", default: true, drives: ["source.contents"] },
-    { key: "boltColor", label: "Bolt colour", control: "color", default: [0.78, 0.88, 1, 1], drives: ["source.contents"] },
+    { key: "flashPicture", label: "White house picture", control: "media", default: "", accepts: ["image", "video"], help: "For “The house goes white”: your own white picture of the house (lined up with the building), or the one Before Effects makes from the building photo.", drives: ["source"] },
+    { key: "flashColor", label: "Flash colour", control: "color", default: [0.85, 0.9, 1, 1], help: "For “Coloured light”.", drives: ["source.contents"] },
+    { key: "bolt", label: "Show the bolt", control: "toggle", default: true, drives: ["source.contents"] },
+    { key: "moves", label: "Bolt moves each flicker", control: "toggle", default: true, help: "A new shape (and for pieces, a new place) every flicker.", drives: ["source.contents"] },
+    { key: "boltClip", label: "Bolt from your clip", control: "media", default: "", accepts: ["video"], help: "Your own lightning video (a bolt on black): a different moment of it every flicker, placed, tilted and moved about the house. Leave empty for drawn bolts.", drives: ["source", "transform"] },
+    { key: "clipSize", label: "Clip size", control: "slider", default: 110, min: 20, max: 300, unit: "%", help: "How tall the clip is, compared with the areas.", drives: ["transform.scale"] },
+    { key: "clipTilt", label: "Clip tilt up to", control: "slider", default: 35, min: 0, max: 90, unit: "°", drives: ["transform.rotation"] },
+    { key: "boltColor", label: "Bolt colour", control: "color", default: [0.88, 0.94, 1, 1], drives: ["source.contents"] },
     { key: "from", label: "Strikes from", control: "choice", default: "random", choices: [{ value: "random", label: "Anywhere" }, { value: "left", label: "Left" }, { value: "centre", label: "Centre" }, { value: "right", label: "Right" }], drives: ["source.contents"] },
     { key: "boltWidth", label: "Bolt width", control: "slider", default: 0, min: 0, max: 40, unit: "px", help: "0 picks a width that suits the scene size.", drives: ["source.contents"] },
     { key: "glow", label: "Bolt glow", control: "slider", default: 75, min: 0, max: 100, drives: ["effects.glow"] },
@@ -209,12 +240,12 @@ export const lightning: RecipeDef = {
   generate: (ctx) => {
     const p = ctx.params;
     const seed = Math.round(num(p.seed, 1));
-    const style = (STYLE_CHOICES.find((c) => c.value === p.style)?.value ?? "single") as BoltStyle;
+    const style = (STYLE_CHOICES.find((c) => c.value === p.style)?.value ?? "pieces") as BoltStyle;
     const seconds = num(p.seconds, 20);
     const end = Math.min(ctx.comp.duration, ctx.startTime + sec(seconds));
     const times = strikeTimes(Math.round(num(p.strikes, 3)), num(p.firstAt, 0.5), num(p.every, 6), seed).filter((t) => ctx.startTime + sec(t) < end);
     const nFlick = Math.max(1, Math.round(num(p.flickers, 3)));
-    const flashB = Math.min(100, Math.max(0, num(p.flash, 85)));
+    const flashB = Math.min(100, Math.max(0, num(p.flash, 90)));
     const diag = Math.hypot(ctx.comp.width, ctx.comp.height);
     const width = num(p.boltWidth, 0) > 0 ? num(p.boltWidth, 0) : Math.max(2, Math.round(diag * 0.0024));
     const at = (t: number) => ctx.startTime + sec(t);
@@ -223,35 +254,95 @@ export const lightning: RecipeDef = {
 
     // Bolts: one layer per strike; each look visible during its flicker.
     const box = ctx.targets.length ? pathBounds(ctx.targets.map((t) => t.region.path)) : { x: 0, y: 0, w: ctx.comp.width, h: ctx.comp.height };
-    if (p.bolt !== false)
+    const media = (key: string, kinds: readonly string[]): Asset | undefined => {
+      const a = typeof p[key] === "string" ? ctx.project.assets[p[key] as string] : undefined;
+      return a && !a.missing && kinds.includes(a.kind) ? a : undefined;
+    };
+    const clip = media("boltClip", ["video"]);
+    const fixed = p.moves === false && (style === "single" || style === "energetic" || style === "pieces");
+    const base = (name: string, blend: Layer["blendMode"]): Omit<Layer, "id" | "generatedBy" | "source"> => ({ ...shapeLayer(ctx, name, [], [], end), blendMode: blend });
+    if (p.bolt !== false && clip) {
+      // The person's lightning clip: a different moment of it each flicker, placed, tilted and moved.
+      const cw = clip.meta.width ?? ctx.comp.width, ch = clip.meta.height ?? ctx.comp.height;
+      const clipLen = clip.meta.duration ? timeToSeconds(clip.meta.duration) : 1.5;
+      const size = (Math.max(10, num(p.clipSize, 110)) / 100) * box.h;
+      const tilt = Math.max(0, Math.min(90, num(p.clipTilt, 35)));
+      times.forEach((t, s) => {
+        flickers(nFlick, seed, s).forEach(([o, b], v) => {
+          const r = new SeededStream(seed, 8000 + s * 31 + (fixed ? 0 : v));
+          const k = (size * (0.85 + 0.3 * r.next())) / ch;
+          const pos: [number, number, number] = [box.x + box.w * (0.2 + 0.6 * r.next()), box.y + box.h * (0.25 + 0.3 * r.next()), 0];
+          const rot = (r.next() * 2 - 1) * tilt;
+          // Which moment of the clip shows (its middle part, where the bolts are).
+          const moment = clipLen * (0.15 + 0.6 * r.next());
+          const on = at(t + o);
+          out.push({
+            role: `bolt-${s}-${v}`,
+            layer: {
+              ...base(`Lightning bolt ${s + 1}.${v + 1}`, "screen"),
+              source: { kind: "footage", assetId: clip.id },
+              startTime: on - sec(moment),
+              inPoint: on,
+              outPoint: Math.min(ctx.comp.duration, on + sec(0.26)),
+              transform: {
+                ...defaultTransform(0, 0),
+                anchor: staticProp<[number, number, number]>([cw / 2, ch / 2, 0]),
+                position: staticProp(pos, true),
+                scale: staticProp<[number, number, number]>([k * 100, k * 100, 100]),
+                rotation: staticProp<[number, number, number]>([0, 0, rot]),
+                opacity: keyed(`${ctx.instanceId}_c${s}_${v}`, [[on, 100 * Math.max(0.6, b), "linear"], [on + sec(0.12), 70 * b, "linear"], [on + sec(0.26), 0, "hold"]]),
+              },
+            },
+          });
+        });
+      });
+    } else if (p.bolt !== false)
       times.forEach((t, s) => {
         const fl = flickers(nFlick, seed, s);
-        const looks = style === "single" ? 1 : fl.length;
+        const looks = fixed ? 1 : fl.length;
         const contents: ShapeContents[] = [];
         for (let v = 0; v < looks; v++) {
-          const strokes = boltStrokes(style, box, from, seed, s, v);
-          const showing = style === "single" ? fl : [fl[v]!];
+          const strokes = boltStrokes(style, box, from, seed, s, fixed ? 0 : v);
+          const showing = fixed ? fl : [fl[v]!];
           const pts: Array<[Flicks, number, "linear" | "hold"]> = [[ctx.startTime, 0, "hold"]];
-          for (const [o, b] of showing) pts.push([at(t + o), 100 * b, "linear"], [at(t + o + 0.09), 60 * b, "linear"], [at(t + o + 0.2), 0, "hold"]);
+          // The bolt shows as the flash fades a little, so it reads against the white house.
+          for (const [o, b] of showing) pts.push([at(t + o) - 1, 0, "hold"], [at(t + o + 0.03), 100 * Math.max(0.6, b), "linear"], [at(t + o + 0.12), 70 * b, "linear"], [at(t + o + 0.24), 0, "hold"]);
           strokes.forEach((line, i) =>
             contents.push({
               path: { kind: "path", path: staticProp(packPath(polygonPath(line, false))) },
-              stroke: { color: staticProp(color(p.boltColor, [0.78, 0.88, 1, 1])), width: staticProp(i === 0 && (style === "single" || style === "energetic") ? width : width * 0.55), opacity: keyed(`${ctx.instanceId}_b${s}_${v}_${i}`, [...pts]), cap: "round", join: "round" },
+              stroke: { color: staticProp(color(p.boltColor, [0.88, 0.94, 1, 1])), width: staticProp(i === 0 && style !== "jagged" && style !== "crazy" ? width : width * 0.55), opacity: keyed(`${ctx.instanceId}_b${s}_${v}_${i}`, [...pts]), cap: "round", join: "round" },
             }),
           );
         }
         out.push({ role: `bolt-${s}`, layer: shapeLayer(ctx, `Lightning bolt ${s + 1}`, contents, [glow(num(p.glow, 75), width * 6)], end) });
       });
 
-    // The flash: the chosen areas light up with every flicker.
+    // The flash: with every flicker, the house goes white (a picture, its opacity keyed) or fills with light.
+    const flashPic = p.look !== "light" ? media("flashPicture", ["image", "video"]) : undefined;
     if (flashB > 0) {
       const pts: Array<[Flicks, number, "linear" | "hold"]> = [[ctx.startTime, 0, "hold"]];
       times.forEach((t, s) => {
         for (const [o, b] of flickers(nFlick, seed, s)) pts.push([at(t + o) - 1, 0, "hold"], [at(t + o), flashB * b, "linear"], [at(t + o + 0.07), flashB * b * 0.35, "linear"], [at(t + o + 0.22), 0, "hold"]);
       });
-      const flashCol = color(p.flashColor, [0.85, 0.9, 1, 1]);
-      const contents: ShapeContents[] = ctx.targets.map((tg) => ({ path: { kind: "region", ref: tg.ref }, fill: { color: staticProp(flashCol), opacity: keyed(`${ctx.instanceId}_f${tg.region.id}`, [...pts]) } }));
-      out.push({ role: "flash", layer: shapeLayer(ctx, "Lightning flash", contents, [], end) });
+      if (flashPic) {
+        const k = ctx.comp.width / (flashPic.meta.width ?? ctx.comp.width);
+        const masks: Mask[] = ctx.targets
+          .filter((tg) => tg.region.path.closed)
+          .map((tg, i) => ({ id: `area${i}`, name: tg.region.name, source: { kind: "region", ref: tg.ref }, mode: "add", inverted: false, feather: staticProp(0), expansion: staticProp(0), opacity: staticProp(100) }));
+        out.push({
+          role: "flash",
+          layer: {
+            ...base("Lightning flash (the house goes white)", "normal"),
+            source: { kind: "footage", assetId: flashPic.id, loop: true },
+            masks,
+            transform: { ...defaultTransform(0, 0), scale: staticProp<[number, number, number]>([k * 100, k * 100, 100]), opacity: keyed(`${ctx.instanceId}_fo`, [...pts]) },
+          },
+        });
+      } else {
+        const flashCol = color(p.flashColor, [0.85, 0.9, 1, 1]);
+        const contents: ShapeContents[] = ctx.targets.map((tg) => ({ path: { kind: "region", ref: tg.ref }, fill: { color: staticProp(flashCol), opacity: keyed(`${ctx.instanceId}_f${tg.region.id}`, [...pts]) } }));
+        out.push({ role: "flash", layer: shapeLayer(ctx, "Lightning flash", contents, [], end) });
+      }
     }
 
     // Sounds: the crack as the bolt hits, then thunder; panned toward where the strike landed.
