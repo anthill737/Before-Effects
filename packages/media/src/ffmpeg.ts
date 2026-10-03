@@ -6,7 +6,7 @@
  * `availablePresets()` checks the encoder list, so the UI never lists a format that can't be written.
  */
 import { type ChildProcessWithoutNullStreams, execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -254,6 +254,8 @@ export class EncodeSession {
     readonly spec: EncodeSpec,
     readonly preset: Preset,
     readonly outputPath: string,
+    /** Where FFmpeg writes until it has finished (null for image sequences, written in place). */
+    private readonly partialPath: string | null = null,
   ) {
     proc.stderr.on("data", (d: Buffer) => {
       this.log += d.toString();
@@ -270,11 +272,15 @@ export class EncodeSession {
     if (!preset) throw new MediaError("That export format isn't available.", "Choose another format.");
     const { ffmpeg } = await findFfmpeg();
     let outputPath = spec.output;
+    // A video is written under a ".partial" name and renamed once it's complete, so an export that's
+    // interrupted (the app closed, the computer stopped) never leaves a broken file under its real name.
+    let partial: string | null = null;
     if (preset.sequence) {
       mkdirSync(spec.output, { recursive: true });
       outputPath = join(spec.output, `frame_%06d.${preset.extension}`);
     } else {
       mkdirSync(dirname(spec.output), { recursive: true });
+      partial = `${spec.output}.partial`;
     }
     const rate = `${spec.frameRate.num}/${spec.frameRate.den}`;
     const args = [
@@ -289,11 +295,12 @@ export class EncodeSession {
       ...withScale(preset.args, spec.deliverSize),
       "-r", rate,
       ...(preset.sequence ? ["-start_number", String(spec.startNumber ?? 0)] : []),
-      outputPath,
+      // The ".partial" name doesn't say the container, so name it.
+      ...(partial ? ["-f", preset.extension === "mov" ? "mov" : "mp4", partial] : [outputPath]),
     ];
     const proc = spawn(ffmpeg, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     processTracker?.(`ffmpeg-encode:${preset.id}`, proc);
-    return new EncodeSession(proc, spec, preset, preset.sequence ? spec.output : outputPath);
+    return new EncodeSession(proc, spec, preset, preset.sequence ? spec.output : outputPath, partial);
   }
 
   get bytesPerFrame(): number {
@@ -311,7 +318,18 @@ export class EncodeSession {
   async finish(): Promise<EncodeResult> {
     this.proc.stdin.end();
     const code = await this.exited;
-    const ok = code === 0 && !this.failed;
+    let ok = code === 0 && !this.failed;
+    if (this.partialPath) {
+      if (ok) {
+        try {
+          if (existsSync(this.outputPath)) unlinkSync(this.outputPath);
+          renameSync(this.partialPath, this.outputPath);
+        } catch (e) {
+          ok = false;
+          this.failed = `The finished video couldn't be moved into place: ${String((e as Error)?.message ?? e)}`;
+        }
+      } else this.removePartial();
+    }
     return {
       ok,
       output: this.outputPath,
@@ -324,6 +342,15 @@ export class EncodeSession {
   cancel(): void {
     this.proc.stdin.destroy();
     this.proc.kill();
+    void this.exited.then(() => this.removePartial());
+  }
+
+  private removePartial(): void {
+    try {
+      if (this.partialPath && existsSync(this.partialPath)) unlinkSync(this.partialPath);
+    } catch {
+      // left for the next start-up to tidy
+    }
   }
 }
 

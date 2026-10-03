@@ -8,11 +8,12 @@
  * Drive-for-desktop folder; a failed copy can be retried without rendering again.
  */
 import { copyFile, mkdir, statfs, stat } from "node:fs/promises";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
 import type { RenderJob, RenderJobSpec } from "../shared/api.ts";
+import { paths } from "./files.ts";
 import { log } from "./log.ts";
 import { webPrefs } from "./windows.ts";
 
@@ -126,9 +127,24 @@ export const driveFolder = (): string | null => {
   return candidates.find((c) => existsSync(c)) ?? null;
 };
 
+/** Videos still being written are named "….partial" until they're complete; any left at start-up were cut off. */
+const tidyPartials = () => {
+  try {
+    const dir = paths().renders;
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".partial")) continue;
+      unlinkSync(join(dir, f));
+      log(`removed an export that was cut off: ${f}`);
+    }
+  } catch {
+    /* tidying is a convenience */
+  }
+};
+
 export const registerRenderQueue = (mode: string) => {
   modeArg = mode;
   load();
+  tidyPartials();
 
   ipcMain.handle("render:enqueue", async (_e, spec: RenderJobSpec) => {
     const free = await freeBytes(spec.output);
