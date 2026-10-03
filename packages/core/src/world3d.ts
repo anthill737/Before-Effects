@@ -81,14 +81,14 @@ export interface Fracture3D {
   /** Seconds into the layer when the pieces start flying back; null = they stay down. */
   readonly rebuildAt: number | null;
   readonly rebuildSeconds: number;
-  /** Speed toward the audience when the pieces let go (m/s). */
+  /** Speed toward the audience when the pieces let go (m/s); negative pushes them in (a window broken inwards). */
   readonly push: number;
   /** Random tumbling when the pieces let go (turns per second). */
   readonly spin: number;
   /** Seconds over which the pieces let go, from the top down (0 or absent = all at once). */
   readonly stagger?: number;
-  /** How it breaks: irregular pieces (absent), or glass — shards radiating from an impact point. */
-  readonly pattern?: "pieces" | "glass";
+  /** How it breaks: irregular pieces (absent), glass — shards radiating from an impact point — or bricks: courses of heavy blocks laid like masonry. */
+  readonly pattern?: "pieces" | "glass" | "bricks";
 }
 
 /**
@@ -434,6 +434,58 @@ export const glassShards = (outline: readonly Vec2[], holes: readonly (readonly 
 };
 
 /**
+ * Break an outline like a masonry wall: courses of blocks `size` long and about half as tall, every
+ * other course offset by half a block (running bond), lengths varying a little so it doesn't look
+ * ruled. Blocks are clipped to the outline; holes stay empty. Seeded and deterministic.
+ */
+export const brickPieces = (outline: readonly Vec2[], holes: readonly (readonly Vec2[])[], size: number, seed: number): Vec2[][] => {
+  const key = simHash(stableJson({ bricks: 1, outline, holes, size, seed }));
+  const hit = fractureCache.get(key);
+  if (hit) return hit;
+  const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  let len = Math.max(8, size);
+  while (Math.ceil((x1 - x0) / len + 1) * Math.ceil((y1 - y0) / (len * 0.48)) > MAX_FRAGMENTS) len *= 1.12;
+  const tall = len * 0.48;
+  const rows = Math.max(1, Math.round((y1 - y0) / tall));
+  const rh = (y1 - y0) / rows;
+  const cells: Vec2[][] = [];
+  for (let j = 0; j < rows; j++) {
+    const top = y0 + j * rh, bottom = top + rh;
+    // Running bond: every other course starts half a block along.
+    let x = x0 - (j % 2 ? len / 2 : 0) - len * 0.25 * rand01(seed, j, 0, 11);
+    for (let i = 0; x < x1; i++) {
+      const w = len * (0.8 + 0.4 * rand01(seed, i, j, 12));
+      cells.push([
+        [x, top],
+        [x + w, top],
+        [x + w, bottom],
+        [x, bottom],
+      ]);
+      x += w;
+    }
+  }
+  const ring = (pts: readonly Vec2[]): [number, number][] => pts.map((p) => [p[0], p[1]]);
+  const open = (rg: [number, number][]): Vec2[] => (rg.length > 1 && rg[0]![0] === rg.at(-1)![0] && rg[0]![1] === rg.at(-1)![1] ? rg.slice(0, -1) : rg) as Vec2[];
+  const pieces: Vec2[][] = [];
+  try {
+    const whole = polygonClipping.difference([ring(outline)], ...holes.filter((h) => h.length >= 3).map((h) => [ring(h)]));
+    for (const c of cells) {
+      for (const poly of polygonClipping.intersection([ring(c)], whole)) {
+        const o = open(poly[0]!);
+        if (o.length >= 3 && Math.abs(polyArea(o)) > 4) pieces.push(ccw(o));
+      }
+      if (pieces.length >= MAX_FRAGMENTS) break;
+    }
+  } catch {
+    return fracture(outline, holes, size, seed);
+  }
+  fractureCache.set(key, pieces);
+  if (fractureCache.size > 24) fractureCache.delete(fractureCache.keys().next().value!);
+  return pieces;
+};
+
+/**
  * Cut an outline (minus holes) into blocks: a grid of squares, full-height columns or full-width
  * rows, `size` apart with `gap` between them (canvas pixels). Blocks are clipped to the outline.
  */
@@ -649,7 +701,7 @@ const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }
     const holes = regionHoles(r, venue).map((h) => closedPoints(h)).filter((h) => h.length >= 3);
     if (outline.length < 3) continue;
     const polys = fr
-      ? (fr.pattern === "glass" ? glassShards : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
+      ? (fr.pattern === "glass" ? glassShards : fr.pattern === "bricks" ? brickPieces : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
       : blocks
         ? blockCells(outline, holes, blocks).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
         : solidWithHoles(outline, holes);

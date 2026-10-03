@@ -9,6 +9,7 @@
  *     tangents, and the temporal ease controls *speed along the path* (arc-length parameterised).
  * Everything is a pure function of (property, time), so any frame can be evaluated in any order.
  */
+import { wiggle1 } from "./rng.ts";
 import { type Flicks, FLICKS_PER_SECOND } from "./time.ts";
 
 export type PropValue = number | readonly number[];
@@ -275,11 +276,28 @@ export interface PropertyEvalContext {
   evalExpression?: (prop: AnimProp, keyframedValue: PropValue, t: Flicks) => PropValue;
 }
 
-/** Final value: keyframes, then the expression (when enabled and an evaluator is installed). */
+/**
+ * Built-in expressions, safe and deterministic (the same frame always gives the same value, so
+ * preview and export match). Supported: wiggle(freq, amount[, octaves[, seed]]) — like After
+ * Effects: the keyframed value plus smooth random motion, `freq` wiggles a second, up to `amount` in
+ * the property's units, each dimension on its own. Anything else leaves the value as keyframed.
+ */
+export const builtinExpression = (src: string, v: PropValue, t: Flicks): PropValue => {
+  const m = /^\s*wiggle\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*(?:,\s*([-\d.]+)\s*)?(?:,\s*([-\d.]+)\s*)?\)\s*;?\s*$/.exec(src);
+  if (!m) return v;
+  const [freq, amount, octaves, seed] = [Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : 1, m[4] ? Number(m[4]) : 1];
+  if (![freq, amount, octaves, seed].every(Number.isFinite)) return v;
+  const s = t / FLICKS_PER_SECOND;
+  if (typeof v === "number") return v + wiggle1(s, freq, amount, seed, 0, octaves);
+  return v.map((x, i) => x + wiggle1(s, freq, amount, seed, i, octaves)) as unknown as PropValue;
+};
+
+/** Final value: keyframes, then the expression (when enabled: the installed evaluator, else the built-in ones). */
 export const evalProp = <V extends PropValue>(p: AnimProp<V>, t: Flicks, ctx?: PropertyEvalContext): V => {
   const v = evalKeyframes(p, t);
-  if (p.expression?.enabled && ctx?.evalExpression) return ctx.evalExpression(p, v, t) as V;
-  return v;
+  if (!p.expression?.enabled) return v;
+  if (ctx?.evalExpression) return ctx.evalExpression(p, v, t) as V;
+  return builtinExpression(p.expression.src, v, t) as V;
 };
 
 /** Numeric velocity (units/second) by central difference; used by the speed graph and motion blur. */

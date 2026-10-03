@@ -5,6 +5,7 @@ import {
   crackSamples,
   createRegistry,
   emptyProject,
+  evalProp,
   evalKeyframes,
   flickers,
   generatedLayerId,
@@ -224,6 +225,26 @@ describe("lightning & thunder", () => {
     const { history, layers } = setup();
     history.apply({ type: "recipe.update", args: { instanceId: "L", params: {} } });
     expect(history.project.compositions.main!.layers).toEqual(layers);
+  });
+});
+
+describe("wiggle expression", () => {
+  it("adds smooth, repeatable motion within the amount, each dimension its own", () => {
+    const p = { value: [100, 50, 0] as [number, number, number], expression: { src: "wiggle(6, 10)", enabled: true } };
+    const at = (s: number) => evalProp(p, secondsToTime(s)) as number[];
+    const a = at(1.23);
+    expect(at(1.23)).toEqual(a);
+    expect(Math.abs(a[0]! - 100)).toBeLessThanOrEqual(10.5);
+    expect(a[0]! - 100).not.toBeCloseTo(a[1]! - 50, 3);
+    // Smooth: a frame apart it barely moves; a second apart it has moved.
+    expect(Math.abs(at(1.24)[0]! - a[0]!)).toBeLessThan(3);
+    const spread = Array.from({ length: 60 }, (_, i) => at(i * 0.1)[0]!);
+    expect(Math.max(...spread) - Math.min(...spread)).toBeGreaterThan(5);
+    // Off, or anything else, leaves the keyframed value alone.
+    expect(evalProp({ ...p, expression: { src: "wiggle(6, 10)", enabled: false } }, secondsToTime(1.23))).toEqual([100, 50, 0]);
+    expect(evalProp({ ...p, expression: { src: "time * 2", enabled: true } }, secondsToTime(1.23))).toEqual([100, 50, 0]);
+    // A different seed wiggles differently.
+    expect(evalProp({ ...p, expression: { src: "wiggle(6, 10, 1, 7)", enabled: true } }, secondsToTime(1.23))).not.toEqual(a);
   });
 });
 

@@ -235,7 +235,7 @@ method({
     thicknessCm: z.number().min(1).max(500).optional(),
     material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1) }).partial().optional(),
     physics: z.object({ body: z.enum(["dynamic", "static"]), mass: z.number().min(0.01).max(1e6), friction: z.number().min(0).max(2), bounce: z.number().min(0).max(1) }).partial().nullable().optional(),
-    fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(0).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass"]) }).partial().nullable().optional(),
+    fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(-20).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass", "bricks"]) }).partial().nullable().optional(),
     blocks: z
       .object({
         shape: z.enum(["cubes", "columns", "rows"]),

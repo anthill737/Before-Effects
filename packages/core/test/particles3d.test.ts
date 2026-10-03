@@ -4,6 +4,7 @@ import {
   BLOCK_PRESETS,
   blockCells,
   blockPose,
+  brickPieces,
   type Blocks3D,
   createRegistry,
   emitterPoint,
@@ -257,5 +258,47 @@ describe("blocks", () => {
     const turned = pieces.map((_, i) => blockPose(slats, pieces, i, 2.2));
     expect(turned.every((p) => p.dz === 0 && p.axis === "y")).toBe(true);
     expect(Math.max(...turned.map((p) => Math.abs(p.angle)))).toBeGreaterThan(0.3);
+  });
+});
+
+describe("bricks", () => {
+  const wall: [number, number][] = [[0, 0], [600, 0], [600, 300], [0, 300]];
+  const hole: [number, number][] = [[200, 100], [320, 100], [320, 220], [200, 220]];
+  const area = (pts: readonly (readonly [number, number])[]) => Math.abs(pts.reduce((a, p, i) => a + p[0] * pts[(i + 1) % pts.length]![1] - pts[(i + 1) % pts.length]![0] * p[1], 0)) / 2;
+
+  it("lays courses of blocks about `size` long and half as tall, every other course offset", () => {
+    const bricks = brickPieces(wall, [], 80, 1);
+    const tops = [...new Set(bricks.map((b) => Math.round(Math.min(...b.map((p) => p[1])))))].sort((a, b) => a - b);
+    expect(tops.length).toBeGreaterThan(6);
+    const rowH = tops[1]! - tops[0]!;
+    expect(rowH).toBeGreaterThan(80 * 0.4);
+    expect(rowH).toBeLessThan(80 * 0.6);
+    // The joints of one course don't line up with the next (running bond).
+    const joints = (top: number) => bricks.filter((b) => Math.round(Math.min(...b.map((p) => p[1]))) === top).map((b) => Math.round(Math.min(...b.map((p) => p[0])))).filter((x) => x > 5);
+    const a = joints(tops[1]!), b = joints(tops[2]!);
+    expect(a.some((x) => b.every((y) => Math.abs(x - y) > 10))).toBe(true);
+    // Together they cover the wall, and the same seed gives the same bricks.
+    expect(bricks.reduce((s, b) => s + area(b), 0)).toBeCloseTo(600 * 300, -2);
+    expect(brickPieces(wall, [], 80, 1)).toEqual(bricks);
+  });
+
+  it("leaves openings empty", () => {
+    const bricks = brickPieces(wall, [hole], 80, 2);
+    const covered = bricks.reduce((s, b) => s + area(b), 0);
+    expect(covered).toBeCloseTo(600 * 300 - 120 * 120, -2);
+    // No brick covers the opening (its middle and corners just inside it).
+    const inside = (poly: readonly (readonly [number, number])[], x: number, y: number) => {
+      let c = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i]!, [xj, yj] = poly[j]!;
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+      }
+      return c;
+    };
+    for (const [x, y] of [[260, 160], [205, 105], [315, 215], [205, 215], [315, 105]] as const) expect(bricks.some((b) => inside(b, x, y))).toBe(false);
+  });
+
+  it("is used when a wall breaks into bricks", () => {
+    expect(brickPieces(wall, [], 10, 1).length).toBeLessThanOrEqual(600);
   });
 });

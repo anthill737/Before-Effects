@@ -446,11 +446,11 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
           />
           {fr && (
             <>
-              <Field label="Breaks like" help="Glass: shards radiating from where it's struck. For a clear, thin pane also lower its strength and thickness above.">
+              <Field label="Breaks like" help="Glass: shards radiating from where it's struck (for a clear, thin pane also lower its strength and thickness above). Bricks: courses of heavy blocks, like a masonry wall; piece size is a block's length.">
                 <div className="segmented" role="radiogroup" aria-label="Breaks like">
-                  {(["pieces", "glass"] as const).map((k) => (
-                    <button key={k} role="radio" aria-checked={(fr.pattern ?? "pieces") === k} className={(fr.pattern ?? "pieces") === k ? "on" : ""} onClick={() => setFr({ pattern: k }, k === "glass" ? "Break like glass" : "Break into pieces", "pattern")}>
-                      {k === "glass" ? "Glass shards" : "Pieces"}
+                  {(["pieces", "glass", "bricks"] as const).map((k) => (
+                    <button key={k} role="radio" aria-checked={(fr.pattern ?? "pieces") === k} className={(fr.pattern ?? "pieces") === k ? "on" : ""} onClick={() => setFr({ pattern: k }, k === "glass" ? "Break like glass" : k === "bricks" ? "Break into bricks" : "Break into pieces", "pattern")}>
+                      {k === "glass" ? "Glass shards" : k === "bricks" ? "Bricks" : "Pieces"}
                     </button>
                   ))}
                 </div>
@@ -475,8 +475,8 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
               <Field label="Lets go over" help="0: all at once. Longer: the top gives way first and the rest follows down the wall (crumbling).">
                 <Slider label="Lets go over" value={fr.stagger ?? 0} min={0} max={5} step={0.1} unit="s" onChange={(v) => setFr({ stagger: v }, "Change how it lets go", "stagger")} />
               </Field>
-              <Field label="Push toward the audience">
-                <Slider label="Push" value={fr.push} min={0} max={8} step={0.1} unit="m/s" onChange={(v) => setFr({ push: v }, "Change push", "push")} />
+              <Field label="Push toward the audience" help="Below 0 pushes the pieces into the building (a window broken inwards).">
+                <Slider label="Push" value={fr.push} min={-8} max={8} step={0.1} unit="m/s" onChange={(v) => setFr({ push: v }, "Change push", "push")} />
               </Field>
               <Field label="Tumble">
                 <Slider label="Tumble" value={fr.spin} min={0} max={3} step={0.05} unit="turns/s" onChange={(v) => setFr({ spin: v }, "Change tumble", "spin")} />
