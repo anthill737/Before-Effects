@@ -16,6 +16,7 @@ import {
   staticProp as sp,
   type Region,
   type ResolvedScene3D,
+  resolveScene3D,
   shatterPieces,
   staticProp,
   type Venue,
@@ -205,5 +206,17 @@ describe("layer effects", () => {
     h.undo();
     h.undo();
     expect(h.project.compositions["s1"]!.layers["L"]!.effects).toEqual([]);
+  });
+
+  it("place a model from Blender as an ordinary 3D object, without physics of its own", () => {
+    const h = setup();
+    const model = { id: "m", name: "Ring", kind: "mesh" as const, visible: true, position: sp<[number, number, number]>([1, 0, 0.5]), rotation: sp<[number, number, number]>([0, 0, 0]), scale: sp<[number, number, number]>([100, 100, 100]), geometry: { kind: "model" as const, assetId: "glb" }, clip: { speed: 1, offset: 0 }, physics: { body: "dynamic" as const, mass: 1, friction: 0.5, bounce: 0.1 } };
+    h.apply({ type: "scene3d.add", args: { scene: { id: "s", name: "Ring (3D)", objectOrder: ["m"], objects: { m: model }, gravity: [0, -9.81, 0], cameraDistance: 1.6 } } });
+    const r = resolveScene3D(h.project, h.project.scenes3d!["s"]!, { venueId: "v", canvas, fps: 30, frames: 60 });
+    expect(r.objects).toHaveLength(1);
+    expect(r.objects[0]!.pieces).toEqual([]);
+    expect(r.physics).toBeNull();
+    h.apply({ type: "object3d.update", args: { sceneId: "s", objectId: "m", changes: { clip: { speed: 0.5, offset: 2 } } } });
+    expect(h.project.scenes3d!["s"]!.objects["m"]!.clip).toEqual({ speed: 0.5, offset: 2 });
   });
 });

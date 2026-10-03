@@ -6,6 +6,7 @@
 import { formatSecondsFriendly, framesIn, timeToFrame } from "@be/core";
 import type { PresetId } from "@be/media";
 import { useEffect, useRef, useState } from "react";
+import { currentProjector } from "./projectors.ts";
 import { hasAudio } from "./audioEngine.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
@@ -45,6 +46,8 @@ export const ExportDialog = () => {
   const [size, setSize] = useState<(typeof SIZES)[number]["id"]>("full");
   const [range, setRange] = useState<"show" | "preview">("show");
   const [projectorFormat, setProjectorFormat] = useState<"h264" | "hap">("h264");
+  /** Which projector(s) to export for: one, or every projector (one file each). */
+  const [which, setWhich] = useState<string>("current");
   const [dir, setDir] = useState("");
   const dialogRef = useRef<HTMLDialogElement>(null);
 
@@ -66,7 +69,9 @@ export const ExportDialog = () => {
   const comp = currentComp(s);
   const venue = s.project ? activeVenue({ project: s.project }) : undefined;
   if (!comp || !s.project) return <dialog ref={dialogRef} />;
-  const projector = venue?.projectorOrder[0] ? venue.projectors[venue.projectorOrder[0]] : undefined;
+  const current = currentProjector(venue);
+  const projectors = venue ? venue.projectorOrder.map((id) => venue.projectors[id]!).filter(Boolean) : [];
+  const projector = which !== "current" && which !== "all" && venue?.projectors[which] ? venue.projectors[which] : current;
   const pr = s.range;
   const startFrame = range === "preview" && pr ? timeToFrame(pr.start, comp.frameRate) : 0;
   const endFrame = range === "preview" && pr ? timeToFrame(pr.end, comp.frameRate) : framesIn(comp.duration, comp.frameRate);
@@ -84,17 +89,22 @@ export const ExportDialog = () => {
     const preset: PresetId = o.id === "projector" && projectorFormat === "hap" ? "hap" : o.preset;
     const ext = preset.startsWith("prores") || preset === "hap" ? "mov" : "mp4";
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
-    const output = `${dir}\\${sanitize(snapshot.name)} - ${o.suffix}${range === "preview" && pr ? " (range)" : ""} ${stamp}.${ext}`;
+    // A projector export can be one file per projector (each with its own alignment and blend).
+    const targets = o.id === "projector" && venue ? (which === "all" ? projectors : projector ? [projector] : []) : [null];
     try {
-      const id = await window.be.render.enqueue({
-        name: `${snapshot.name} — ${o.title}`,
+      let id = "";
+      for (const tp of targets) {
+        const label = tp && targets.length > 1 ? ` (${tp.name})` : "";
+        const output = `${dir}\\${sanitize(snapshot.name)} - ${o.suffix}${tp && projectors.length > 1 ? ` - ${sanitize(tp.name)}` : ""}${range === "preview" && pr ? " (range)" : ""} ${stamp}.${ext}`;
+        id = await window.be.render.enqueue({
+        name: `${snapshot.name} — ${o.title}${label}`,
         outcome: o.id,
         preset,
         compId: comp.id,
-        target: o.id === "projector" && venue && projector ? { kind: "projector", venueId: venue.id, projectorId: projector.id } : { kind: "master", keepAlpha: o.alpha },
+        target: tp && venue ? { kind: "projector", venueId: venue.id, projectorId: tp.id } : { kind: "master", keepAlpha: o.alpha },
         output,
-        width: full.width,
-        height: full.height,
+        width: tp ? tp.output.width : full.width,
+        height: tp ? tp.output.height : full.height,
         ...(f < 1 ? { deliverSize: delivered } : {}),
         frameRate: comp.frameRate,
         startFrame,
@@ -103,7 +113,8 @@ export const ExportDialog = () => {
         withAudio: sound && preset !== "png-sequence",
         estimatedBytes: Math.round(((o.mbps * 1e6) / 8) * seconds * f * f),
         snapshot: JSON.stringify(snapshot),
-      });
+        });
+      }
       setQueued(id);
       useStudio.getState().toast({ kind: "info", text: "Exporting in the background — keep working. Progress is in Renders (top right)." });
     } catch (e) {
@@ -146,7 +157,18 @@ export const ExportDialog = () => {
             <dd>
               {isProjector ? (
                 <>
-                  {full.width}×{full.height} — {projector?.name}'s output size
+                  {projectors.length > 1 && (
+                    <select value={which} onChange={(e) => setWhich(e.target.value)} aria-label="Which projector">
+                      <option value="current">{current?.name} (the one you're aligning)</option>
+                      {projectors.filter((x) => x.id !== current?.id).map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                      <option value="all">Every projector — one file each ({projectors.length})</option>
+                    </select>
+                  )}{" "}
+                  {which === "all" ? "each at its own output size" : `${full.width}×${full.height} — ${projector?.name}'s output size`}
                 </>
               ) : (
                 <select value={size} onChange={(e) => setSize(e.target.value as typeof size)} aria-label="Export size">
@@ -185,7 +207,9 @@ export const ExportDialog = () => {
               <label>
                 <input type="radio" checked={projectorFormat === "hap"} onChange={() => setProjectorFormat("hap")} /> In a media server like Resolume or MadMapper (HAP)
               </label>
-              <p className="muted small">The alignment for {projector?.name} is built into this file. Don't add mapping again in the player.</p>
+              <p className="muted small">
+                The alignment{projectors.length > 1 ? " and edge blending" : ""} for {which === "all" ? "each projector" : projector?.name} is built into {which === "all" ? "its file" : "this file"}. Don't add mapping again in the player.
+              </p>
             </fieldset>
           )}
           {error && <p className="warn">{error}</p>}

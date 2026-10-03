@@ -9,6 +9,7 @@ import { useMemo, useRef, useState } from "react";
 import { applyEffect, applyRecipeToSelection, KIND_LABEL, previewRecipe, similarRegions, suggestedRecipes } from "../studio/actions.ts";
 import { animatePart, moveChoices } from "../studio/parts.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
+import { useCurrentProjector } from "../studio/projectors.ts";
 import { usePreview } from "./settings.ts";
 
 export const pathD = (p: PathData): string => {
@@ -178,7 +179,7 @@ export const ActionBar = ({ size }: { size: { w: number; h: number } }) => {
 export const CalibrationOverlay = ({ size }: { size: { w: number; h: number } }) => {
   const project = useStudio((s) => s.project)!;
   const venue = activeVenue({ project });
-  const projector = venue?.projectorOrder[0] ? venue.projectors[venue.projectorOrder[0]] : undefined;
+  const projector = useCurrentProjector(venue);
   const [drag, setDrag] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   if (!venue || !projector) return null;

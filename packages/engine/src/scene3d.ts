@@ -35,6 +35,8 @@ import {
   type Vec3,
 } from "@be/core";
 import * as THREE from "three/webgpu";
+import { type GLTF, GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { ExternalSourceRenderer } from "./compositor.ts";
 import type { Gpu } from "./gpu.ts";
 import type { PhysicsEngine } from "./physics.ts";
@@ -57,6 +59,8 @@ interface Entry {
   readonly light?: THREE.Light;
   readonly target?: THREE.Object3D;
   readonly bulb?: THREE.Mesh;
+  /** A model from a file: its scene graph, and its animation mixer (set to the layer's time each frame). */
+  readonly model3d?: { readonly root: THREE.Object3D; readonly mixer: THREE.AnimationMixer; readonly duration: number; readonly assetId: string } | { readonly pending: string };
   /** Particles: one instanced quad per live particle, refilled every frame. */
   readonly particles?: { readonly mesh: THREE.InstancedMesh; readonly emitter: ParticleEmitter; buf: Float32Array | null };
 }
@@ -176,6 +180,10 @@ export class SceneHost implements ExternalSourceRenderer {
   physics: PhysicsEngine | null = null;
   /** Loads an image asset (the building photo) for textures; set by the host app. */
   imageSource: ((assetId: string) => Promise<ImageBitmap | null>) | null = null;
+  /** Loads a model asset's file (GLB) for 3D scenes; set by the host app. */
+  modelSource: ((assetId: string) => Promise<Uint8Array | null>) | null = null;
+  private readonly models = new Map<string, GLTF | null>();
+  private readonly modelLoading = new Map<string, Promise<void>>();
   /** Called when something arrives that changes a render (photo loaded). */
   onChange: (() => void) | null = null;
 
@@ -218,6 +226,30 @@ export class SceneHost implements ExternalSourceRenderer {
     return undefined;
   }
 
+  /** A model's parsed file (undefined while loading, null if it couldn't be read). */
+  private model(assetId: string): GLTF | null | undefined {
+    if (this.models.has(assetId)) return this.models.get(assetId);
+    if (!this.modelLoading.has(assetId) && this.modelSource) {
+      const p = this.modelSource(assetId)
+        .then(async (bytes) => {
+          if (!bytes) {
+            this.models.set(assetId, null);
+            return;
+          }
+          const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+          const gltf = await new GLTFLoader().parseAsync(buf, "");
+          this.models.set(assetId, gltf);
+        })
+        .catch(() => void this.models.set(assetId, null))
+        .finally(() => {
+          this.modelLoading.delete(assetId);
+          this.onChange?.();
+        });
+      this.modelLoading.set(assetId, p);
+    }
+    return undefined;
+  }
+
   /** First frame at which this scene's prepared motion is needed. */
   private static firstMoving(p: ResolvedPhysics): number {
     let f = Infinity;
@@ -242,6 +274,11 @@ export class SceneHost implements ExternalSourceRenderer {
       this.photo(id);
       await this.photoLoading.get(id);
     }
+    for (const o of r.objects) {
+      if (o.object.geometry?.kind !== "model") continue;
+      this.model(o.object.geometry.assetId);
+      await this.modelLoading.get(o.object.geometry.assetId);
+    }
     if (r.physics && src.frame >= SceneHost.firstMoving(r.physics)) {
       if (!this.physics) throw new Error("Physics can't be prepared here.");
       await this.physics.ensure(r.physics);
@@ -261,6 +298,10 @@ export class SceneHost implements ExternalSourceRenderer {
   }
 
   private dropEntry(b: Built, e: Entry) {
+    if (e.model3d && "root" in e.model3d) {
+      b.scene.remove(e.model3d.root);
+      e.model3d.mixer.stopAllAction();
+    }
     for (const m of e.meshes) b.scene.remove(m);
     if (e.light) b.scene.remove(e.light);
     if (e.target) b.scene.remove(e.target);
@@ -272,6 +313,27 @@ export class SceneHost implements ExternalSourceRenderer {
 
   private makeEntry(b: Built, r: ResolvedScene3D, ro: ResolvedObject): Entry {
     const o = ro.object;
+    if (o.geometry?.kind === "model") {
+      const assetId = o.geometry.assetId;
+      const gltf = this.model(assetId);
+      if (!gltf) return { model: o, pieces: ro.pieces, meshes: [], mats: [], geos: [], model3d: { pending: assetId } };
+      // Each use gets its own copy (skinned meshes keep their bones), so one file can appear twice.
+      const root = cloneSkinned(gltf.scene);
+      root.traverse((x) => {
+        if ((x as THREE.Mesh).isMesh) {
+          (x as THREE.Mesh).castShadow = o.castShadow ?? true;
+          (x as THREE.Mesh).receiveShadow = o.receiveShadow ?? true;
+        }
+      });
+      const mixer = new THREE.AnimationMixer(root);
+      let duration = 0;
+      for (const clip of gltf.animations) {
+        mixer.clipAction(clip).play();
+        duration = Math.max(duration, clip.duration);
+      }
+      b.scene.add(root);
+      return { model: o, pieces: ro.pieces, meshes: [], mats: [], geos: [], model3d: { root, mixer, duration, assetId } };
+    }
     if (o.kind === "particles" && o.particles && ro.emitter) {
       const p = o.particles;
       const glow = PARTICLE_PRESETS[p.kind].glow;
@@ -392,7 +454,9 @@ export class SceneHost implements ExternalSourceRenderer {
     const seen = new Set<string>();
     for (const ro of r.objects) {
       seen.add(ro.object.id);
-      const e = b.entries.get(ro.object.id);
+      const e0 = b.entries.get(ro.object.id);
+      // A model that has finished loading since its entry was made: build it now.
+      const e = e0?.model3d && "pending" in e0.model3d && this.models.get(e0.model3d.pending) ? (this.dropEntry(b, e0), undefined) : e0;
       const sameEmitter = !e?.particles || e.particles.emitter === ro.emitter;
       if (e && e.model === ro.object && e.pieces === ro.pieces && sameEmitter) continue;
       // Only these change the built objects; transforms and values are set per frame below.
@@ -484,6 +548,21 @@ export class SceneHost implements ExternalSourceRenderer {
             } else if (img === undefined) pending = true;
           }
         }
+      }
+      if (e.model3d) {
+        if ("pending" in e.model3d) {
+          if (this.models.get(e.model3d.pending) === undefined) pending = true;
+          continue;
+        }
+        // Placed by the object's transform; the file's own animation follows the layer's time.
+        const { root, mixer } = e.model3d;
+        root.visible = o.visible;
+        root.position.set(pos[0], pos[1], pos[2]);
+        root.quaternion.set(q[0], q[1], q[2], q[3]);
+        root.scale.set(scl[0], scl[1], scl[2]);
+        const clip = o.clip ?? { speed: 1, offset: 0 };
+        mixer.setTime(Math.max(0, (t / FLICKS_PER_SECOND) * clip.speed + clip.offset));
+        continue;
       }
       // Pieces: from prepared motion once they move, otherwise placed with the object.
       const moving = ro.poseIndex >= 0 && physics;
@@ -621,6 +700,7 @@ export class SceneHost implements ExternalSourceRenderer {
 /** Whether two versions of an object need the same three.js objects (only values differ). */
 const sameBuild = (a: Object3D, b: Object3D): boolean =>
   a.kind === b.kind &&
+  (a.geometry?.kind === "model") === (b.geometry?.kind === "model") &&
   a.particles === b.particles &&
   a.geometry === b.geometry &&
   a.castShadow === b.castShadow &&

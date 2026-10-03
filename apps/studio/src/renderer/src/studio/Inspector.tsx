@@ -2,6 +2,8 @@
 import {
   defaultParams,
   getRecipe,
+  blendSetup,
+  blendWeight,
   homographyResiduals,
   isConvexQuad,
   overriddenParams,
@@ -12,8 +14,9 @@ import {
   solveHomography,
   timeToSeconds,
   type Vec2,
+  venueBlend,
 } from "@be/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { applyEffect, applyRecipeToSelection, KIND_LABEL, previewRecipe, suggestedRecipes } from "./actions.ts";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { usePreview } from "../preview/settings.ts";
@@ -30,6 +33,7 @@ import { makeArea3D, use3D } from "./actions3d.ts";
 import { animatePart, moveChoices, partFor, partsLayer } from "./parts.ts";
 import { BlenderEffectButtons } from "./BlenderPanel.tsx";
 import { AreaPicker } from "./AreaPicker.tsx";
+import { addProjector, arrangeAll, removeProjector, useCurrentProjector, useProjectorPick } from "./projectors.ts";
 import { Scene3DPanel } from "./Scene3DPanel.tsx";
 
 /** Make the selected areas 3D: a solid with thickness, or one that collapses and rebuilds. */
@@ -356,12 +360,181 @@ const ShowPanel = () => {
   );
 };
 
+/** The venue's projectors: pick one to align, add/remove, arrange several, and blend their overlaps. */
+const ProjectorsSection = () => {
+  const project = useStudio((s) => s.project)!;
+  const venue = activeVenue({ project });
+  const current = useCurrentProjector(venue);
+  const [overlap, setOverlap] = useState(15);
+  if (!venue) return null;
+  const list = venue.projectorOrder.map((id) => venue.projectors[id]!).filter(Boolean);
+  const blend = venueBlend(venue);
+  const apply = useStudio.getState().apply;
+  return (
+    <section className="projectors" aria-label="Projectors">
+      <h3 className="subhead">Projectors</h3>
+      <div className="row gap wrap" role="radiogroup" aria-label="Projector to align">
+        {list.map((p) => (
+          <button key={p.id} role="radio" aria-checked={current?.id === p.id} className={`chip ${current?.id === p.id ? "on" : ""}`} onClick={() => useProjectorPick.setState({ id: p.id })}>
+            {p.name}
+          </button>
+        ))}
+        <button className="ghost small-btn" onClick={() => addProjector(venue)}>
+          + Add projector
+        </button>
+      </div>
+      {list.length > 1 && (
+        <>
+          <Field label="Share the picture" help="A starting alignment: each projector gets a slice with this much overlap with its neighbour. Then fine-tune each one's points.">
+            <Slider label="Overlap" value={overlap} min={0} max={50} step={1} unit="%" onChange={setOverlap} />
+            <div className="row gap wrap">
+              <button className="ghost small-btn" onClick={() => arrangeAll(venue, "side-by-side", overlap / 100)}>
+                Side by side
+              </button>
+              <button className="ghost small-btn" onClick={() => arrangeAll(venue, "stacked", overlap / 100)}>
+                One above the other
+              </button>
+            </div>
+          </Field>
+          <Field label="Edge blending" help="Where projectors overlap, each gives a share of the light so the overlap isn't brighter. Shown in each projector's output.">
+            <Toggle label="Edge blending" value={blend.enabled} onChange={(v) => apply({ type: "venue.setBlend", args: { venueId: venue.id, enabled: v } }, { label: v ? "Blend overlaps" : "Stop blending overlaps" })} />
+          </Field>
+          {blend.enabled && (
+            <Field label="Blend curve" help="1: a straight cross-fade. 2: smooth (usually invisible). 3: softer still. Adjust while looking at the overlap on the wall.">
+              <Slider label="Blend curve" value={blend.curve} min={0.5} max={4} step={0.05} onChange={(v) => apply({ type: "venue.setBlend", args: { venueId: venue.id, curve: v } }, { label: "Change blend curve", coalesceKey: `${venue.id}:blend` })} />
+            </Field>
+          )}
+          <p className="muted small">{overlapNote(venue)}</p>
+        </>
+      )}
+      {list.length > 1 && <AllOutputs venueId={venue.id} />}
+      {current && <ProjectorSettings venueId={venue.id} projectorId={current.id} canRemove={list.length > 1} />}
+    </section>
+  );
+};
+
+/** Every projector's output at once: open them on their remembered displays, black them all out. */
+const AllOutputs = ({ venueId }: { venueId: string }) => {
+  const project = useStudio((s) => s.project)!;
+  const venue = project.venues[venueId]!;
+  const [outputs, setOutputs] = useState<Awaited<ReturnType<typeof window.be.windows.outputs>>>([]);
+  const [blackout, setBlackout] = useState(false);
+  useEffect(() => {
+    void window.be.windows.outputs().then(setOutputs);
+    return window.be.windows.onWindowsChanged((w) => setOutputs(w.outputs));
+  }, []);
+  const list = venue.projectorOrder.map((id) => venue.projectors[id]!).filter(Boolean);
+  const unassigned = list.filter((p) => !p.output.displayId);
+  const openAll = async () => {
+    const displays = await window.be.displays.list();
+    for (const p of list) {
+      const d = displays.find((x) => String(x.id) === p.output.displayId);
+      if (d) await window.be.windows.openOutput({ venueId, projectorId: p.id, displayId: d.id, pattern: blackout ? "black" : "none" });
+    }
+  };
+  const setAllBlack = (on: boolean) => {
+    setBlackout(on);
+    for (const o of outputs) if (o.open) void window.be.windows.setOutputPattern(o.projectorId, on ? "black" : "none");
+  };
+  const openCount = outputs.filter((o) => o.open).length;
+  return (
+    <Field label="All outputs" help={unassigned.length ? `Choose a display for ${unassigned.map((p) => p.name).join(", ")} below (Show on the projector) first.` : "Each projector opens on the display it was last shown on. Playback stays in step across them."}>
+      <div className="row gap wrap">
+        <button className="ghost small-btn" disabled={unassigned.length === list.length} onClick={() => void openAll()}>
+          Open every projector's output
+        </button>
+        <button className={`ghost small-btn ${blackout ? "on" : ""}`} aria-pressed={blackout} disabled={!openCount} onClick={() => setAllBlack(!blackout)}>
+          {blackout ? "Show all again" : "Blackout all"}
+        </button>
+      </div>
+      <p className="muted small">{openCount ? `${openCount} of ${list.length} outputs open.` : "No outputs open."}</p>
+    </Field>
+  );
+};
+
+/** How the projectors overlap (in content pixels), for the note under the blend controls. */
+const overlapNote = (venue: NonNullable<ReturnType<typeof activeVenue>>): string => {
+  const setup = blendSetup(venue);
+  if (setup.length < 2) return "Align at least two projectors to see their overlap.";
+  // Sample the content on a coarse grid: how much of it is lit by two or more projectors.
+  let shared = 0, lit = 0;
+  const n = 48;
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i < n; i++) {
+      const c: Vec2 = [((i + 0.5) / n) * venue.canvas.width, ((j + 0.5) / n) * venue.canvas.height];
+      const k = setup.filter((p) => blendWeight(c, 0, [p], 1) > 0).length;
+      if (k > 0) lit++;
+      if (k > 1) shared++;
+    }
+  return `${Math.round((lit / (n * n)) * 100)}% of the picture is lit; ${Math.round((shared / (n * n)) * 100)}% is lit by more than one projector and blended.`;
+};
+
+/** One projector's name, output size and output correction (never part of the show's look). */
+const ProjectorSettings = ({ venueId, projectorId, canRemove }: { venueId: string; projectorId: string; canRemove: boolean }) => {
+  const project = useStudio((s) => s.project)!;
+  const venue = project.venues[venueId]!;
+  const p = venue.projectors[projectorId];
+  if (!p) return null;
+  const update = (changes: Record<string, unknown>, label: string, key: string) => useStudio.getState().apply({ type: "projector.update", args: { venueId, projectorId, changes } }, { label, coalesceKey: `${projectorId}:${key}` });
+  const oc = p.outputColor;
+  return (
+    <div className="effect-card" aria-label={`${p.name} settings`}>
+      <Field label="Name">
+        <div className="row gap">
+          <input className="text-input grow" value={p.name} aria-label="Projector name" onChange={(e) => e.target.value.trim() && update({ name: e.target.value }, "Rename projector", "name")} />
+          {canRemove && (
+            <button className="ghost small-btn danger" onClick={() => removeProjector(venue, projectorId)}>
+              Remove
+            </button>
+          )}
+        </div>
+      </Field>
+      <Field label="Output size" help="The projector's native resolution, in pixels.">
+        <div className="row gap">
+          <input className="text-input" type="number" min={16} max={16384} value={p.output.width} aria-label="Output width" onChange={(e) => Number(e.target.value) >= 16 && update({ output: { ...p.output, width: Math.round(Number(e.target.value)) } }, "Change output size", "size")} />
+          <span className="muted">×</span>
+          <input className="text-input" type="number" min={16} max={16384} value={p.output.height} aria-label="Output height" onChange={(e) => Number(e.target.value) >= 16 && update({ output: { ...p.output, height: Math.round(Number(e.target.value)) } }, "Change output size", "size")} />
+        </div>
+      </Field>
+      <h3 className="subhead">Output correction</h3>
+      <p className="muted small">For this projector only, to match it to the others and the wall. Never part of the show's look.</p>
+      <Field label="Brightness">
+        <Slider label="Projector brightness" value={Math.round(((oc.gain[0] + oc.gain[1] + oc.gain[2]) / 3) * 100)} min={10} max={200} unit="%" onChange={(v) => {
+          const avg = (oc.gain[0] + oc.gain[1] + oc.gain[2]) / 3 || 1;
+          const k = v / 100 / avg;
+          update({ outputColor: { ...oc, gain: [oc.gain[0] * k, oc.gain[1] * k, oc.gain[2] * k, 1] } }, "Change projector brightness", "gain");
+        }} />
+      </Field>
+      {(["Red", "Green", "Blue"] as const).map((c, i) => (
+        <Field key={c} label={`${c} balance`}>
+          <Slider label={`${c} balance`} value={Math.round(oc.gain[i]! * 100)} min={10} max={200} unit="%" onChange={(v) => update({ outputColor: { ...oc, gain: oc.gain.map((g, j) => (j === i ? v / 100 : g)) } }, "Change colour balance", `gain${i}`)} />
+        </Field>
+      ))}
+      <Field label="Gamma" help="1 = as is. Higher lifts the mid-tones.">
+        <Slider label="Projector gamma" value={oc.gamma} min={0.2} max={5} step={0.01} onChange={(v) => update({ outputColor: { ...oc, gamma: v } }, "Change gamma", "gamma")} />
+      </Field>
+      <Field label="Black level" help="Raises black, e.g. to match the grey that overlapping projectors show.">
+        <Slider label="Black level" value={Math.round(oc.blackLevel * 1000) / 10} min={0} max={50} step={0.1} unit="%" onChange={(v) => update({ outputColor: { ...oc, blackLevel: v / 100 } }, "Change black level", "black")} />
+      </Field>
+    </div>
+  );
+};
+
 const CalibrationPanel = () => {
   const project = useStudio((s) => s.project)!;
   const showGrid = useStudio((s) => s.showGrid);
   const venue = activeVenue({ project });
-  const projector = venue?.projectorOrder[0] ? venue.projectors[venue.projectorOrder[0]] : undefined;
-  if (!venue || !projector) return <p className="muted">No projector yet.</p>;
+  const projector = useCurrentProjector(venue);
+  if (!venue) return <p className="muted">No building yet.</p>;
+  if (!projector)
+    return (
+      <div className="inspector-body">
+        <p className="muted">No projector yet.</p>
+        <button className="primary" onClick={() => addProjector(venue)}>
+          Add a projector
+        </button>
+      </div>
+    );
   const cal = projector.calibration;
   const src = cal.points.map((p) => p.content as Vec2);
   const dst = cal.points.map((p) => p.output as Vec2);
@@ -374,6 +547,7 @@ const CalibrationPanel = () => {
       <div className="panel-head">
         <h2>Line up {projector.name}</h2>
       </div>
+      <ProjectorsSection />
       <ol className="steps">
         <li>Open the projector output below, on the display connected to the projector.</li>
         <li>Drag each numbered point until it sits on the matching corner of the building: 1 top-left, 2 top-right, 3 bottom-right, 4 bottom-left.</li>

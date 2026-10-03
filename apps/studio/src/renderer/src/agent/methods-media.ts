@@ -33,6 +33,8 @@ import { hasAudio } from "../studio/audioEngine.ts";
 import { getRenderer } from "../studio/engineHost.ts";
 import { OUTCOMES, SIZES } from "../studio/ExportDialog.tsx";
 import { useSims } from "../studio/simHost.ts";
+import { currentProjector, useProjectorPick } from "../studio/projectors.ts";
+import { projectorRef } from "./methods-projectors.ts";
 import { activeVenue, currentComp, useStudio } from "../studio/store.ts";
 import { AgentError, currentRevision, method } from "./core.ts";
 import { areaIds } from "./methods-show.ts";
@@ -445,13 +447,14 @@ const toPng = async (px: Uint8Array, w: number, h: number): Promise<Uint8Array> 
 method({
   name: "preview.capture",
   summary: "Capture the preview exactly as rendered (current view and resolution) at a time (seconds; default the playhead), waiting until media and prepared physics are loaded. Saves a PNG; inline returns it as base64 too.",
-  params: z.object({ seconds: z.number().min(0).optional(), view: z.enum(["show", "venue", "3d", "projector"]).optional(), inline: z.boolean().optional(), path: z.string().optional(), timeoutMs: z.number().int().min(0).max(120_000).optional() }),
+  params: z.object({ seconds: z.number().min(0).optional(), view: z.enum(["show", "venue", "3d", "projector"]).optional(), projector: z.string().optional().describe("for the projector view: which projector (name or id)"), inline: z.boolean().optional(), path: z.string().optional(), timeoutMs: z.number().int().min(0).max(120_000).optional() }),
   long: true,
   run: async (p) => {
     const s = st();
     const loop = currentPreviewLoop();
     if (!loop) throw new AgentError("unavailable", "The preview isn't open.");
     if (p.view) usePreview.getState().set({ view: p.view });
+    if (p.projector) useProjectorPick.setState({ id: projectorRef(p.projector).id });
     if (p.seconds !== undefined) {
       s.setPlaying(false);
       s.setTime(secondsToTime(p.seconds));
@@ -513,6 +516,7 @@ method({
     range: z.object({ startSeconds: z.number().min(0), endSeconds: z.number().min(0) }).optional(),
     output: z.string().optional(),
     hap: z.boolean().optional(),
+    projector: z.string().optional().describe("purpose projector: which projector (name or id; default the current one). Call once per projector for several."),
   }),
   mutates: false,
   long: true,
@@ -524,7 +528,7 @@ method({
     if (!comp) throw new AgentError("not_found", `No scene "${p.scene}".`);
     const o = OUTCOMES.find((x) => x.id === (p.purpose ?? "share"))!;
     const venue = activeVenue({ project: pr });
-    const projector = venue?.projectorOrder[0] ? venue.projectors[venue.projectorOrder[0]] : undefined;
+    const projector = p.projector ? projectorRef(p.projector) : currentProjector(venue);
     if (o.id === "projector" && !projector) throw new AgentError("rejected", "There's no projector set up for this building.");
     const start = p.range ? timeToFrame(secondsToTime(p.range.startSeconds), comp.frameRate) : 0;
     const end = p.range ? timeToFrame(secondsToTime(p.range.endSeconds), comp.frameRate) : framesIn(comp.duration, comp.frameRate);

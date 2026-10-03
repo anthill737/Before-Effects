@@ -7,7 +7,7 @@ import { BLENDER_EFFECTS, BLENDER_PARAMS, type BlenderEffectKind, type BlenderLi
 import { useEffect, useState } from "react";
 import { ColorField, Field, Slider } from "./controls.tsx";
 import { AreaPicker } from "./AreaPicker.tsx";
-import { blendChanged, blenderEffect, cancelBlender, linkBlendFile, openInBlender, rebuildBlenderEffect, renameBlenderLink, STAGES, updateFromBlender, useBlenderJobs } from "./blenderEffects.ts";
+import { blendChanged, blenderEffect, cancelBlender, importBlendAsEditable, importEditable, linkBlendFile, openInBlender, rebuildBlenderEffect, renameBlenderLink, STAGES, updateFromBlender, useBlenderJobs } from "./blenderEffects.ts";
 import { useStudio } from "./store.ts";
 
 const useBlenderStatus = () => {
@@ -74,6 +74,9 @@ export const BlenderEffectButtons = ({ regionIds }: { regionIds: readonly string
             Real simulation in Blender {st?.version ?? ""}, around the house (it flows past walls and drapes over them), lined up with your show. Takes a minute or two in the background.{" "}
             <button className="link small" disabled={busy} onClick={() => void linkBlendFile().then(report)}>
               Link your own .blend…
+            </button>{" "}
+            <button className="link small" disabled={busy} onClick={() => void importBlendAsEditable().then(report)}>
+              Bring a .blend in as editable 3D…
             </button>
           </p>
         </>
@@ -158,6 +161,46 @@ const BlenderSettings = ({ link, busy }: { link: BlenderLink; busy: boolean }) =
   );
 };
 
+const STATUS_LABEL = { editable: "Editable", approximated: "Approximated", "video-only": "In the video only", skipped: "Not carried" } as const;
+
+/** A linked .blend as editable 3D: bring it in (or update it), and what came across, per object. */
+export const EditableSection = ({ link, busy }: { link: BlenderLink; busy: boolean }) => {
+  const [open, setOpen] = useState(false);
+  const e = link.editable;
+  const counts = e ? (["editable", "approximated", "video-only", "skipped"] as const).map((k) => [k, e.report.objects.filter((o) => o.status === k).length] as const).filter(([, n]) => n) : [];
+  return (
+    <div className="blender-editable" role="group" aria-label="Editable 3D from Blender">
+      <h3 className="subhead">As editable 3D</h3>
+      <p className="muted small">
+        Its meshes, materials, lights and animation as a 3D layer you can move, retime and light here. Simulations, particles and volumes stay in the video.
+      </p>
+      <button className={e ? "ghost" : "primary"} disabled={busy} onClick={() => void importEditable(link.id).then(report)}>
+        {e ? "Update the 3D from Blender" : "Bring in as editable 3D"}
+      </button>
+      {e && (
+        <>
+          <p className="small" role="status">
+            {counts.map(([k, n]) => `${n} ${STATUS_LABEL[k].toLowerCase()}`).join(" · ")} — {e.report.file.meshes} meshes, {e.report.file.materials} materials, {e.report.file.lights} lights, {e.report.file.animations ? "animated" : "no animation"}.
+          </p>
+          <button className="disclosure" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? "Hide the report" : "What came across"}
+          </button>
+          {open && (
+            <ul className="report-list">
+              {e.report.objects.map((o) => (
+                <li key={o.name}>
+                  <strong>{o.name}</strong> <span className={`badge ${o.status}`}>{STATUS_LABEL[o.status]}</span>
+                  {o.note && <span className="muted small"> {o.note}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
 /** On a layer Blender made: open, update after editing, re-render. */
 export const BlenderLinkSection = ({ link }: { link: BlenderLink }) => {
   const [changed, setChanged] = useState(false);
@@ -196,7 +239,11 @@ export const BlenderLinkSection = ({ link }: { link: BlenderLink }) => {
         )}
       </div>
       <JobProgress linkId={link.id} />
+      {link.origin === "linked" && <EditableSection link={link} busy={busy} />}
       <BlenderSettings link={link} busy={busy} />
     </section>
   );
 };
+
+/** Progress for one Blender job (for other panels). */
+export const JobProgressFor = JobProgress;

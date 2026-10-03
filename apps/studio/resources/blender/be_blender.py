@@ -520,6 +520,12 @@ def render(x):
     scene.frame_end = first + frames - 1
     if x.get("scale"):
         scene.render.resolution_percentage = max(10, min(100, round(float(x["scale"]) * 100)))
+    if scene.camera is None:
+        # A linked file whose camera isn't the active one: use its first camera.
+        cams = [o for o in scene.objects if o.type == "CAMERA"]
+        if not cams:
+            raise ValueError("This Blender file has no camera to render from. Add one in Blender, or bring it in as editable 3D instead (no camera needed).")
+        scene.camera = cams[0]
     scene.render.film_transparent = True
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGBA"
@@ -574,6 +580,132 @@ def render(x):
     say("BE_DONE render", x["output"]["frames"])
 
 
+SIMULATIONS = {"FLUID": "fluid simulation", "CLOTH": "cloth simulation", "SOFT_BODY": "soft body", "DYNAMIC_PAINT": "dynamic paint", "OCEAN": "ocean"}
+
+
+def classify(ob):
+    """How one object comes across as editable data, honestly: editable, approximated,
+    video-only (only in the rendered video) or skipped."""
+    mods = [m.type for m in getattr(ob, "modifiers", [])]
+    sims = [SIMULATIONS[m] for m in mods if m in SIMULATIONS]
+    animated = bool(ob.animation_data and ob.animation_data.action)
+    notes = []
+    if animated:
+        notes.append("animated (baked to keyframes)")
+    if ob.type == "MESH":
+        fluid = next((m for m in getattr(ob, "modifiers", []) if m.type == "FLUID"), None)
+        if fluid and fluid.fluid_type == "DOMAIN":
+            return "video-only", "a fluid/smoke domain: volumes and liquids can't be carried as editable data"
+        if fluid:
+            return "approximated", "comes across as a plain mesh; its role in the fluid simulation stays in the video"
+        if sims:
+            return "approximated", f"the shape comes across at rest; the {', '.join(sims)} motion stays in the video"
+        if len(ob.particle_systems):
+            notes.append("its particles stay in the video")
+            return "approximated", "; ".join(notes)
+        if ob.data.shape_keys:
+            notes.append("shape keys")
+        if any(m == "ARMATURE" for m in mods):
+            notes.append("bones")
+        if mods:
+            notes.append("modifiers applied")
+        shading = []
+        for slot in ob.material_slots:
+            m = slot.material
+            if not m:
+                continue
+            nodes = [n.type for n in m.node_tree.nodes] if m.use_nodes and m.node_tree else []
+            if nodes and "BSDF_PRINCIPLED" not in nodes:
+                shading.append(m.name)
+        if shading:
+            notes.append("shading simplified to a standard material: " + ", ".join(shading))
+            return "approximated", "; ".join(notes)
+        return "editable", "; ".join(notes)
+    if ob.type == "LIGHT":
+        if ob.data.type == "AREA":
+            return "skipped", "area lights can't be carried; use a point, spot or sun light"
+        return "editable", "light (brightness converted to physical units)" + (", animated" if animated else "")
+    if ob.type == "CAMERA":
+        return "skipped", "kept in the file: the show camera is Before Effects' (it lines up with the building)"
+    if ob.type in ("CURVE", "FONT", "SURFACE", "META", "CURVES"):
+        return "approximated", "converted to a mesh"
+    if ob.type == "VOLUME":
+        return "video-only", "a volume"
+    if ob.type == "EMPTY":
+        return "editable", "a group: its transform and animation"
+    if ob.type in ("GPENCIL", "GREASEPENCIL"):
+        return "skipped", "Grease Pencil drawings"
+    if ob.type == "ARMATURE":
+        return "editable", "bones driving their meshes"
+    return "skipped", f"a {ob.type.lower()} object"
+
+
+def glb_summary(path):
+    """What the exported file actually holds (read back from its JSON chunk)."""
+    import struct
+
+    with open(path, "rb") as f:
+        data = f.read()
+    length = struct.unpack_from("<I", data, 12)[0]
+    j = json.loads(data[20 : 20 + length])
+    lights = j.get("extensions", {}).get("KHR_lights_punctual", {}).get("lights", [])
+    return {
+        "nodes": [n.get("name", "") for n in j.get("nodes", [])],
+        "meshes": len(j.get("meshes", [])),
+        "materials": len(j.get("materials", [])),
+        "animations": len(j.get("animations", [])),
+        "lights": len(lights),
+        "bytes": len(data),
+    }
+
+
+def export_model(x):
+    """A linked .blend as editable data for Before Effects: a GLB (meshes, materials, lights, animation
+    baked over the effect's frames, Y up, metres, toward the audience +Z) and a report per object."""
+    scene = bpy.context.scene
+    frames = int(x["frames"])
+    first = scene.frame_start
+    scene.frame_end = first + frames - 1
+    out = x["output"]["model"]
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    report = []
+    for ob in scene.objects:
+        status, note = classify(ob)
+        report.append({"name": ob.name, "type": ob.type, "status": status, "note": note})
+    say("BE_PROGRESS export", 0, 1)
+    # Only what carries over: a smoke domain, an area light or a camera mustn't arrive as stray boxes.
+    keep = {r["name"] for r in report if r["status"] in ("editable", "approximated")}
+    for ob in scene.objects:
+        try:
+            ob.select_set(ob.name in keep)
+        except RuntimeError:
+            pass  # hidden in the view layer: the exporter skips it anyway
+    want = {
+        "use_selection": True,
+        "filepath": out,
+        "export_format": "GLB",
+        "export_apply": True,
+        "export_animations": True,
+        "export_force_sampling": True,
+        "export_frame_range": True,
+        "export_lights": True,
+        "export_cameras": False,
+        "export_yup": True,
+    }
+    # Only options this Blender's exporter has (names change between versions).
+    have = set(bpy.ops.export_scene.gltf.get_rna_type().properties.keys())
+    bpy.ops.export_scene.gltf(**{k: v for k, v in want.items() if k in have or k == "filepath"})
+    summary = glb_summary(out)
+    exported = set(summary["nodes"])
+    for r in report:
+        if r["status"] in ("editable", "approximated") and r["name"] not in exported:
+            r["status"], r["note"] = "skipped", (r["note"] + "; " if r["note"] else "") + "the exporter left it out"
+    with open(x["output"]["report"], "w", encoding="utf-8") as f:
+        json.dump({"objects": report, "file": summary, "frames": frames, "fps": x["fps"], "firstFrame": first}, f, indent=1)
+    say("BE_PROGRESS export", 1, 1)
+    say("BE_DONE export", out)
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     if len(argv) < 2:
@@ -587,6 +719,8 @@ def main():
             build(x)
         elif mode == "render":
             render(x)
+        elif mode == "export":
+            export_model(x)
         else:
             raise ValueError(f"Unknown mode: {mode}")
     except Exception as e:  # report and fail

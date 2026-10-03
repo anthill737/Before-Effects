@@ -126,6 +126,19 @@ export const OutputWindow = () => {
       if (!canvasRef.current) return;
       const loop = new PreviewLoop(r, canvasRef.current, editorSource, () => ({ width: window.innerWidth, height: window.innerHeight }));
       loop.fixed = { view: "projector", projectorId: config.projectorId, fraction: 1 };
+      // Tell the editor what this output shows (frame and drawing rate), a few times a second:
+      // for checking that several outputs stay in step, and that this one is alive.
+      const drawn: number[] = [];
+      let lastSent = 0;
+      loop.onFrame = (frame) => {
+        const now = performance.now();
+        drawn.push(now);
+        while (drawn.length && now - drawn[0]! > 1000) drawn.shift();
+        if (now - lastSent > 250) {
+          lastSent = now;
+          window.be.windows.reportOutputFrame({ frame, fps: drawn.length });
+        }
+      };
       loopRef.current = loop;
       getMediaHost()?.onLoaded(() => loop.invalidateView());
       onSimFrame(() => loop.invalidateView());

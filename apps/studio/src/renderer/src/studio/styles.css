@@ -33,7 +33,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .row { display: flex; align-items: center; }
 .gap { gap: 8px; }
 .end { justify-content: flex-end; }
-.grow { flex: 1; }
+.grow { flex: 1; min-width: 0; }
 .warn { color: #ffb36b; }
 
 /* Buttons */
@@ -148,7 +148,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) { .thumb * { animation: none !important; opacity: 1; } }
 
 /* Inspector */
-.inspector-body { display: grid; gap: 4px; }
+.inspector-body { display: grid; gap: 4px; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .field { padding: 8px 0; border-bottom: 1px solid #ffffff08; }
 .field-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 6px; }
 .field-help { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
@@ -507,3 +507,18 @@ body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px;
 .badge { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 8px; background: #2c3a52; color: #a9c8ff; vertical-align: middle; margin-left: 4px; }
 .blender-progress { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: center; margin: 6px 0; }
 .blender-progress .progress-bar { grid-column: 1 / -1; }
+
+/* Inspector sections never widen the panel: long rows wrap instead. */
+.inspector-body > *, .effect-card > *, .projectors > *, .blender-settings > * { min-width: 0; }
+.effect-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0; background: #ffffff05; display: grid; gap: 2px; }
+.area-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.layer-effects .row.wrap { margin-top: 6px; }
+/* Inputs in a row shrink with it instead of pushing the panel wider. */
+.row > input, .row > .text-input { min-width: 0; }
+.row-field > select, .row-field > input { min-width: 0; flex: 1 1 auto; max-width: 100%; text-overflow: ellipsis; }
+.projector-output, .effect-card { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.report-list { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 6px; }
+.badge.editable { color: #b8f5c8; background: #173a24; }
+.badge.approximated { color: #ffe3a3; background: #3a3014; }
+.badge.video-only { color: #c8d8ff; background: #1c2a48; }
+.badge.skipped { color: #d0d0d0; background: #2a2a2a; }

@@ -68,6 +68,21 @@ export interface BlenderLink {
   readonly result?: { readonly assetId: Id; readonly renderedAt: string; readonly blendMtime?: number; readonly seconds: number };
   /** The layer showing the result. */
   readonly layerId?: Id;
+  /** A linked .blend brought in as editable 3D (a GLB in a 3D layer), with what came across. */
+  readonly editable?: BlenderEditable;
+}
+
+/** How each object of a .blend came across as editable data. */
+export interface BlenderEditable {
+  readonly assetId: Id;
+  readonly sceneId: Id;
+  readonly layerId: Id;
+  readonly objectId: Id;
+  readonly at: string;
+  readonly report: {
+    readonly objects: ReadonlyArray<{ readonly name: string; readonly type: string; readonly status: "editable" | "approximated" | "video-only" | "skipped"; readonly note: string }>;
+    readonly file: { readonly meshes: number; readonly materials: number; readonly animations: number; readonly lights: number; readonly bytes: number };
+  };
 }
 
 /** A setting of a Blender effect, shown in the inspector; changing it means simulating again. */
@@ -347,7 +362,7 @@ export const preparedObstacles = (
     if (g.kind === "area") {
       for (const reg of refRegions(project, g.ref, venueId)) regionIds.add(reg.id);
       ro.pieces.forEach((piece, i) => objects.push({ name: `${o.layerName}: ${ob.name} ${i + 1}`, owner: "before-effects", role: "obstacle", mesh: pieceSolid(piece, sc), motion: poses(ro.poseIndex + i) }));
-    } else {
+    } else if (g.kind !== "model") {
       const half: Vec3 =
         g.kind === "box" ? [(g.size[0] * sc[0]) / 2, (g.size[1] * sc[1]) / 2, (g.size[2] * sc[2]) / 2]
         : g.kind === "plane" ? [(g.size[0] * sc[0]) / 2, (g.size[1] * sc[1]) / 2, 0.01]

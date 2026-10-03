@@ -22,6 +22,10 @@ export const getRenderer = (): Promise<FrameRenderer> => {
       const bytes = await window.be.files.readFile(a.path);
       return createImageBitmap(new Blob([bytes as BlobPart]), { colorSpaceConversion: "none" });
     };
+    r.scenes.modelSource = async (assetId) => {
+      const a = useStudio.getState().project?.assets[assetId];
+      return a ? window.be.files.readFile(a.path) : null;
+    };
     r.scenes.onChange = notifySimFrame;
     media = new MediaHost(r);
     r.setMedia(media);

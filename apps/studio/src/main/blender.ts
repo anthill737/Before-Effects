@@ -145,6 +145,31 @@ export const runBlenderJob = async (jobId: string, spec: BlenderRunSpec, onProgr
   return { ok: true as const, video: spec.video, blendMtime: statSync(x.output.blend).mtimeMs };
 };
 
+/** What a model export reports per object, and what the file holds. */
+export interface BlenderModelReport {
+  readonly objects: ReadonlyArray<{ readonly name: string; readonly type: string; readonly status: "editable" | "approximated" | "video-only" | "skipped"; readonly note: string }>;
+  readonly file: { readonly nodes: readonly string[]; readonly meshes: number; readonly materials: number; readonly animations: number; readonly lights: number; readonly bytes: number };
+  readonly frames: number;
+  readonly fps: number;
+  readonly firstFrame: number;
+}
+
+/** A .blend as editable data: Blender writes a GLB (meshes, materials, lights, baked animation) and a report per object. */
+export const runModelExport = async (jobId: string, spec: { blend: string; fps: number; frames: number; dir: string }, onProgress: (p: BlenderProgress) => void) => {
+  mkdirSync(spec.dir, { recursive: true });
+  const stamp = Date.now().toString(36);
+  const output = { blend: spec.blend, frames: join(spec.dir, "frames"), cache: join(spec.dir, "cache"), model: join(spec.dir, `model ${stamp}.glb`), report: join(spec.dir, `model ${stamp}.json`) };
+  const exchangeFile = join(spec.dir, "export.json");
+  writeFileSync(exchangeFile, JSON.stringify({ fps: spec.fps, frames: spec.frames, linked: true, output }, null, 1));
+  if (!existsSync(spec.blend)) return { ok: false as const, code: "missing", message: `The Blender file is missing: ${spec.blend}` };
+  onProgress({ jobId, stage: "export", done: 0, total: 1 });
+  const r = await runBlender(jobId, ["-b", spec.blend, "-P", scriptPath(), "--", "export", exchangeFile], onProgress);
+  if (!r.ok) return r;
+  if (!existsSync(output.model)) return { ok: false as const, code: "failed", message: "Blender didn't write the model." };
+  const report = JSON.parse(readFileSync(output.report, "utf8")) as BlenderModelReport;
+  return { ok: true as const, model: output.model, report };
+};
+
 export const registerBlender = () => {
   ipcMain.handle("blender:status", (_e, refresh?: boolean) => {
     const b = findBlender(!!refresh);
@@ -163,6 +188,13 @@ export const registerBlender = () => {
     const t0 = Date.now();
     const r = await runBlenderJob(jobId, spec, (p) => !sender.isDestroyed() && sender.send("blender:progress", p));
     log(`blender ${jobId}: ${r.ok ? "done" : `failed: ${r.message}`} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    return r;
+  });
+  ipcMain.handle("blender:exportModel", async (e, jobId: string, spec: { blend: string; fps: number; frames: number; dir: string }) => {
+    const sender: WebContents = e.sender;
+    log(`blender ${jobId}: export model from ${spec.blend}`);
+    const r = await runModelExport(jobId, spec, (p) => !sender.isDestroyed() && sender.send("blender:progress", p));
+    log(`blender ${jobId}: ${r.ok ? `model ${r.model}` : `failed: ${r.message}`}`);
     return r;
   });
   ipcMain.handle("blender:cancel", (_e, jobId: string) => {

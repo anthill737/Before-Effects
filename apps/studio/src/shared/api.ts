@@ -167,6 +167,10 @@ export interface OutputStatus {
   readonly displayLabel: string;
   readonly displayPixels: { readonly width: number; readonly height: number };
   readonly open: boolean;
+  /** Its display was disconnected: it reopens when the display comes back. */
+  readonly waiting?: boolean;
+  /** What the output last showed (it reports a few times a second): frame number, drawing rate, when (ms epoch). */
+  readonly showing?: { readonly frame: number; readonly fps: number; readonly at: number };
 }
 
 export interface SyncHello {
@@ -298,6 +302,8 @@ export interface BeApi {
     status(refresh?: boolean): Promise<{ found: boolean; path: string | null; version: string | null; running: string[] }>;
     choose(): Promise<{ path: string; version: string } | null>;
     run(jobId: string, spec: BlenderRunSpec): Promise<{ ok: true; video: string; blendMtime: number } | { ok: false; code: string; message: string }>;
+    /** Bring a .blend in as editable data: a GLB plus a per-object compatibility report. */
+    exportModel(jobId: string, spec: { blend: string; fps: number; frames: number; dir: string }): Promise<{ ok: true; model: string; report: BlenderModelReport } | { ok: false; code: string; message: string }>;
     cancel(jobId: string): Promise<boolean>;
     open(blend: string): Promise<{ ok: boolean; message?: string }>;
     mtime(file: string): Promise<number | null>;
@@ -315,6 +321,8 @@ export interface BeApi {
     openOutput(config: OutputConfig): Promise<OutputStatus>;
     closeOutput(projectorId: string): Promise<void>;
     setOutputPattern(projectorId: string, pattern: TestPattern): Promise<void>;
+    /** Output windows: report the frame now showing (for sync and health checks). */
+    reportOutputFrame(info: { frame: number; fps: number }): void;
     outputs(): Promise<OutputStatus[]>;
     onWindowsChanged(cb: (s: { preview: boolean; outputs: OutputStatus[] }) => void): () => void;
   };
@@ -378,6 +386,14 @@ export interface DetectProgress {
   stage: string;
   fraction: number;
   text: string;
+}
+
+export interface BlenderModelReport {
+  readonly objects: ReadonlyArray<{ readonly name: string; readonly type: string; readonly status: "editable" | "approximated" | "video-only" | "skipped"; readonly note: string }>;
+  readonly file: { readonly nodes: readonly string[]; readonly meshes: number; readonly materials: number; readonly animations: number; readonly lights: number; readonly bytes: number };
+  readonly frames: number;
+  readonly fps: number;
+  readonly firstFrame: number;
 }
 
 export interface BlenderRunSpec {

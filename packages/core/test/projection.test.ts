@@ -59,7 +59,7 @@ describe("edge blending", () => {
     expect(h.project.venues["v"]!.projectorOrder).toEqual(["a", "b"]);
   });
 
-  it("arranges projectors side by side with a shared overlap, each slice fitted to its frame", () => {
+  it("arranges projectors side by side with a shared overlap, each slice filling its frame", () => {
     const pts = arrangeProjectors(canvas, [{ width: 1200, height: 500 }, { width: 1200, height: 500 }], "side-by-side", 0.5);
     // Slices of 1333 px overlapping by half a slice: 0..1333 and 667..2000.
     expect(pts[0]![0]!.content[0]).toBe(0);
@@ -68,5 +68,9 @@ describe("edge blending", () => {
     const v2: Venue = { ...venue, projectors: { a: { ...venue.projectors["a"]!, calibration: { ...venue.projectors["a"]!.calibration, points: pts[0]! } }, b: { ...venue.projectors["b"]!, calibration: { ...venue.projectors["b"]!.calibration, points: pts[1]! } } } };
     const s2 = blendSetup(v2);
     for (const x of [700, 1000, 1300]) expect(blendWeight([x, 250], 0, s2, 2) + blendWeight([x, 250], 1, s2, 2)).toBeCloseTo(1, 9);
+    // Each projector lights exactly its slice: alone outside the overlap.
+    expect(blendWeight([300, 250], 0, s2, 2)).toBe(1);
+    expect(blendWeight([1700, 250], 1, s2, 2)).toBe(1);
+    expect(blendWeight([1700, 250], 0, s2, 2)).toBe(0);
   });
 });

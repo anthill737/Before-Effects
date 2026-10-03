@@ -4,13 +4,15 @@
  * and a shared playback clock, and this module relays them to every other window.
  */
 import { join } from "node:path";
-import { BrowserWindow, type Display, ipcMain, screen } from "electron";
+import { app, BrowserWindow, type Display, ipcMain, screen } from "electron";
 import type { DisplayInfo, OutputConfig, OutputStatus, SyncHello, TestPattern, TransportState, WindowKind } from "../shared/api.ts";
 import { log } from "./log.ts";
 
 let editor: BrowserWindow | null = null;
 let preview: BrowserWindow | null = null;
-const outputs = new Map<string, { win: BrowserWindow; config: OutputConfig }>();
+const outputs = new Map<string, { win: BrowserWindow; config: OutputConfig; showing?: { frame: number; fps: number; at: number } }>();
+/** Outputs whose display was disconnected, by projector: reopened when a matching display returns. */
+const waiting = new Map<string, { config: OutputConfig; label: string; size: { width: number; height: number } }>();
 let latestProject: unknown = null;
 let latestTransport: TransportState | null = null;
 let previewView: string | null = null;
@@ -89,11 +91,13 @@ const broadcastWindows = () => {
   editor?.webContents.send("windows:changed", { preview: !!preview, outputs: outputStatus() });
 };
 
-const outputStatus = (): OutputStatus[] =>
-  [...outputs.entries()].map(([projectorId, o]) => {
+const outputStatus = (): OutputStatus[] => [
+  ...[...outputs.entries()].map(([projectorId, o]) => {
     const d = displayInfo().find((x) => x.id === o.config.displayId);
-    return { projectorId, displayId: o.config.displayId, displayLabel: d?.label ?? "Display", displayPixels: d?.pixels ?? { width: 0, height: 0 }, open: !o.win.isDestroyed() };
-  });
+    return { projectorId, displayId: o.config.displayId, displayLabel: d?.label ?? "Display", displayPixels: d?.pixels ?? { width: 0, height: 0 }, open: !o.win.isDestroyed(), ...(o.showing ? { showing: o.showing } : {}) };
+  }),
+  ...[...waiting.entries()].filter(([id]) => !outputs.has(id)).map(([projectorId, w]) => ({ projectorId, displayId: w.config.displayId, displayLabel: w.label, displayPixels: w.size, open: false, waiting: true })),
+];
 
 export const registerWindowIpc = (mode: string) => {
   ipcMain.handle("displays:list", () => displayInfo());
@@ -153,7 +157,37 @@ export const registerWindowIpc = (mode: string) => {
     preview?.webContents.send("sync:previewView", view);
   });
 
-  ipcMain.handle("windows:openOutput", (_e, config: OutputConfig) => {
+  ipcMain.handle("windows:openOutput", (_e, config: OutputConfig) => openOutput(config));
+
+  ipcMain.on("output:frame", (e, info: { frame: number; fps: number }) => {
+    for (const o of outputs.values()) if (!o.win.isDestroyed() && o.win.webContents.id === e.sender.id) o.showing = { frame: info.frame, fps: info.fps, at: Date.now() };
+  });
+
+  // A projector's display unplugged: its output waits and reopens when the display comes back
+  // (matched by id, else by name and size, since Windows may renumber it).
+  // ("screen" exists only once the app is ready.)
+  void app.whenReady().then(() => screen.on("display-removed", (_e, gone: Display) => {
+    for (const [projectorId, o] of outputs) {
+      if (o.config.displayId !== gone.id) continue;
+      waiting.set(projectorId, { config: o.config, label: displayInfo().find((x) => x.id === gone.id)?.label ?? gone.label ?? "Display", size: { width: Math.round(gone.size.width * gone.scaleFactor), height: Math.round(gone.size.height * gone.scaleFactor) } });
+      log(`projector output ${projectorId}: display ${gone.id} disconnected; waiting for it`);
+      o.win.close();
+    }
+    broadcastWindows();
+  }));
+  void app.whenReady().then(() => screen.on("display-added", (_e, added: Display) => {
+    for (const [projectorId, w] of waiting) {
+      const sameSize = Math.round(added.size.width * added.scaleFactor) === w.size.width && Math.round(added.size.height * added.scaleFactor) === w.size.height;
+      if (added.id !== w.config.displayId && !(sameSize && (added.label || "") === (w.label || ""))) continue;
+      waiting.delete(projectorId);
+      log(`projector output ${projectorId}: display back as ${added.id}; reopening`);
+      openOutput({ ...w.config, displayId: added.id });
+    }
+    broadcastWindows();
+  }));
+
+  const openOutput = (config: OutputConfig): OutputStatus | undefined => {
+    waiting.delete(config.projectorId);
     const d = findDisplay(config.displayId);
     const existing = outputs.get(config.projectorId);
     if (existing && !existing.win.isDestroyed()) {
@@ -187,9 +221,14 @@ export const registerWindowIpc = (mode: string) => {
     log(`projector output ${config.projectorId} opened on display ${d.id} (${d.bounds.width}×${d.bounds.height} @${d.scaleFactor})`);
     broadcastWindows();
     return outputStatus().find((o) => o.projectorId === config.projectorId);
-  });
+  };
 
-  ipcMain.handle("windows:closeOutput", (_e, projectorId: string) => outputs.get(projectorId)?.win.close());
+  ipcMain.handle("windows:closeOutput", (_e, projectorId: string) => {
+    // Closing on purpose also stops waiting for a disconnected display.
+    waiting.delete(projectorId);
+    outputs.get(projectorId)?.win.close();
+    broadcastWindows();
+  });
 
   ipcMain.handle("windows:setOutputPattern", (_e, projectorId: string, pattern: TestPattern) => {
     const o = outputs.get(projectorId);

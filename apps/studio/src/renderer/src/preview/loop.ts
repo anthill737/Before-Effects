@@ -13,6 +13,7 @@ import type { FrameRenderer, PreviewView } from "@be/engine";
 import { create } from "zustand";
 import { FrameCache } from "./cache.ts";
 import { effectiveFraction, type RenderSize, renderSize, usePreview } from "./settings.ts";
+import { currentProjector, useProjectorPick } from "../studio/projectors.ts";
 
 export interface PreviewSource {
   project(): Project | null;
@@ -129,7 +130,7 @@ export class PreviewLoop {
     const comp = project.compositions[compId]!;
     if (view === "projector") {
       const venue = project.venues[comp.venueId ?? project.activeVenueId ?? ""];
-      const pid = this.fixed?.projectorId ?? venue?.projectorOrder[0];
+      const pid = this.fixed?.projectorId ?? currentProjector(venue)?.id;
       const pr = pid ? venue?.projectors[pid] : undefined;
       if (pr) return { w: pr.output.width, h: pr.output.height };
     }
@@ -220,7 +221,7 @@ export class PreviewLoop {
       this.dirty = true;
     }
     const cacheable = this.source.cacheable?.() ?? true;
-    const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId}|${cacheable}|${this.version}`;
+    const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId ?? useProjectorPick.getState().id}|${cacheable}|${this.version}`;
     // Redraw only when something visible changed: on high-refresh displays the same frame is not redrawn every refresh.
     const needsDraw = this.dirty || key !== this.lastKey;
     if (!needsDraw) {
@@ -250,7 +251,7 @@ export class PreviewLoop {
       ambient: s.ambient,
       showGrid: view === "projector" && s.overlays.grid && !this.fixed,
       time: frameToTime(frame, comp.frameRate),
-      ...(this.fixed?.projectorId ? { projectorId: this.fixed.projectorId } : {}),
+      ...((this.fixed?.projectorId ?? currentProjector(project.venues[comp.venueId ?? project.activeVenueId ?? ""])?.id) ? { projectorId: this.fixed?.projectorId ?? currentProjector(project.venues[comp.venueId ?? project.activeVenueId ?? ""])!.id } : {}),
     });
     if (!this.gpuPending) {
       this.gpuPending = true;
@@ -337,7 +338,8 @@ export class PreviewLoop {
       format: navigator.gpu.getPreferredCanvasFormat(),
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
-    this.renderer.present(target, project, compId, content, { view, reference: this.reference, orbit: s.orbit, ambient: s.ambient, time: this.source.time() });
+    const pid = this.fixed?.projectorId ?? currentProjector(project.venues[comp.venueId ?? project.activeVenueId ?? ""])?.id;
+    this.renderer.present(target, project, compId, content, { view, reference: this.reference, orbit: s.orbit, ambient: s.ambient, time: this.source.time(), ...(pid ? { projectorId: pid } : {}) });
     this.renderer.gpu.release(content);
     const px = await this.renderer.readTexture(target);
     target.destroy();

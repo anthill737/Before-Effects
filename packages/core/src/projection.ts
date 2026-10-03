@@ -76,8 +76,9 @@ export const blendSetup = (venue: Venue): Array<{ id: Id; h: Mat3; hinv: Mat3; s
 
 /**
  * A starting alignment for several projectors sharing the picture: side by side (or stacked), each
- * covering an equal slice with `overlap` (fraction of a slice) shared with its neighbour, the slice
- * fitted inside that projector's frame. Fine-tune each afterwards by dragging its points.
+ * covering an equal slice with `overlap` (fraction of a slice) shared with its neighbour. Each slice
+ * fills its projector's whole frame (a projector lights all of its frame, so the frames then overlap
+ * exactly as asked). A template: drag each projector's points onto the building afterwards.
  */
 export const arrangeProjectors = (
   canvas: { readonly width: number; readonly height: number },
@@ -92,9 +93,7 @@ export const arrangeProjectors = (
   return outputs.map((out, i) => {
     const a0 = i * slice * (1 - o);
     const [x0, y0, w, h] = layout === "side-by-side" ? [a0, 0, slice, canvas.height] : [0, a0, canvas.width, slice];
-    const k = Math.min(out.width / w, out.height / h);
-    const ox = (out.width - w * k) / 2, oy = (out.height - h * k) / 2;
-    const pt = (id: string, cx: number, cy: number) => ({ id, label: id.slice(1), content: [cx, cy] as Vec2, output: [ox + (cx - x0) * k, oy + (cy - y0) * k] as Vec2 });
+    const pt = (id: string, cx: number, cy: number) => ({ id, label: id.slice(1), content: [cx, cy] as Vec2, output: [((cx - x0) / w) * out.width, ((cy - y0) / h) * out.height] as Vec2 });
     return [pt("c1", x0, y0), pt("c2", x0 + w, y0), pt("c3", x0 + w, y0 + h), pt("c4", x0, y0 + h)];
   });
 };

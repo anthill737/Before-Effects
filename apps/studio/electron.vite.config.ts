@@ -35,6 +35,9 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, "src/renderer"),
     plugins: [react()],
+    // three.js add-ons (glTF loading) import "three"; give them the same WebGPU build the engine
+    // uses, so there's one copy of three.js and its objects work in the engine's scenes.
+    resolve: { alias: [{ find: /^three$/, replacement: "three/webgpu" }] },
     build: {
       rollupOptions: { input: resolve(__dirname, "src/renderer/index.html") },
       target: "esnext",

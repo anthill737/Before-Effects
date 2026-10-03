@@ -13,6 +13,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { previewAudio } from "../studio/audioEngine.ts";
 import { getMediaHost, getRenderer, venueReference } from "../studio/engineHost.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
+import { useCurrentProjector } from "../studio/projectors.ts";
 import { PreviewLoop, type PreviewSource, usePreviewStats } from "./loop.ts";
 import { venuePhotoUrl } from "../space/actions.ts";
 import { TracingLayer } from "../space/TracingLayer.tsx";
@@ -61,7 +62,7 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
   const compId = useStudio((st) => st.compId);
   const comp = project && compId ? project.compositions[compId] : undefined;
   const venue = project ? activeVenue({ project }) : undefined;
-  const projector = venue?.projectorOrder[0] ? venue.projectors[venue.projectorOrder[0]] : undefined;
+  const projector = useCurrentProjector(venue);
   const [poppedOut, setPoppedOut] = useState(false);
   const step = useStudio((st) => st.step);
   const photoOpacity = useTrace((t) => t.photoOpacity);

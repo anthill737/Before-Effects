@@ -58,7 +58,9 @@ export type Geometry3D =
   | { readonly kind: "area"; readonly ref: RegionRef; readonly depth: number }
   | { readonly kind: "box"; readonly size: Vec3 }
   | { readonly kind: "sphere"; readonly radius: number }
-  | { readonly kind: "plane"; readonly size: Vec2 };
+  | { readonly kind: "plane"; readonly size: Vec2 }
+  /** A model brought in from a file (glTF/GLB, e.g. exported from a linked Blender scene): its own meshes, materials, lights and animation. */
+  | { readonly kind: "model"; readonly assetId: Id };
 
 export interface Physics3D {
   /** "dynamic" falls and collides; "static" stays put (or follows its animation) and others hit it. */
@@ -120,6 +122,8 @@ export interface Object3D {
   readonly light?: Light3D;
   /** A moving part of the house made from a traced area (see parts3d.ts). */
   readonly part?: import("./parts3d.ts").PartInfo;
+  /** Models: how the file's own animation plays (speed 1 = as authored; offset in seconds). */
+  readonly clip?: { readonly speed: number; readonly offset: number };
   /** Particles (kind "particles"; see particles3d.ts): sparks, embers, snow, confetti. */
   readonly particles?: import("./particles3d.ts").Particles3D;
 }

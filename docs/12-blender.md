@@ -31,6 +31,16 @@ The effects library also contains procedural look-alikes (Smoke rising, Fill wit
 
 Each result is one undo step: the layer, the media and the link together.
 
+**Editable 3D from your .blend.** On a linked .blend's layer, **Bring in as editable 3D** has Blender export its meshes, materials, lights and animation (baked over the link's length) as a model. The model appears in a 3D layer, where you can move, scale, turn and retime it, change its animation speed and start, and light it, all inside Before Effects.
+
+A report lists every object as one of:
+- **Editable:** meshes, including modifiers applied, bones and shape keys; point, spot and sun lights; groups.
+- **Approximated:** text and curves become meshes; non-standard shading becomes a standard material; a cloth or particle object comes across at rest.
+- **In the video only:** smoke and liquid domains, volumes, particle and cloth motion.
+- **Not carried:** cameras (the show camera is Before Effects', lined up with the building); area lights; Grease Pencil.
+
+**Update the 3D from Blender** after editing swaps in the new model and keeps your placement, timing and lights. Smoke, fire, water and cloth that Before Effects made come back as video only, because volumes and simulations can't be carried as editable shapes.
+
 **Your own .blend.** Use **Link your own .blend…**. The file is rendered with its own camera, frame range start and lights. It comes in as a layer that you can update after editing it in Blender.
 
 **Finding Blender.** Before Effects looks in these places, in order:
@@ -114,6 +124,7 @@ Blender reads pin weights every frame, so the sheet falls when they drop to zero
 | `blender.link` | `{file, seconds?, quality?}`: render your own .blend |
 | `blender.update` | `{link}` renders again keeping edits; `{link, rebuild: {quality, seconds}}` rebuilds |
 | `blender.open` | opens the .blend in Blender |
+| `blender.importEditable` | `{link}`: bring a linked .blend in as editable 3D (or update it); returns the per-object report |
 
 **Effect params** are declared once in `BLENDER_PARAMS`, which the inspector, the agent API and `be_blender.py` all read; times are in seconds:
 - smoke: `color`, `density`, `swirl`, `linger`;
@@ -136,6 +147,20 @@ Blender reads pin weights every frame, so the sheet falls when they drop to zero
 | Same fire at full quality (1920×1080, resolution 160) | 94 s |
 | Linked .blend, 60 frames at 1280×720 | 12 s; Update after editing it: 14 s |
 | Break apart on the garage door, draft (≈60 pieces) | 18 s |
+
+### Editable 3D (export mode)
+
+`blender -b your.blend -P be_blender.py -- export export.json` does the following:
+1. Classifies every object (see above).
+2. Selects only what carries over.
+3. Writes a GLB:
+   - Y up, metres, +Z toward the audience: Before Effects' axes;
+   - modifiers applied;
+   - animation sampled over the link's frames;
+   - lights included, cameras left out.
+4. Reads the GLB back, so the report reflects what's really in the file.
+
+The engine loads it with three.js's glTF loader and plays its animation from the layer's time (deterministic: any frame, any order).
 
 ## Limitations
 

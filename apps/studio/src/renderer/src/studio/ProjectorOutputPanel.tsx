@@ -25,18 +25,28 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
   const [outputs, setOutputs] = useState<OutputStatus[]>([]);
   const [pattern, setPattern] = useState<TestPattern>("identify");
 
+  const saved = projector?.output.displayId;
   useEffect(() => {
     void window.be.displays.list().then((d) => {
       setDisplays(d);
-      // Suggest a display that isn't the main screen (projectors are usually external).
-      setDisplayId((cur) => cur ?? (d.find((x) => !x.primary) ?? d[0])?.id ?? null);
+      // The display this projector was last shown on, if it's connected; else one that isn't the
+      // main screen (projectors are usually external).
+      const remembered = d.find((x) => String(x.id) === saved);
+      setDisplayId((cur) => cur ?? (remembered ?? d.find((x) => !x.primary) ?? d[0])?.id ?? null);
     });
     void window.be.windows.outputs().then(setOutputs);
-    return window.be.windows.onWindowsChanged((w) => setOutputs(w.outputs));
-  }, []);
+    // Output health: what each output is showing, refreshed every second.
+    const t = setInterval(() => void window.be.windows.outputs().then(setOutputs), 1000);
+    const off = window.be.windows.onWindowsChanged((w) => setOutputs(w.outputs));
+    return () => {
+      clearInterval(t);
+      off();
+    };
+  }, [saved]);
 
   if (!projector) return null;
-  const open = outputs.find((o) => o.projectorId === projectorId);
+  const status = outputs.find((o) => o.projectorId === projectorId);
+  const open = status?.open ? status : undefined;
   const chosen = displays.find((d) => d.id === (open?.displayId ?? displayId));
   const mismatch = chosen && (chosen.pixels.width !== projector.output.width || chosen.pixels.height !== projector.output.height);
   const onlyOne = displays.length <= 1;
@@ -44,6 +54,9 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
   const openOutput = async (p: TestPattern) => {
     if (displayId === null) return;
     setPattern(p);
+    // Remember the display for this projector (saved with the project).
+    if (projector.output.displayId !== String(displayId))
+      useStudio.getState().apply({ type: "projector.update", args: { venueId, projectorId, changes: { output: { ...projector.output, displayId: String(displayId) } } } }, { label: `Show ${projector.name} on this display` });
     await window.be.windows.openOutput({ venueId, projectorId, displayId, pattern: p });
   };
 
@@ -75,6 +88,11 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
           </button>
         )}
       </div>
+      {status?.waiting && (
+        <p className="warn small" role="status">
+          {status.displayLabel} was disconnected. The output reopens on it as soon as it's connected again.
+        </p>
+      )}
       {onlyOne && <p className="muted small">Only one display is connected. The output will open full-screen on it — press Esc on the output to return.</p>}
       {open && (
         <>
@@ -97,6 +115,9 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
           </div>
           <p className="muted small">
             Output on {open.displayLabel} at {projector.output.width}×{projector.output.height}. The preview size setting never changes this.
+          </p>
+          <p className="muted small" role="status">
+            {open.showing ? `Showing frame ${open.showing.frame}${Date.now() - open.showing.at < 1500 ? ` · ${open.showing.fps} frames/s` : " (paused)"}` : "Starting…"}
           </p>
         </>
       )}

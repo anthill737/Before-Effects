@@ -9,6 +9,8 @@ import { type ReactNode, useState } from "react";
 import { addObject, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { PartEditor } from "./PartEditor.tsx";
+import { EditableSection, JobProgressFor } from "./BlenderPanel.tsx";
+import { linkForScene, openInBlender, useBlenderJobs } from "./blenderEffects.ts";
 import { AreaPicker } from "./AreaPicker.tsx";
 import { LayerIdentity, LayerMasks, LayerTiming } from "./LayerPanel.tsx";
 import { simProgress, useSims } from "./simHost.ts";
@@ -84,6 +86,7 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
       </div>
       <p className="muted small">3D objects in front of the building, seen through the show camera. Orbit around them in “3D projection”.</p>
       <PhysicsStatus layerId={layer.id} />
+      <FromBlender sceneId={scene.id} />
       <Section title="Layer">
         <Field label="3D scene name">
           <input className="text-input" value={scene.name} aria-label="3D scene name" onChange={(e) => e.target.value.trim() && updateScene({ name: e.target.value }, "Rename 3D scene", "name")} />
@@ -117,7 +120,7 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
           const x = scene.objects[id]!;
           return (
             <button key={id} role="option" aria-selected={o?.id === id} className={`list-item ${o?.id === id ? "on" : ""}`} onClick={() => use3D.setState({ objectId: id })}>
-              <span aria-hidden="true">{x.kind === "light" ? "☀ " : x.kind === "particles" ? "✦ " : x.fracture ? "▦ " : "■ "}</span>
+              <span aria-hidden="true">{x.kind === "light" ? "☀ " : x.kind === "particles" ? "✦ " : x.geometry?.kind === "model" ? "◆ " : x.fracture ? "▦ " : "■ "}</span>
               {x.name}
               {!x.visible && <span className="muted small"> · hidden</span>}
             </button>
@@ -168,6 +171,28 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
 
       {o && <ObjectEditor key={o.id} layer={layer} scene={scene} o={o} />}
     </div>
+  );
+};
+
+/** A 3D scene brought in from a .blend: open it in Blender, update after editing, and what came across. */
+const FromBlender = ({ sceneId }: { sceneId: string }) => {
+  useStudio((s) => s.version);
+  const link = linkForScene(sceneId);
+  const busy = useBlenderJobs((s) => !!link && !!s[link.id]?.running);
+  if (!link) return null;
+  return (
+    <section className="param-group blender-link" aria-label="From Blender">
+      <h3 className="subhead">
+        From Blender <span className="badge">linked file</span>
+      </h3>
+      <div className="row gap wrap">
+        <button className="ghost" disabled={busy} onClick={() => void openInBlender(link.id)}>
+          Open in Blender
+        </button>
+      </div>
+      <JobProgressFor linkId={link.id} />
+      <EditableSection link={link} busy={busy} />
+    </section>
   );
 };
 
@@ -269,6 +294,17 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
             <Vec3Sliders label="Turns about" value={o.pivot ?? [0, 0, 0]} min={[-W, -2, -10]} max={[W, H + 10, 20]} step={0.05} unit="m" onChange={(v) => up({ pivot: v }, "Move the turning point", "pivot")} />
             <Toggle label="Casts shadows" value={o.castShadow ?? true} onChange={(v) => up({ castShadow: v }, v ? "Cast shadows" : "No shadows", "cast")} />
             <Toggle label="Receives shadows" value={o.receiveShadow ?? true} onChange={(v) => up({ receiveShadow: v }, v ? "Receive shadows" : "No shadows on it", "receive")} />
+          </>
+        )}
+        {o.geometry?.kind === "model" && (
+          <>
+            <p className="muted small">Its shapes, materials and animation come from Blender: edit them there, then “Update the 3D from Blender” on its video layer. Placement, timing and lights here are kept.</p>
+            <Field label="Animation speed" help="1 = as made in Blender; 0 holds it still.">
+              <Slider label="Animation speed" value={o.clip?.speed ?? 1} min={0} max={4} step={0.05} onChange={(v) => up({ clip: { ...(o.clip ?? { speed: 1, offset: 0 }), speed: v } }, "Change animation speed", "clip-speed")} />
+            </Field>
+            <Field label="Animation starts from" help="Seconds into Blender's animation at the start of this layer.">
+              <Slider label="Animation starts from" value={o.clip?.offset ?? 0} min={0} max={60} step={0.05} unit="s" onChange={(v) => up({ clip: { ...(o.clip ?? { speed: 1, offset: 0 }), offset: v } }, "Change animation start", "clip-offset")} />
+            </Field>
           </>
         )}
         {o.geometry?.kind === "area" && !o.part && (
