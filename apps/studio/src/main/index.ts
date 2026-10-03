@@ -19,6 +19,7 @@ import { registerHouseDetect, shutdownHouseDetect } from "./houseDetect.ts";
 import { registerBlender, shutdownBlender } from "./blender.ts";
 import { registerAssistantIpc, shutdownAssistant } from "./assistant.ts";
 import { registerRenderQueue, shutdownRenders } from "./renderQueue.ts";
+import { registerDriveIpc } from "./drive.ts";
 import { initLog, log } from "./log.ts";
 import { stopAll, track } from "./processes.ts";
 import { runUiTest } from "./uitest.ts";
@@ -79,6 +80,7 @@ registerPreviewCacheIpc();
 registerAvCheckIpc();
 registerWindowIpc(mode);
 registerRenderQueue(mode);
+registerDriveIpc();
 registerAssistantIpc(mode);
 
 ipcMain.handle("app:paths", () => paths());

@@ -143,6 +143,17 @@ const api: BeApi = {
     copyToDrive: (id, sub) => ipcRenderer.invoke("deliver:copyToDrive", id, sub),
     testFolder: (p) => ipcRenderer.invoke("deliver:testFolder", p),
   },
+  drive: {
+    status: () => ipcRenderer.invoke("drive:status"),
+    setFolder: (f) => ipcRenderer.invoke("drive:setFolder", f),
+    setMyDrive: (p) => ipcRenderer.invoke("drive:setMyDrive", p),
+    list: (where, opts) => ipcRenderer.invoke("drive:list", where, opts),
+    copyInto: (src, to, name, folder) => ipcRenderer.invoke("drive:copyInto", src, to, name, folder),
+    fetch: (p) => ipcRenderer.invoke("drive:fetch", p),
+    packageSave: (json, name) => ipcRenderer.invoke("drive:packageSave", json, name),
+    packageOpen: (where) => ipcRenderer.invoke("drive:packageOpen", where),
+    chooseFiles: (kind) => ipcRenderer.invoke("drive:chooseFiles", kind),
+  },
   sync: {
     publishProject: (project) => ipcRenderer.send("sync:project", project),
     publishTransport: (t) => ipcRenderer.send("sync:transport", t),

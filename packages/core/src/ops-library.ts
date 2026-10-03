@@ -511,12 +511,13 @@ export const assetRelink = defineOp({
   type: "asset.relink",
   title: "Relink media",
   description: "Point a missing or moved asset at a new file (optionally with the new file's details).",
-  args: z.object({ assetId: id, path: z.string().min(1), originalPath: z.string().optional(), audioPath: z.string().optional(), meta: z.custom<Asset["meta"]>((v) => !!v && typeof v === "object" && !Array.isArray(v), { message: "expected media details" }).optional() }),
+  args: z.object({ assetId: id, path: z.string().min(1), originalPath: z.string().optional(), drive: z.string().optional(), audioPath: z.string().optional(), meta: z.custom<Asset["meta"]>((v) => !!v && typeof v === "object" && !Array.isArray(v), { message: "expected media details" }).optional() }),
   apply: (d, a) => {
     const asset = d.assets[a.assetId];
     if (!asset) throw new OpError("That media item no longer exists.");
     asset.path = a.path;
     if (a.originalPath) asset.originalPath = a.originalPath;
+    if (a.drive) asset.drive = a.drive;
     if (a.audioPath) asset.audioPath = a.audioPath;
     if (a.meta) asset.meta = { ...asset.meta, ...a.meta };
     delete asset.missing;

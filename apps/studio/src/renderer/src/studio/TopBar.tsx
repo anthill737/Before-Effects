@@ -3,6 +3,7 @@ import { type Step, useStudio } from "./store.ts";
 import { saveProject } from "./persistence.ts";
 import { AgentButton } from "./AgentPanel.tsx";
 import { RendersButton } from "./RendersPanel.tsx";
+import { DriveButton } from "./DrivePanel.tsx";
 import { AssistantButton } from "./assistant/AssistantPanel.tsx";
 
 const STEPS: Array<{ id: Step; label: string; hint: string }> = [
@@ -46,6 +47,7 @@ export const TopBar = () => {
       <div className="top-actions">
         <AssistantButton />
         <AgentButton />
+        <DriveButton />
         <RendersButton />
         <button className="icon" disabled={!h?.canUndo} onClick={() => useStudio.getState().undo()} title={h?.undoLabel ? `Undo “${h.undoLabel}” (Ctrl+Z)` : "Nothing to undo"} aria-label="Undo">
           ↶

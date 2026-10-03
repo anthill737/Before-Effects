@@ -72,6 +72,7 @@ export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean
         name: m.name,
         path: m.path,
         originalPath: m.originalPath,
+        ...(m.drive ? { drive: m.drive } : {}),
         ...(m.sourceFile ? { sourceFile: m.sourceFile } : {}),
         ...(m.audioPath ? { audioPath: m.audioPath } : {}),
         meta: {

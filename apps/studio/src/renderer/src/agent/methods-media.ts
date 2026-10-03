@@ -34,6 +34,7 @@ import { usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
 import { addObject, addParticles, layerTime, makeArea3D, removeObject, setContain } from "../studio/actions3d.ts";
 import { hasAudio } from "../studio/audioEngine.ts";
+import { driveMediaInUse } from "../studio/drive.ts";
 import { getRenderer } from "../studio/engineHost.ts";
 import { OUTCOMES, SIZES } from "../studio/ExportDialog.tsx";
 import { useSims } from "../studio/simHost.ts";
@@ -592,12 +593,17 @@ method({
     output: z.string().optional(),
     hap: z.boolean().optional(),
     projector: z.string().optional().describe("purpose projector: which projector (name or id; default the current one). Call once per projector for several."),
+    sendToDrive: z.boolean().optional().describe("when finished, copy it into Before Effects' Exports folder in Google Drive (see the job's delivery)"),
   }),
   mutates: false,
   long: true,
   run: async (p) => {
     const pr = project();
     const s = st();
+    // Rendering reads local files only: media still in Google Drive is copied first (drive.localize).
+    const inDrive = await driveMediaInUse();
+    if (inDrive.length) throw new AgentError("drive_media", `${inDrive.length} file${inDrive.length > 1 ? "s are" : " is"} read straight from Google Drive (${inDrive.slice(0, 3).map((x) => x.asset.name).join(", ")}${inDrive.length > 3 ? ", …" : ""}). Copy ${inDrive.length > 1 ? "them" : "it"} to the local media folder first with drive.localize.`);
+    if (p.sendToDrive && !(await window.be.drive.status()).myDrive) throw new AgentError("unavailable", "Google Drive for desktop isn't installed or signed in, so there's nowhere to send the export.");
     const sid = p.scene === "show" ? Object.values(pr.compositions).find((c) => c.show)?.id : p.scene && p.scene !== "current" ? (pr.compositions[p.scene] ? p.scene : Object.values(pr.compositions).find((c) => c.name === p.scene)?.id) : s.compId;
     const comp = sid ? pr.compositions[sid] : undefined;
     if (!comp) throw new AgentError("not_found", `No scene "${p.scene}".`);
@@ -633,6 +639,7 @@ method({
       withAudio: hasAudio(pr, comp.id),
       estimatedBytes: Math.round(((o.mbps * 1e6) / 8) * seconds * f * f),
       snapshot: JSON.stringify(pr),
+      ...(p.sendToDrive ? { sendToDrive: true } : {}),
     });
     return { job: id, output, frames, width: f < 1 ? even(full.width * f) : full.width, height: f < 1 ? even(full.height * f) : full.height, sound: hasAudio(pr, comp.id) };
   },

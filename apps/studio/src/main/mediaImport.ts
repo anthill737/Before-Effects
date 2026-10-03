@@ -2,14 +2,19 @@
  * Import media: copy into the project's media folder (originals untouched), inspect with ffprobe,
  * and prepare what the editor needs: dimensions, frame rate, frame count, duration and audio.
  * Videos with sound get a WAV copy of their audio so preview and export mix exactly the same samples.
+ * Files in Google Drive are copied the same way (Drive for desktop downloads them as they're read), so
+ * playback and rendering always use a local copy; the asset remembers its place in Drive.
  */
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { copyFile, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { ipcMain } from "electron";
 import { findFfmpeg } from "@be/media";
 import type { ImportedMedia } from "../shared/api.ts";
+import { driveRelative } from "../shared/drive.ts";
+import { myDrive } from "./drive.ts";
 import { paths } from "./files.ts";
 import { decodeHeif, isHeif } from "./heic.ts";
 import { log } from "./log.ts";
@@ -40,13 +45,19 @@ export const importMedia = async (src: string, projectId: string): Promise<Impor
   const dir = join(paths().media, projectId.replace(/[^\w.-]+/g, "_"));
   mkdirSync(dir, { recursive: true });
   const target = uniqueTarget(dir, basename(src));
-  copyFileSync(src, target);
+  // Not blocking: a file streamed from Google Drive downloads while it's copied.
+  await copyFile(src, target);
+  const [a, b] = await Promise.all([stat(src), stat(target)]);
+  if (a.size !== b.size) throw new Error(`“${basename(src)}” didn't copy completely (${b.size} of ${a.size} bytes). If it's in Google Drive, check that Drive for desktop is running and try again.`);
+  const root = myDrive();
+  const rel = root ? driveRelative(root, src) : null;
+  const drive = rel ? { drive: rel } : {};
   // Phone photos (HEIC/HEIF): keep the original, work from a decoded PNG.
   if (isHeif(target)) {
     const png = uniqueTarget(dir, `${basename(target, extname(target))} (decoded).png`);
     const r = await decodeHeif(target, png);
     log(`imported image ${src} → ${png} (from ${target})`);
-    return { kind: "image", path: r.path, originalPath: src, sourceFile: target, name: basename(src), width: r.width, height: r.height, hasAlpha: r.hasAlpha, codec: `heif (${r.decoder})`, notes: r.notes };
+    return { kind: "image", path: r.path, originalPath: src, ...drive, sourceFile: target, name: basename(src), width: r.width, height: r.height, hasAlpha: r.hasAlpha, codec: `heif (${r.decoder})`, notes: r.notes };
   }
   const { stdout } = await execFileP(ffprobe, ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", target], { maxBuffer: 16 << 20 });
   const j = JSON.parse(stdout) as { streams: Array<Record<string, string | number | undefined>>; format: Record<string, string | number | undefined> };
@@ -69,6 +80,7 @@ export const importMedia = async (src: string, projectId: string): Promise<Impor
     kind,
     path: target,
     originalPath: src,
+    ...drive,
     name: basename(src),
     width: video ? Number(video.width) : undefined,
     height: video ? Number(video.height) : undefined,

@@ -16,6 +16,8 @@ export interface ImportedMedia {
   readonly kind: "image" | "video" | "audio" | "unknown";
   readonly path: string;
   readonly originalPath: string;
+  /** Its place in Google Drive when it came from there (the file at `path` is the local copy). */
+  readonly drive?: string | undefined;
   readonly name: string;
   readonly width?: number | undefined;
   readonly height?: number | undefined;
@@ -54,6 +56,45 @@ export interface RenderJobSpec {
   readonly withAudio: boolean;
   readonly estimatedBytes: number;
   readonly snapshot: string;
+  /** Copy the finished export into Before Effects' Exports folder in Google Drive. */
+  readonly sendToDrive?: boolean;
+}
+
+/** Google Drive (through Google Drive for desktop): where it is and Before Effects' folder in it. */
+export interface DriveStatus {
+  /** Google Drive for desktop: running, installed but not running, or not installed. */
+  readonly app: "running" | "installed" | "missing";
+  /** My Drive on this computer (null when it isn't there). */
+  readonly myDrive: string | null;
+  /** Before Effects' folder, relative to My Drive ("Before Effects"). */
+  readonly folder: string;
+  /** The folder and its Media, Projects and Exports subfolders exist. */
+  readonly ready: boolean;
+  readonly paths?: { readonly base: string; readonly media: string; readonly projects: string; readonly exports: string };
+  /** Local caches (never in Drive). */
+  readonly cache?: string;
+  readonly uploadNote?: string;
+  readonly problem?: string;
+}
+
+export interface DriveEntry {
+  readonly name: string;
+  readonly path: string;
+  /** Place in My Drive ("Effects library/Ghosts/a.mp4"). */
+  readonly rel: string;
+  readonly kind: "folder" | "video" | "image" | "audio" | "project" | "package" | "other";
+  readonly size?: number;
+  readonly modified?: string;
+}
+
+/** A copy into the Drive folder. `confirmed` stays false: Drive for desktop uploads it in its own time. */
+export interface DriveCopy {
+  readonly target: string;
+  readonly rel: string;
+  readonly size: number;
+  readonly copiedAt: string;
+  readonly confirmed: false;
+  readonly note: string;
 }
 
 export interface RenderJob extends RenderJobSpec {
@@ -70,7 +111,8 @@ export interface RenderJob extends RenderJobSpec {
   sizeBytes?: number | undefined;
   verify?: import("@be/media").VerifyReport | undefined;
   error?: string | undefined;
-  delivery?: { state: "copying" | "copied" | "failed"; target: string; at?: string; error?: string } | undefined;
+  /** Google Drive: "copied" means the file is complete in the Drive folder, not that Google has it yet (`note`). */
+  delivery?: { state: "copying" | "copied" | "failed"; target: string; at?: string; error?: string; confirmed?: false; note?: string } | undefined;
 }
 
 /** External-agent API status for the settings panel. */
@@ -404,9 +446,26 @@ export interface BeApi {
   };
   readonly deliver: {
     driveFolder(): Promise<string | null>;
-    copyToDrive(jobId: string, subfolder?: string): Promise<string>;
+    /** Into Before Effects' Exports folder in Drive (or `folder`, a place in My Drive). */
+    copyToDrive(jobId: string, folder?: string): Promise<string>;
     /** Journey tests only. */
     testFolder(path: string | null): Promise<void>;
+  };
+  readonly drive: {
+    status(): Promise<DriveStatus>;
+    /** Before Effects' folder in My Drive (relative, or a full path inside My Drive). */
+    setFolder(folder: string): Promise<DriveStatus>;
+    /** Where My Drive is when it isn't found by itself (null: find it). */
+    setMyDrive(path: string | null): Promise<DriveStatus>;
+    list(where?: string, opts?: { recursive?: boolean; max?: number }): Promise<{ folder: string; entries: DriveEntry[]; more: boolean }>;
+    /** Into Before Effects' subfolder `to`, or `folder` (a place in My Drive). */
+    copyInto(src: string, to: "media" | "projects" | "exports", name?: string, folder?: string): Promise<DriveCopy>;
+    /** A file from anywhere in Drive, copied to the local cache. */
+    fetch(path: string): Promise<{ local: string; rel: string; size: number }>;
+    packageSave(projectJson: string, name: string): Promise<{ folder: string; rel: string; files: number; bytes: number; note: string }>;
+    packageOpen(where: string): Promise<{ project: string; files: number; bytes: number }>;
+    /** File picker that starts in Drive. */
+    chooseFiles(kind: "media" | "package"): Promise<string[]>;
   };
   readonly sync: {
     publishProject(project: unknown): void;

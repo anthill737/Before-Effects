@@ -1,7 +1,8 @@
 /**
  * Renders: background exports with progress, cancel and retry, the finished file and its check,
- * and delivery to Google Drive (Drive for desktop folder). A failed upload can be retried without
- * rendering again.
+ * and delivery to Google Drive (the Exports folder in Before Effects' Drive-for-desktop folder). A
+ * failed copy can be retried without rendering again. "Copied" means the whole file is in the Drive
+ * folder; Drive for desktop uploads it afterwards, which Before Effects can't confirm, and says so.
  */
 import { useEffect, useState } from "react";
 import type { RenderJob } from "../../../shared/api.ts";
@@ -115,8 +116,8 @@ const RendersPanel = ({ jobs }: { jobs: RenderJob[] }) => {
                   </button>
                 )}
                 {j.delivery?.state === "copied" && (
-                  <span className="ok-text small" title={j.delivery.target}>
-                    ✓ In your Google Drive folder (Drive for desktop uploads it)
+                  <span className="ok-text small" title={`${j.delivery.target}\n${j.delivery.note ?? ""}`}>
+                    ✓ Copied to your Google Drive folder · upload not confirmed (Drive for desktop uploads it — check the Drive app)
                   </span>
                 )}
                 {j.delivery?.state === "failed" && <span className="warn small">{j.delivery.error}</span>}

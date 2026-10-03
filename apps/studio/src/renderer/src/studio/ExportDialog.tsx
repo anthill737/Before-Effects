@@ -9,6 +9,8 @@ import { useEffect, useRef, useState } from "react";
 import { currentProjector } from "./projectors.ts";
 import { hasAudio } from "./audioEngine.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
+import { localizeDriveMedia } from "./drive.ts";
+
 
 type Outcome = "share" | "master" | "transparent" | "projector";
 
@@ -49,6 +51,9 @@ export const ExportDialog = () => {
   /** Which projector(s) to export for: one, or every projector (one file each). */
   const [which, setWhich] = useState<string>("current");
   const [dir, setDir] = useState("");
+  const [toDrive, setToDrive] = useState(false);
+  const [hasDrive, setHasDrive] = useState(false);
+  useEffect(() => void window.be.drive.status().then((d) => setHasDrive(!!d.myDrive)), []);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -85,6 +90,12 @@ export const ExportDialog = () => {
 
   const start = async (o: OutcomeDef) => {
     setError(null);
+    // Rendering reads local files only: media still in Google Drive is copied to this computer first.
+    const fromDrive = await localizeDriveMedia();
+    if (fromDrive.failed.length) {
+      setError(`Some media is in Google Drive and couldn't be copied to this computer: ${fromDrive.failed.map((x) => `${x.name} (${x.error})`).join("; ")}`);
+      return;
+    }
     const snapshot = useStudio.getState().project!; // frozen now: later edits don't change this export
     const preset: PresetId = o.id === "projector" && projectorFormat === "hap" ? "hap" : o.preset;
     const ext = preset.startsWith("prores") || preset === "hap" ? "mov" : "mp4";
@@ -113,6 +124,7 @@ export const ExportDialog = () => {
         withAudio: sound && preset !== "png-sequence",
         estimatedBytes: Math.round(((o.mbps * 1e6) / 8) * seconds * f * f),
         snapshot: JSON.stringify(snapshot),
+        ...(toDrive ? { sendToDrive: true } : {}),
         });
       }
       setQueued(id);
@@ -197,6 +209,17 @@ export const ExportDialog = () => {
             <dd>{sound ? "Included (stereo, mixed from your sound layers)" : "None in this show"}</dd>
             <dt>File size</dt>
             <dd>about {Math.max(1, Math.round((outcome.mbps * seconds * f * f) / 8))} MB</dd>
+            {hasDrive && (
+              <>
+                <dt>Google Drive</dt>
+                <dd>
+                  <label className="row gap small">
+                    <input type="checkbox" checked={toDrive} onChange={(e) => setToDrive(e.target.checked)} />
+                    Copy it to the Exports folder in Google Drive when it's finished
+                  </label>
+                </dd>
+              </>
+            )}
           </dl>
           {isProjector && (
             <fieldset className="radio-list">

@@ -15,6 +15,8 @@ import { addAssetLayer, importMediaFiles } from "./media.ts";
 import { findMissingInFolder, findOne } from "./relink.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 import { useThumb } from "./thumbs.ts";
+import { importFromDrive } from "./drive.ts";
+
 
 const KIND_ICON: Record<string, string> = { image: "🖼", video: "🎞", audio: "♪", font: "A", model: "⬚", lut: "◐" };
 
@@ -166,6 +168,9 @@ export const ContentPanel = () => {
       <div className="row gap wrap">
         <button className="primary" onClick={() => void importMediaFiles()}>
           Import pictures, video or music…
+        </button>
+        <button className="ghost" onClick={() => void importFromDrive()} title="From anywhere in your Google Drive: only the files you choose are copied to this computer">
+          From Google Drive…
         </button>
         <button className="ghost" onClick={addText}>
           {sel.regionIds.length ? "Add text to the selection" : "Add text"}

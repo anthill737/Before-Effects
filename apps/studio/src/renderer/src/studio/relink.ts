@@ -22,7 +22,7 @@ const relinkTo = async (a: Asset, src: string): Promise<boolean> => {
       ...(m.durationSeconds ? { duration: secondsToTime(m.durationSeconds) } : {}),
       ...(m.hasAlpha !== undefined ? { hasAlpha: m.hasAlpha } : {}),
     };
-    return !!s.apply({ type: "asset.relink", args: { assetId: a.id, path: m.path, originalPath: src, ...(m.audioPath ? { audioPath: m.audioPath } : {}), meta } }, { label: `Relink ${a.name}` });
+    return !!s.apply({ type: "asset.relink", args: { assetId: a.id, path: m.path, originalPath: src, ...(m.drive ? { drive: m.drive } : {}), ...(m.audioPath ? { audioPath: m.audioPath } : {}), meta } }, { label: `Relink ${a.name}` });
   } catch (e) {
     s.toast({ kind: "error", text: `“${base(src)}” was found but couldn't be read.`, details: String((e as Error)?.message ?? e) });
     return false;

@@ -4,15 +4,17 @@
  * continues while it renders and later edits never change a job already queued.
  *
  * Jobs report progress, can be cancelled and retried, check disk space first, are verified when
- * done, and are kept in an export history. Delivery to Google Drive copies into the
- * Drive-for-desktop folder; a failed copy can be retried without rendering again.
+ * done, and are kept in an export history. Delivery to Google Drive copies the finished file into
+ * Before Effects' Exports folder in the Drive-for-desktop folder (drive.ts); a failed copy can be
+ * retried without rendering again.
  */
-import { copyFile, mkdir, statfs, stat } from "node:fs/promises";
+import { statfs } from "node:fs/promises";
 import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
 import type { RenderJob, RenderJobSpec } from "../shared/api.ts";
+import { DRIVE_UPLOAD_NOTE } from "../shared/drive.ts";
+import { copyVerified, driveTarget, myDrive, setTestMyDrive } from "./drive.ts";
 import { paths } from "./files.ts";
 import { log } from "./log.ts";
 import { webPrefs } from "./windows.ts";
@@ -113,18 +115,41 @@ const pump = () => {
   w.webContents.send("render:job", next);
 };
 
-/** Google Drive for desktop: the synced "My Drive" folder, when installed. */
-let testDrive: string | null = null;
-
-export const driveFolder = (): string | null => {
-  if (testDrive !== null) return testDrive;
-  const candidates = [
-    ...["G", "H", "I", "J"].map((d) => `${d}:\\My Drive`),
-    join(homedir(), "Google Drive", "My Drive"),
-    join(homedir(), "Google Drive"),
-    join(homedir(), "My Drive"),
-  ];
-  return candidates.find((c) => existsSync(c)) ?? null;
+/**
+ * Copy a finished export into Google Drive (Before Effects' Exports folder, or `folder` in My Drive).
+ * "Copied" means the whole file is in the Drive folder; Drive for desktop uploads it afterwards and
+ * Before Effects can't see when that's done, so the delivery says so. A failure leaves the export
+ * where it is, ready to try again.
+ */
+const deliver = async (id: string, folder?: string): Promise<string> => {
+  const j = jobs.find((x) => x.id === id);
+  if (!j || j.state !== "done" || !j.result) throw new Error("Only finished exports can be sent to Google Drive.");
+  const drive = myDrive();
+  let target = j.result;
+  try {
+    if (!drive) throw Object.assign(new Error("no drive"), { code: "NODRIVE" });
+    target = await driveTarget(j.result, "exports", folder ? { folder } : {});
+    update(id, { delivery: { state: "copying", target } });
+    await copyVerified(j.result, target);
+    update(id, { delivery: { state: "copied", target, at: new Date().toISOString(), confirmed: false, note: DRIVE_UPLOAD_NOTE } });
+    log(`copied ${j.result} → ${target} (Drive for desktop uploads it in the background)`);
+    return target;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    const why =
+      code === "NODRIVE"
+        ? "Google Drive for desktop isn't installed or signed in, so there's no Drive folder to copy into (install it from google.com/drive/download)"
+        : code === "ENOENT" || code === "ENOTDIR"
+          ? `the Google Drive folder (${drive}) isn't reachable. Check that Google Drive for desktop is running and signed in`
+          : code === "ENOSPC"
+            ? "there isn't enough space for the copy on the Drive folder's disk"
+            : code === "EACCES" || code === "EPERM" || code === "EBUSY"
+              ? "Windows wouldn't allow the copy (the file may be open in another program)"
+              : String((e as Error).message ?? e);
+    log(`drive copy failed for ${j.result}: ${String((e as Error).message ?? e)}`);
+    update(id, { delivery: { state: "failed", target, error: why } });
+    throw new Error(`Couldn't copy to Google Drive: ${why}. Your exported file is safe, so you can try again without exporting again.`);
+  }
 };
 
 /** Videos still being written are named "….partial" until they're complete; any left at start-up were cut off. */
@@ -195,45 +220,17 @@ export const registerRenderQueue = (mode: string) => {
     log(`render job ${id} ${p.state}${p.error ? `: ${p.error}` : ""}`);
     current = null;
     pump();
+    // Asked to go to Drive: copy it now the export is finished (a failure shows on the job, to retry).
+    if (p.state === "done" && jobs.find((x) => x.id === id)?.sendToDrive) void deliver(id).catch(() => undefined);
   });
 
   // ---- delivery ----
-  ipcMain.handle("deliver:driveFolder", () => driveFolder());
-  // Test hook (journey tests only): point delivery at a chosen folder to exercise failure and retry.
+  ipcMain.handle("deliver:driveFolder", () => myDrive());
+  // Test hook (journey tests only): point Drive at a chosen folder to exercise failure and retry.
   ipcMain.handle("deliver:testFolder", (_e, p: string | null) => {
-    if (modeArg === "uitest") testDrive = p;
+    if (modeArg === "uitest") setTestMyDrive(p);
   });
-  ipcMain.handle("deliver:copyToDrive", async (_e, id: string, subfolder?: string) => {
-    const j = jobs.find((x) => x.id === id);
-    if (!j || j.state !== "done" || !j.result) throw new Error("Only finished exports can be uploaded.");
-    const drive = driveFolder();
-    if (!drive) throw new Error("Google Drive for desktop isn't installed or signed in, so there's no Drive folder to copy into. Install it from google.com/drive/download, then try again.");
-    const destDir = join(drive, subfolder ?? "Before Effects");
-    const target = join(destDir, basename(j.result));
-    update(id, { delivery: { state: "copying", target } });
-    try {
-      await mkdir(destDir, { recursive: true });
-      await copyFile(j.result, target);
-      const [a, b] = await Promise.all([stat(j.result), stat(target)]);
-      if (a.size !== b.size) throw new Error("The copy is incomplete.");
-      update(id, { delivery: { state: "copied", target, at: new Date().toISOString() } });
-      log(`copied ${j.result} → ${target} (Drive for desktop uploads it in the background)`);
-      return target;
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      const why =
-        code === "ENOENT" || code === "ENOTDIR"
-          ? `the Google Drive folder (${drive}) isn't reachable. Check that Google Drive for desktop is running and signed in`
-          : code === "ENOSPC"
-            ? "there isn't enough space for the copy on the Drive folder's disk"
-            : code === "EACCES" || code === "EPERM" || code === "EBUSY"
-              ? "Windows wouldn't allow the copy (the file may be open in another program)"
-              : String((e as Error).message ?? e);
-      log(`drive copy failed for ${j.result}: ${String((e as Error).message ?? e)}`);
-      update(id, { delivery: { state: "failed", target, error: why } });
-      throw new Error(`Couldn't copy to Google Drive: ${why}. Your exported file is safe, so you can try again without exporting again.`);
-    }
-  });
+  ipcMain.handle("deliver:copyToDrive", (_e, id: string, folder?: string) => deliver(id, folder));
 };
 
 export const shutdownRenders = () => {

@@ -117,6 +117,8 @@ export interface Asset {
   readonly missing?: boolean;
   /** Original location before it was copied into the project's media folder. */
   readonly originalPath?: string;
+  /** Its place in Google Drive ("Effects library/Ghosts/a.mp4" in My Drive) when it was brought in from there; `path` is the local copy. */
+  readonly drive?: string;
   /** The file as imported when `path` is a working copy made from it (e.g. a HEIC photo decoded to PNG). */
   readonly sourceFile?: string;
   /** Made by Before Effects for the venue (the photo placed in the canvas), not content to use. */
