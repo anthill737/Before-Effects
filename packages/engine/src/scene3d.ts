@@ -556,8 +556,10 @@ export class SceneHost implements ExternalSourceRenderer {
         if (mat instanceof THREE.MeshStandardMaterial && m) {
           const c = evalProp(m.color, t);
           mat.color.copy(srgb(c));
-          if (mat.userData.sideOf) mat.color.multiplyScalar(0.55);
-          if (gain) mat.color.setRGB(mat.color.r * gain[0], mat.color.g * gain[1], mat.color.b * gain[2]);
+          // Sides are plain: a picture-faced part's sides read as its material in shade.
+          if (mat.userData.sideOf) mat.color.multiplyScalar(picture ? 0.38 : 0.55);
+          // Only the picture is evened out; plain sides keep their own colour under the light.
+          if (gain && !mat.userData.sideOf) mat.color.setRGB(mat.color.r * gain[0], mat.color.g * gain[1], mat.color.b * gain[2]);
           const glow = evalProp(m.glow, t);
           mat.emissive.copy(srgb(c));
           mat.emissiveIntensity = glow;
