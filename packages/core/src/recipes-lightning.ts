@@ -214,7 +214,7 @@ export const lightning: RecipeDef = {
   suits: ["wall", "roof", "roofline", "garage", "door", "window", "column", "custom"],
   defaultSeconds: 20,
   params: [
-    { key: "look", label: "Flash", control: "choice", default: "house", choices: [{ value: "house", label: "The house goes white" }, { value: "light", label: "Coloured light" }], primary: true, help: "The house goes white: a bright picture of the house flickers in (its opacity keyed to each strike). Coloured light: the areas fill with the flash colour.", drives: ["source", "masks", "transform.opacity", "source.contents"] },
+    { key: "look", label: "Flash style", control: "choice", default: "house", choices: [{ value: "house", label: "The house goes white" }, { value: "light", label: "Coloured light" }], primary: true, help: "The house goes white: a bright picture of the house flickers in (its opacity keyed to each strike). Coloured light: the areas fill with the flash colour.", drives: ["source", "masks", "transform.opacity", "source.contents"] },
     { key: "style", label: "Bolt", control: "choice", default: "pieces", choices: STYLE_CHOICES, primary: true, help: "Pieces on the house: a piece of a bolt in a new spot every flicker. Single strike: one bolt to the ground. Energetic burst: branches like a tree. Jagged burst: a knot of crackling arcs. Crazy strike: arcs crawling about.", drives: ["source.contents"] },
     { key: "strikes", label: "Strikes", control: "slider", default: 3, min: 1, max: 30, step: 1, primary: true, drives: ["source.contents"] },
     { key: "every", label: "Time between strikes", control: "seconds", default: 6, min: 0.8, max: 60, step: 0.1, unit: "s", primary: true, help: "On average; each gap varies a little.", drives: ["source.contents"] },

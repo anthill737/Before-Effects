@@ -203,7 +203,8 @@ export const normalizeSettings = (def: RecipeDef, settings: Readonly<Record<stri
   const params: Record<string, unknown> = {};
   const problems: string[] = [];
   for (const [key, value] of Object.entries(settings ?? {})) {
-    const spec = def.params.find((p) => p.key === key || p.label.toLowerCase() === key.toLowerCase());
+    // A setting's own key wins over another setting's label (e.g. "flash" vs a setting labelled "Flash").
+    const spec = def.params.find((p) => p.key === key) ?? def.params.find((p) => p.label.toLowerCase() === key.toLowerCase());
     if (!spec) {
       problems.push(`"${def.title}" has no setting "${key}" (settings: ${def.params.map((p) => p.key).join(", ")}).`);
       continue;

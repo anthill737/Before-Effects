@@ -12,6 +12,7 @@ import {
   lightning,
   newComposition,
   newProjector,
+  normalizeSettings,
   polygonPath,
   type Region,
   secondsToTime,
@@ -210,6 +211,13 @@ describe("lightning & thunder", () => {
     }
     expect(pieces[0]!.transform.position.value).not.toEqual(pieces[1]!.transform.position.value);
     expect(pieces[0]!.inPoint - pieces[0]!.startTime).not.toBe(pieces[1]!.inPoint - pieces[1]!.startTime);
+  });
+
+  it("settings by key win over another setting's label", () => {
+    const fake = { ...lightning, params: [{ key: "look", label: "Flash", control: "choice", default: "a", choices: [{ value: "a", label: "A" }] }, ...lightning.params] } as typeof lightning;
+    const r = normalizeSettings(fake, { flash: 40, look: "a" });
+    expect(r.problems).toEqual([]);
+    expect(r.params).toEqual({ flash: 40, look: "a" });
   });
 
   it("regenerates identically", () => {
