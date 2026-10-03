@@ -90,7 +90,7 @@ const objectInfo = (o: Object3D, t: number) => ({
   scale: evalProp(o.scale, t),
   animated: ["position", "rotation", "scale"].filter((k) => ((o as unknown as Record<string, AnimProp>)[k]!.keyframes?.length ?? 0) > 0),
   ...(o.geometry ? { geometry: o.geometry.kind === "area" ? { kind: "area", areas: o.geometry.ref, thicknessCm: Math.round(o.geometry.depth * 100) } : o.geometry } : {}),
-  ...(o.material ? { material: { style: o.material.style, ...(o.material.assetId ? { image: o.material.assetId } : {}), color: evalProp(o.material.color, t), roughness: o.material.roughness, metalness: o.material.metalness, glow: evalProp(o.material.glow, t), opacity: o.material.opacity } } : {}),
+  ...(o.material ? { material: { style: o.material.style, ...(o.material.assetId ? { image: o.material.assetId } : {}), color: evalProp(o.material.color, t), roughness: o.material.roughness, metalness: o.material.metalness, glow: evalProp(o.material.glow, t), opacity: o.material.opacity, ...(o.material.style === "photo" || o.material.style === "image" ? { shading: o.material.shading ?? 1, matchPicture: o.material.matchPicture ?? true } : {}) } } : {}),
   ...(o.physics ? { physics: o.physics } : {}),
   ...(o.fracture ? { fracture: o.fracture } : {}),
   ...(o.blocks ? { blocks: o.blocks } : {}),
@@ -233,7 +233,7 @@ method({
     rotation: vec3.optional(),
     scale: z.number().min(1).max(10000).optional(),
     thicknessCm: z.number().min(1).max(500).optional(),
-    material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1) }).partial().optional(),
+    material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1), shading: z.number().min(0).max(1).describe("picture surfaces: 0 = the picture itself whichever way it turns, 1 = lit like a real solid (default)"), matchPicture: z.boolean().describe("picture surfaces: facing the audience it shows the picture exactly whatever the lights (default true); false = as the lights really fall on it (a light's own pass)") }).partial().optional(),
     physics: z.object({ body: z.enum(["dynamic", "static"]), mass: z.number().min(0.01).max(1e6), friction: z.number().min(0).max(2), bounce: z.number().min(0).max(1) }).partial().nullable().optional(),
     fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(-20).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass", "bricks"]) }).partial().nullable().optional(),
     blocks: z
@@ -281,7 +281,7 @@ method({
       // "image": a picture lined up with the building (like a house skin) on the front, by media id or name.
       const image = p.material.image !== undefined ? mediaId(p.material.image) : undefined;
       if (p.material.style === "image" && !image && !(o.material.style === "image" && o.material.assetId)) throw new AgentError("invalid_params", "A picture surface needs material.image (a picture's media id or name).");
-      const m: Material3D = { ...o.material, ...(image ? { assetId: image } : {}), ...(p.material.style ? { style: p.material.style } : {}), ...(p.material.roughness !== undefined ? { roughness: p.material.roughness } : {}), ...(p.material.metalness !== undefined ? { metalness: p.material.metalness } : {}), ...(p.material.opacity !== undefined ? { opacity: p.material.opacity } : {}) };
+      const m: Material3D = { ...o.material, ...(image ? { assetId: image } : {}), ...(p.material.style ? { style: p.material.style } : {}), ...(p.material.roughness !== undefined ? { roughness: p.material.roughness } : {}), ...(p.material.metalness !== undefined ? { metalness: p.material.metalness } : {}), ...(p.material.opacity !== undefined ? { opacity: p.material.opacity } : {}), ...(p.material.shading !== undefined ? { shading: p.material.shading } : {}), ...(p.material.matchPicture !== undefined ? { matchPicture: p.material.matchPicture } : {}) };
       changes.material = { ...m, ...(p.material.color ? { color: at(o.material.color, p.material.color) } : {}), ...(p.material.glow !== undefined ? { glow: at(o.material.glow, p.material.glow) } : {}) };
     }
     if (p.physics === null) changes.physics = null;

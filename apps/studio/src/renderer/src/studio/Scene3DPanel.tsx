@@ -361,7 +361,7 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
             />
           </Field>
           {m.style === "image" && (
-            <Field label="Picture" help="Shown on the front; the sides stay plain.">
+            <Field label="Picture" help="Shown on the front (and round the sides of pieces cut from areas, like the picture carried through the stone).">
               <select className="select" aria-label="Picture" value={m.assetId ?? ""} onChange={(e) => setMat({ assetId: e.target.value || undefined }, "Choose a picture", "asset")}>
                 <option value="">Choose…</option>
                 {Object.values(project.assets)
@@ -388,6 +388,16 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
                   <KeyButton layer={layer} prop={m.glow} label="glow" onChange={(p) => setMat({ glow: p as AnimProp<number> }, "Animate glow", "glow-key")} />
                 </div>
               </Field>
+              {(m.style === "photo" || m.style === "image") && (
+                <>
+                  <Field label="Shading" help="How much the lights shade the picture as it turns or falls into shadow. 0 = the picture itself, like a layer mapped onto the pieces.">
+                    <Slider label="Shading" value={Math.round((m.shading ?? 1) * 100)} min={0} max={100} step={1} unit="%" onChange={(v) => setMat({ shading: v / 100 }, "Change shading", "shading")} />
+                  </Field>
+                  <Field label="Exact picture at rest" help="Facing the audience it shows the picture exactly, whatever the lights. Off: the picture as the lights really fall on it (for a light's own pass added over the house).">
+                    <Toggle label="Exact picture at rest" value={m.matchPicture ?? true} onChange={(v) => setMat({ matchPicture: v }, v ? "Exact picture at rest" : "Picture as the lights fall", "match")} />
+                  </Field>
+                </>
+              )}
               <Field label="Roughness">
                 <Slider label="Roughness" value={m.roughness} min={0} max={1} step={0.05} onChange={(v) => setMat({ roughness: v }, "Change roughness", "rough")} />
               </Field>

@@ -51,7 +51,26 @@ export interface Material3D {
   readonly glow: AnimProp<number>;
   /** 0..1 (for "shadow": how dark the shadows are). */
   readonly opacity: number;
+  /** A picture surface ("photo"/"image"): how much the scene's lights shade it — 0 shows the picture
+   *  itself whichever way it turns (like a layer mapped onto pieces), 1 lit like a real solid (default). */
+  readonly shading?: number;
+  /** A picture surface: evened out so that, facing the audience, it shows its picture exactly whatever
+   *  the lights are (default on). Off: the picture as the lights really fall on it — e.g. a light's own
+   *  pass, added over the house. */
+  readonly matchPicture?: boolean;
 }
+
+/**
+ * How a picture surface is made from its picture: `lit` (per colour) scales the part the scene's lights
+ * shade — the renderer shows it × the light falling on it / π — and `self` is the part shown as it is
+ * (what shading leaves, plus any glow). With the defaults a surface facing the audience shows exactly
+ * its picture; turning or a shadow only darkens the shaded part.
+ */
+export const pictureMix = (m: Pick<Material3D, "shading" | "matchPicture">, glow: number, gain: readonly number[]): { lit: [number, number, number]; self: number } => {
+  const s = Math.max(0, Math.min(1, m.shading ?? 1));
+  const g = m.matchPicture === false ? [1, 1, 1] : gain;
+  return { lit: [s * g[0]!, s * g[1]!, s * g[2]!], self: 1 - s + Math.max(0, glow) };
+};
 
 export type Geometry3D =
   /** A traced building area given thickness. Its front sits on the building front (z = 0). */

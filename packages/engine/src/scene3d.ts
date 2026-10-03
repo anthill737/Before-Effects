@@ -34,6 +34,7 @@ import {
   type ResolvedPiece,
   type ResolvedScene3D,
   pictureGain,
+  pictureMix,
   placePoint,
   showCamera,
   type Vec3,
@@ -126,7 +127,8 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
         const ordered = cx * nx + cy * ny >= 0 ? [p0, p1, p2] : [p0, p2, p1];
         for (const v of ordered) {
           pos.push(v[0]!, v[1]!, v[2]!);
-          uv.push(0.5, 0.5);
+          // The picture straight through the solid: a side shows the picture at that edge.
+          uv.push(...uvOf(v[0]!, v[1]!));
         }
       }
     }
@@ -386,6 +388,10 @@ export class SceneHost implements ExternalSourceRenderer {
           const R = Math.max(r.canvas.width, r.canvas.height) * METERS_PER_PIXEL * 0.8 + 2;
           Object.assign(sh.camera, { left: -R, right: R, top: R, bottom: -R, near: 0.1, far: 200 });
           sh.camera.updateProjectionMatrix();
+        } else {
+          // A point or spot light can be right up against what it lights (a lantern by a column).
+          Object.assign(sh.camera, { near: 0.05, far: 200 });
+          sh.camera.updateProjectionMatrix();
         }
       }
       b.scene.add(light);
@@ -414,16 +420,21 @@ export class SceneHost implements ExternalSourceRenderer {
       const matte = picture && base.metalness === 0 && !base.transparent;
       const make = () => (matte ? new THREE.MeshPhysicalMaterial({ ...base, specularIntensity: 0 }) : new THREE.MeshStandardMaterial(base));
       front = make();
+      // Pieces cut from areas carry the picture round their sides as well (like a layer mapped onto
+      // shattered pieces); a box's sides stay plain.
+      const mappedSides = o.geometry?.kind === "area";
       if (m?.style === "image" && m.assetId) {
-        // A picture on the front (e.g. what's seen through an opening); the sides stay plain.
+        // A picture on the front (e.g. what's seen through an opening).
         front.userData.image = m.assetId;
         side = make();
         side.userData.sideOf = true;
+        if (mappedSides) side.userData.image = m.assetId;
         mats.push(front, side);
       } else if (m?.style === "photo") {
         front.userData.photo = true;
         side = make();
         side.userData.sideOf = true;
+        if (mappedSides) side.userData.photo = true;
         mats.push(front, side);
       } else {
         side = front;
@@ -555,26 +566,34 @@ export class SceneHost implements ExternalSourceRenderer {
       for (const mat of e.mats) {
         if (mat instanceof THREE.MeshStandardMaterial && m) {
           const c = evalProp(m.color, t);
-          mat.color.copy(srgb(c));
-          // Sides are plain: a picture-faced part's sides read as its material in shade.
-          if (mat.userData.sideOf) mat.color.multiplyScalar(picture ? 0.38 : 0.55);
-          // Only the picture is evened out; plain sides keep their own colour under the light.
-          if (gain && !mat.userData.sideOf) mat.color.setRGB(mat.color.r * gain[0], mat.color.g * gain[1], mat.color.b * gain[2]);
           const glow = evalProp(m.glow, t);
+          mat.color.copy(srgb(c));
           mat.emissive.copy(srgb(c));
-          mat.emissiveIntensity = glow;
+          if (mat.userData.photo || mat.userData.image) {
+            // The picture: the part the lights shade (evened out, so at rest it shows exactly) and the
+            // part shown as it is (what shading leaves, plus glow) — both carry the picture.
+            const mix = pictureMix(m, glow, gain ?? [1, 1, 1]);
+            mat.color.setRGB(mat.color.r * mix.lit[0], mat.color.g * mix.lit[1], mat.color.b * mix.lit[2]);
+            mat.emissiveIntensity = mix.self;
+          } else {
+            // Plain sides read as the material in shade.
+            if (mat.userData.sideOf) mat.color.multiplyScalar(picture ? 0.38 : 0.55);
+            mat.emissiveIntensity = glow;
+          }
+          const showPicture = (img: THREE.Texture) => {
+            if (mat.map === img) return;
+            mat.map = img;
+            mat.emissiveMap = img;
+            mat.needsUpdate = true;
+          };
           if (mat.userData.photo) {
-            if (photo && mat.map !== photo) {
-              mat.map = photo;
-              mat.needsUpdate = true;
-            } else if (photo === undefined && r.photoAssetId) pending = true;
+            if (photo) showPicture(photo);
+            else if (photo === undefined && r.photoAssetId) pending = true;
           }
           if (mat.userData.image) {
             const img = this.photo(mat.userData.image as string);
-            if (img && mat.map !== img) {
-              mat.map = img;
-              mat.needsUpdate = true;
-            } else if (img === undefined) pending = true;
+            if (img) showPicture(img);
+            else if (img === undefined) pending = true;
           }
         }
       }

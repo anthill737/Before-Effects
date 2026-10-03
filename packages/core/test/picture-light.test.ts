@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frontIrradiance, type LightNow, pictureGain } from "../src/world3d.ts";
+import { frontIrradiance, type LightNow, pictureGain, pictureMix } from "../src/world3d.ts";
 
 const white = [1, 1, 1] as const;
 const sun = (position: [number, number, number], intensity: number): LightNow => ({ type: "directional", color: white, intensity, position, target: [0, 0, 0], angle: 35, softness: 0.4 });
@@ -37,5 +37,25 @@ describe("picture-faced surfaces show their picture exactly at rest", () => {
     // No light: left alone; overwhelming light: limited.
     expect(pictureGain([0, 0, 0])).toEqual([1, 1, 1]);
     expect(pictureGain([1e6, 1e6, 1e6])).toEqual([0.05, 0.05, 0.05]);
+  });
+});
+
+describe("how a picture surface is made from its picture", () => {
+  const gain = [2, 2.5, 3];
+  it("by default: all shaded by the lights, evened out (exact at rest), no self-light", () => {
+    expect(pictureMix({}, 0, gain)).toEqual({ lit: [2, 2.5, 3], self: 0 });
+  });
+  it("shading 0 is the picture itself whichever way it turns; in between, part of each", () => {
+    expect(pictureMix({ shading: 0 }, 0, gain)).toEqual({ lit: [0, 0, 0], self: 1 });
+    const m = pictureMix({ shading: 0.4 }, 0, gain);
+    expect(m.self).toBeCloseTo(0.6, 9);
+    expect(m.lit[0]).toBeCloseTo(0.8, 9);
+    // Facing the audience at rest (light × gain / π = 1 for the lit part): still exactly the picture.
+    expect(m.self + m.lit[0] / gain[0]!).toBeCloseTo(1, 9);
+  });
+  it("glow adds the picture shining by itself; not matching takes the lights as they fall", () => {
+    expect(pictureMix({}, 0.5, gain).self).toBe(0.5);
+    expect(pictureMix({ matchPicture: false }, 0, gain).lit).toEqual([1, 1, 1]);
+    expect(pictureMix({ shading: 7 }, -1, gain)).toEqual({ lit: [2, 2.5, 3], self: 0 });
   });
 });
