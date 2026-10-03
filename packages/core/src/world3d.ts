@@ -139,6 +139,62 @@ export interface Light3D {
   readonly softness: number;
 }
 
+/** A light as it is at one moment, for working out what lands on a surface (colours linear RGB). */
+export interface LightNow {
+  readonly type: Light3D["type"];
+  readonly color: readonly [number, number, number];
+  /** A soft fill's ground colour (its sky is `color`). */
+  readonly ground?: readonly [number, number, number];
+  readonly intensity: number;
+  readonly position: Vec3;
+  readonly target: Vec3;
+  readonly angle: number;
+  readonly softness: number;
+}
+
+/**
+ * The light falling on a surface that faces the audience (+z) at `at`, per colour channel, in the
+ * renderer's units (a matte surface of colour a shows a·E/π). Spot and point lights are as bright as
+ * the renderer makes them (×50, falling off with distance squared); a soft fill lights a wall with the
+ * average of its sky and ground.
+ */
+export const frontIrradiance = (lights: readonly LightNow[], at: Vec3): [number, number, number] => {
+  const e: [number, number, number] = [0, 0, 0];
+  for (const L of lights) {
+    if (L.type === "ambient") {
+      const g = L.ground ?? L.color;
+      for (let i = 0; i < 3; i++) e[i]! += L.intensity * 0.5 * (L.color[i]! + g[i]!);
+      continue;
+    }
+    let k: number;
+    if (L.type === "directional") {
+      const d = [L.position[0] - L.target[0], L.position[1] - L.target[1], L.position[2] - L.target[2]];
+      const len = Math.hypot(d[0]!, d[1]!, d[2]!);
+      k = len > 0 ? L.intensity * Math.max(0, d[2]! / len) : 0;
+    } else {
+      const d = [L.position[0] - at[0], L.position[1] - at[1], L.position[2] - at[2]];
+      const dist2 = Math.max(0.01, d[0]! ** 2 + d[1]! ** 2 + d[2]! ** 2);
+      k = ((L.intensity * 50) / dist2) * Math.max(0, d[2]! / Math.sqrt(dist2));
+      if (L.type === "spot") {
+        const ax = [L.target[0] - L.position[0], L.target[1] - L.position[1], L.target[2] - L.position[2]];
+        const al = Math.hypot(ax[0]!, ax[1]!, ax[2]!) || 1;
+        const cos = -(ax[0]! * d[0]! + ax[1]! * d[1]! + ax[2]! * d[2]!) / (al * Math.sqrt(dist2));
+        const a = (L.angle * Math.PI) / 180;
+        k *= smoothstep(Math.cos(a), Math.cos(a * (1 - L.softness)), cos);
+      }
+    }
+    for (let i = 0; i < 3; i++) e[i]! += k * L.color[i]!;
+  }
+  return e;
+};
+
+/**
+ * What a picture-faced surface's colour is multiplied by so that, facing the audience, it shows its
+ * picture exactly whatever the scene's lights are: only turning away, or a shadow, changes it (a part
+ * at rest looks like the house itself, not a re-lit copy of it).
+ */
+export const pictureGain = (e: readonly number[]): [number, number, number] => e.map((v) => (v > 1e-3 ? Math.min(20, Math.max(0.05, Math.PI / v)) : 1)) as [number, number, number];
+
 export interface Object3D {
   readonly id: Id;
   readonly name: string;

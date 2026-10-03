@@ -19,7 +19,9 @@ import {
   evalProp,
   blockPose,
   FLICKS_PER_SECOND,
+  frontIrradiance,
   type Light3D,
+  type LightNow,
   METERS_PER_PIXEL,
   type Object3D,
   PARTICLE_PRESETS,
@@ -31,6 +33,7 @@ import {
   type ResolvedPhysics,
   type ResolvedPiece,
   type ResolvedScene3D,
+  pictureGain,
   placePoint,
   showCamera,
   type Vec3,
@@ -405,16 +408,21 @@ export class SceneHost implements ExternalSourceRenderer {
       mats.push(front);
     } else {
       const base = { roughness: m?.roughness ?? 0.8, metalness: m?.metalness ?? 0, transparent: (m?.opacity ?? 1) < 1, opacity: m?.opacity ?? 1 };
-      front = new THREE.MeshStandardMaterial(base);
+      // A picture-faced surface that's solid and not metal is matte: a sheen would lift its dark parts
+      // above the picture (glass keeps its sheen).
+      const picture = m?.style === "photo" || (m?.style === "image" && !!m.assetId);
+      const matte = picture && base.metalness === 0 && !base.transparent;
+      const make = () => (matte ? new THREE.MeshPhysicalMaterial({ ...base, specularIntensity: 0 }) : new THREE.MeshStandardMaterial(base));
+      front = make();
       if (m?.style === "image" && m.assetId) {
         // A picture on the front (e.g. what's seen through an opening); the sides stay plain.
         front.userData.image = m.assetId;
-        side = new THREE.MeshStandardMaterial(base);
+        side = make();
         side.userData.sideOf = true;
         mats.push(front, side);
       } else if (m?.style === "photo") {
         front.userData.photo = true;
-        side = new THREE.MeshStandardMaterial(base);
+        side = make();
         side.userData.sideOf = true;
         mats.push(front, side);
       } else {
@@ -483,6 +491,17 @@ export class SceneHost implements ExternalSourceRenderer {
     const t = src.localTime;
     const physics = r.physics;
     const motion = physics && this.physics ? this.physics.motion(physics.key) : null;
+    // The lights as they are now: a picture-faced surface is evened out by what falls on it facing the
+    // audience, so at rest it shows its picture exactly.
+    const lightsNow: LightNow[] = [];
+    for (const ro of r.objects) {
+      const o = ro.object;
+      if (o.kind !== "light" || !o.light || !o.visible) continue;
+      const L = o.light;
+      const c = srgb(L.color);
+      const g = L.type === "ambient" ? srgb(L.color.map((x) => x * 0.3)) : null;
+      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: evalProp(L.intensity, t), position: evalProp(o.position, t), target: L.target, angle: L.angle, softness: L.softness });
+    }
     for (const ro of r.objects) {
       const e = b.entries.get(ro.object.id)!;
       const o = e.model;
@@ -531,11 +550,14 @@ export class SceneHost implements ExternalSourceRenderer {
       }
       // Materials.
       const m = o.material;
+      const picture = m?.style === "photo" || m?.style === "image";
+      const gain = picture && m.opacity >= 1 ? pictureGain(frontIrradiance(lightsNow, e.pieces[0] ? placePoint(e.pieces[0].center, pos, q, scl, o.pivot) : pos)) : null;
       for (const mat of e.mats) {
         if (mat instanceof THREE.MeshStandardMaterial && m) {
           const c = evalProp(m.color, t);
           mat.color.copy(srgb(c));
           if (mat.userData.sideOf) mat.color.multiplyScalar(0.55);
+          if (gain) mat.color.setRGB(mat.color.r * gain[0], mat.color.g * gain[1], mat.color.b * gain[2]);
           const glow = evalProp(m.glow, t);
           mat.emissive.copy(srgb(c));
           mat.emissiveIntensity = glow;
