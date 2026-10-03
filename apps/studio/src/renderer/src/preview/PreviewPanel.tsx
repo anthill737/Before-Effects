@@ -15,6 +15,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MachineMemory } from "../../../shared/api.ts";
 import { formatSize } from "../../../shared/diskFrames.ts";
 import { clearDiskCache, refreshDiskStatus, useDiskCache } from "./diskCache.ts";
+import { pausePreparing, type PrepareJob, type PrepareTarget, startPreparing, stopPreparing, usePrepare } from "./prepare.ts";
+import { applyPlan, matchesPlan, useCachePlan } from "./recommend.ts";
 import { previewAudio } from "../studio/audioEngine.ts";
 import { getMediaHost, getRenderer, venueReference } from "../studio/engineHost.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
@@ -478,6 +480,106 @@ const AmountField = ({ label, gb, min, max, step, title, onChange }: { label: st
   );
 };
 
+const RES_LABEL = { full: "Full", half: "Half", quarter: "Quarter" } as const;
+const clockText = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min${s % 60 >= 1 ? ` ${Math.round(s % 60)} s` : ""}` : `${Math.max(1, Math.round(s))} s`);
+
+/** Start preparing a scene or the show (at the preview's size; Auto uses the recommended size). */
+const prepareNow = async (target: PrepareTarget, recommended?: "full" | "half" | "quarter") => {
+  const auto = usePreview.getState().resolution === "auto";
+  try {
+    await startPreparing({ target, raiseDiskLimit: true, ...(auto && recommended ? { resolution: recommended } : {}) });
+  } catch (e) {
+    usePrepare.setState({ job: null });
+    useStudio.getState().toast({ kind: "error", text: String((e as Error)?.message ?? e) });
+  }
+};
+
+const ACTIVE: ReadonlyArray<PrepareJob["state"]> = ["waiting", "preparing", "checking", "paused"];
+
+/** A preparation job: progress with Pause and Stop while it runs; the outcome (and why) afterwards. */
+const PrepareStatus = ({ compact = false }: { compact?: boolean }) => {
+  const job = usePrepare((j) => j.job);
+  if (!job) return null;
+  const active = ACTIVE.includes(job.state);
+  const res = RES_LABEL[job.resolution];
+  if (active)
+    return (
+      <span className="preparing prepare-job" title={`Preparing “${job.name}” at ${res} size: every frame rendered once and kept on disk.`}>
+        {job.state === "paused" ? "Paused" : job.phase}: “{job.name}” at {res} {job.done.toLocaleString()} / {job.total.toLocaleString()}
+        {job.state === "preparing" && job.fps > 0 ? ` · ${job.fps} frames/s` : ""}
+        {job.state === "preparing" && job.etaSeconds !== null ? ` · about ${clockText(job.etaSeconds)} left` : ""}
+        <progress max={job.total} value={job.done} />
+        <button className="link" onClick={() => pausePreparing(job.state !== "paused")}>
+          {job.state === "paused" ? "Resume" : "Pause"}
+        </button>
+        <button className="link" onClick={() => stopPreparing()}>
+          Stop
+        </button>
+      </span>
+    );
+  if (compact && job.state === "done" && Date.now() - (job.finishedAt ?? 0) > 15_000) return null;
+  return (
+    <span className={job.state === "done" ? "ok-text prepare-job" : "warn prepare-job"} role={job.state === "failed" ? "alert" : undefined}>
+      {job.state === "done" ? `“${job.name}” is prepared at ${res}: it plays smoothly. ` : job.state === "stopped" && !job.reason ? `Stopped preparing “${job.name}” (${job.done.toLocaleString()} of ${job.total.toLocaleString()} frames ready; starting again carries on). ` : ""}
+      {job.reason}{" "}
+      <button className="link" onClick={() => usePrepare.setState({ job: null })}>
+        {compact ? "✕" : "Dismiss"}
+      </button>
+    </span>
+  );
+};
+
+/** What this computer suits (one click to use it), and preparing a scene or the whole show. */
+const RecommendAndPrepare = () => {
+  const ctx = useCachePlan();
+  usePreview(); // re-render when settings change (matchesPlan reads them)
+  const project = useStudio((st) => st.project);
+  const job = usePrepare((j) => j.job);
+  const hasShow = !!project && project.compositionOrder.some((id) => project.compositions[id]?.show);
+  if (!ctx) return <p className="muted small">Looking at this computer…</p>;
+  const { plan } = ctx;
+  const same = matchesPlan(plan);
+  const res = RES_LABEL[plan.resolution];
+  const busy = !!job && ACTIVE.includes(job.state);
+  return (
+    <div className="recommend">
+      <h3>Recommended for this computer</h3>
+      <p className="small">
+        Frame cache {formatSize(plan.frameCacheMB * MB)} · video frames {formatSize(plan.videoCacheMB * MB)} · disk {plan.diskCacheGB} GB{ctx.space ? ` on ${ctx.space.drive.replace(/\\$/, "")}` : ""} · prepare at {res} size
+      </p>
+      <details>
+        <summary className="small">Why these amounts</summary>
+        <ul className="muted small reasons">
+          {plan.reasons.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      </details>
+      <div className="row gap wrap">
+        <button className={same ? "ghost small-btn" : "primary small-btn"} disabled={same} onClick={() => applyPlan(plan)}>
+          {same ? "✓ Using the recommended settings" : "Use these settings"}
+        </button>
+      </div>
+      <h3>Prepare for smooth playback</h3>
+      <p className="muted small">Every frame is rendered once and kept on disk, so it plays smoothly, even after restarting. Edits re-prepare only what they change. Exports always render afresh.</p>
+      {plan.fits.map((f) => (
+        <p key={f.name} className={f.diskFits ? "muted small" : "warn small"}>
+          “{f.name}” ({clockText(f.seconds)}) at {res}: {f.frames.toLocaleString()} frames, about {formatSize(f.diskBytes)} on disk{f.diskFits ? "" : ", more than the recommended disk space"}; {f.memorySeconds >= 1 ? `${Math.floor(f.memorySeconds)} s` : "under a second"} of it fits in graphics memory at once.
+        </p>
+      ))}
+      <div className="row gap wrap">
+        <button className="ghost small-btn" disabled={busy || !project} onClick={() => void prepareNow("scene", plan.resolution)}>
+          Prepare this scene
+        </button>
+        <button className="ghost small-btn" disabled={busy || !hasShow} title={hasShow ? "Every scene, in show order" : "Make the show in the scenes bar first"} onClick={() => void prepareNow("show", plan.resolution)}>
+          Prepare the whole show
+        </button>
+      </div>
+      <PrepareStatus />
+    </div>
+  );
+};
+
 /** Whole gigabytes, the way computers and graphics cards are sold ("32 GB", "12 GB"). */
 const wholeGB = (bytes: number) => `${Math.max(1, Math.round(bytes / GB))} GB`;
 
@@ -518,6 +620,7 @@ const QualityPopover = () => {
   return (
     <div className="popover wide quality" role="dialog" aria-label="Quality and speed">
       <p className="muted small">These only affect the preview. Exports always render at full size and full quality.</p>
+      <RecommendAndPrepare />
       <label className="row-field">
         <span>Playback</span>
         <select value={s.playbackMode} onChange={(e) => s.set({ playbackMode: e.target.value as "realtime" | "cache" })}>
@@ -715,6 +818,7 @@ const StatusLine = () => {
         </span>
       )}
       <SimChip />
+      <PrepareStatus compact />
       <span className="muted">
         Cache {st.cacheFrames} frames · {formatSize(st.cacheMB * MB)} of {formatSize(st.cacheBudgetMB * MB)}
         {s.diskCache && ` · Disk ${!disk || disk.scanning ? "(looking…)" : `${disk.files.toLocaleString()} frames · ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)}`}`}

@@ -16,7 +16,7 @@ import { type Affected, type Flicks, frameToTime, type Project, rateToFps, timeT
 import type { FrameRenderer, PreviewView } from "@be/engine";
 import { create } from "zustand";
 import { FrameCache } from "./cache.ts";
-import { DiskFrames } from "./diskCache.ts";
+import { type DiskFrames, diskFramesFor } from "./diskCache.ts";
 import { effectiveFraction, type RenderSize, renderSize, usePreview } from "./settings.ts";
 import { currentProjector, useProjectorPick } from "../studio/projectors.ts";
 
@@ -102,7 +102,7 @@ export class PreviewLoop {
     private readonly viewport: () => { width: number; height: number },
   ) {
     this.cache = new FrameCache(usePreview.getState().cacheBudgetMB * 1024 * 1024);
-    this.disk = new DiskFrames(renderer, this.cache, () => ((this.source.cacheable?.() ?? true) ? this.source.project() : null));
+    this.disk = diskFramesFor(renderer);
     this.ctx = renderer.configureCanvas(canvas);
   }
 
@@ -120,8 +120,13 @@ export class PreviewLoop {
 
   stop(): void {
     cancelAnimationFrame(this.raf);
-    this.disk.dispose();
+    // The frames on disk belong to the window (other previews and preparation keep using them).
     this.cache.clear();
+  }
+
+  /** The renderer this preview draws with (frame preparation renders with it too). */
+  get frameRenderer(): FrameRenderer {
+    return this.renderer;
   }
 
   /** Request a redraw (after edits or setting changes). */
@@ -129,13 +134,18 @@ export class PreviewLoop {
     this.dirty = true;
   }
 
-  invalidate(compId: string, affected: Affected): void {
+  /**
+   * The show changed: drop the frames it affected. `others`: what it did to the other compositions
+   * (an edit in a scene also changes the show that plays it); without it they're all dropped.
+   */
+  invalidate(compId: string, affected: Affected, others?: Readonly<Record<string, Affected>>): void {
     const p = this.source.project();
     const comp = p?.compositions[compId];
     this.version++;
     this.dirty = true;
     if (comp) this.cache.invalidate(compId, affected, comp.frameRate);
-    this.disk.changed(p, compId, affected, comp?.frameRate ?? null);
+    for (const [cid, c] of Object.entries(p?.compositions ?? {})) if (cid !== compId) this.cache.invalidate(cid, others?.[cid] ?? { all: true, ranges: [] }, c.frameRate);
+    this.disk.changed(p, compId, affected, comp?.frameRate ?? null, others);
   }
 
   private outputSize(project: Project, compId: string, view: PreviewView): { w: number; h: number } {
@@ -182,11 +192,24 @@ export class PreviewLoop {
     let preparing: PreviewStats["preparing"] = null;
 
     if (playing && !this.fixed && s.playbackMode === "cache") {
-      // Prepare the whole range first, then play smoothly from the cache.
+      // Prepare the whole range first, then play smoothly from the cache. A range longer than
+      // graphics memory holds needs only what fits from the playhead on; frames prepared on disk
+      // (a prepared scene or show) count as ready and are read ahead while playing.
       const f0 = timeToFrame(range.start, comp.frameRate);
       const f1 = Math.max(f0 + 1, timeToFrame(range.end - 1, comp.frameRate) + 1);
+      const n = f1 - f0;
+      const frameBytes = Math.max(1, Math.round(comp.width * fraction) * Math.round(comp.height * fraction) * 8);
+      const fit = Math.max(1, Math.floor((this.cache.stats().budget * 0.85) / frameBytes));
+      const fits = n <= fit;
+      const from = fits ? f0 : Math.min(f1 - 1, Math.max(f0, timeToFrame(t, comp.frameRate)));
       const missing: number[] = [];
-      for (let f = f0; f < f1; f++) if (!this.cache.has(compId, f, fraction, quality)) missing.push(f);
+      const count = Math.min(n, fit);
+      for (let k = 0; k < count; k++) {
+        const f = f0 + ((from - f0 + k) % n);
+        if (this.cache.has(compId, f, fraction, quality)) continue;
+        if (!fits && useDisk && this.disk.has(project, compId, f, fraction, quality)) continue;
+        missing.push(f);
+      }
       if (missing.length) {
         mode = "preparing";
         const budget = performance.now() + 24;
@@ -194,7 +217,7 @@ export class PreviewLoop {
         while (missing.length && performance.now() < budget) {
           const f = missing.shift()!;
           // Frames saved on disk are read back in the background instead of being rendered again.
-          if (useDisk && this.disk.fetch(project, compId, f, fraction, quality) !== "absent") {
+          if (useDisk && this.disk.fetch(this.cache, project, compId, f, fraction, quality) !== "absent") {
             fromDisk++;
             continue;
           }
@@ -205,7 +228,7 @@ export class PreviewLoop {
           if (this.renderer.lastFrameIncomplete || !this.cache.put(compId, f, fraction, quality, content)) this.renderer.gpu.defer(content);
           else if (useDisk) this.disk.offer(project, compId, f, fraction, quality, content);
         }
-        preparing = { done: f1 - f0 - missing.length - fromDisk, total: f1 - f0 };
+        preparing = { done: count - missing.length - fromDisk, total: count };
         if (this.cache.stats().bytes >= this.cache.stats().budget * 0.89 && (missing.length || fromDisk)) {
           // The range doesn't fit in the cache budget; play what fits in real time.
           preparing = null;
@@ -246,7 +269,7 @@ export class PreviewLoop {
     }
     const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId ?? useProjectorPick.getState().id}|${cacheable}|${this.version}`;
     // Frames that were too busy to save to disk earlier are saved now, one per tick.
-    if (useDisk) this.disk.pump();
+    if (useDisk) this.disk.pump(this.cache);
     // Redraw only when something visible changed: on high-refresh displays the same frame is not redrawn every refresh.
     const needsDraw = this.dirty || key !== this.lastKey;
     if (!needsDraw) {
@@ -257,7 +280,7 @@ export class PreviewLoop {
     if (useDisk && mode === "playing") this.readAhead(project, compId, frame, fraction, quality, range);
     let content = cacheable ? this.cache.get(compId, frame, fraction, quality) : null;
     // On disk: keep the previous picture until it's read (usually a few hundredths of a second), unless that takes too long.
-    if (!content && useDisk && this.disk.fetch(project, compId, frame, fraction, quality, true) === "reading" && this.disk.readingFor(project, compId, frame, fraction, quality) < DISK_WAIT_MS) {
+    if (!content && useDisk && this.disk.fetch(this.cache, project, compId, frame, fraction, quality, true) === "reading" && this.disk.readingFor(project, compId, frame, fraction, quality) < DISK_WAIT_MS) {
       this.report(fps, size, fraction, mode, preparing, false);
       return;
     }
@@ -332,7 +355,7 @@ export class PreviewLoop {
         if (!this.source.loop()) break;
         f = f0 + ((f - f0) % (f1 - f0));
       }
-      if (!this.cache.has(compId, f, fraction, quality) && this.disk.fetch(project, compId, f, fraction, quality) === "wait") break;
+      if (!this.cache.has(compId, f, fraction, quality) && this.disk.fetch(this.cache, project, compId, f, fraction, quality) === "wait") break;
     }
   }
 

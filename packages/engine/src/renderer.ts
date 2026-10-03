@@ -255,16 +255,23 @@ export class FrameRenderer {
   }
 
   /** Render one exact frame to CPU pixels (for encoders and verification). Always full resolution and quality. */
-  async renderPixels(project: Project, compId: Id, t: Flicks, target: FrameTarget, format: PixelFormat = "rgba8"): Promise<PixelFrame> {
-    // Exports wait for every image and video frame they need; previews may draw before media loads.
+  /**
+   * Wait until everything the frame at t needs is ready: every image and video frame (full size,
+   * which also serves smaller previews), every simulation frame (preparing the simulation first if
+   * needed), and 3D scenes' building photo and prepared physics motion. Exports and preview
+   * preparation call this; live previews may draw before media loads.
+   */
+  async prepareAt(project: Project, compId: Id, t: Flicks): Promise<void> {
     if (this.mediaPrepare) await this.mediaPrepare(project, compId, t);
-    // ...and for every simulation frame, preparing the simulation first if needed.
     for (const { sim, frame } of this.simsAt(project, compId, t)) {
       if (!this.compositor.sims) throw new Error("Simulations can't be rendered here.");
       await this.compositor.sims.ensure(sim, frame);
     }
-    // ...and for 3D scenes' building photo and prepared physics motion.
     for (const src of this.scenesAt(project, compId, t)) await this.scenes.prepare(src);
+  }
+
+  async renderPixels(project: Project, compId: Id, t: Flicks, target: FrameTarget, format: PixelFormat = "rgba8"): Promise<PixelFrame> {
+    await this.prepareAt(project, compId, t);
     const { tex, encoder } = this.renderTarget(project, compId, t, target, format);
     if (this.compositor.stats.missingMedia > 0) {
       this.gpu.submit(encoder);

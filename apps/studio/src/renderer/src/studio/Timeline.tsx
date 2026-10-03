@@ -13,37 +13,49 @@ import { useStudio } from "./store.ts";
 import { ShowArranger } from "./ScenesBar.tsx";
 import { BarEdges, LayerKeyMarks, Scene3DMarks } from "./TimelineMarks.tsx";
 
-/** Green strip on the ruler: frames ready in the preview cache at the current preview size. */
+/** Runs of consecutive frame numbers. */
+const runsOf = (frames: Iterable<number>): Array<[number, number]> => {
+  const runs: Array<[number, number]> = [];
+  for (const f of [...frames].sort((a, b) => a - b)) {
+    const last = runs.at(-1);
+    if (last && f === last[1] + 1) last[1] = f;
+    else runs.push([f, f]);
+  }
+  return runs;
+};
+
+/** Green strip on the ruler: frames ready in graphics memory at the current preview size, and (paler) frames prepared on disk. */
 const CacheStrip = ({ compId, duration, rate }: { compId: string; duration: number; rate: { num: number; den: number } }) => {
   const [, bump] = useState(0);
   const fraction = usePreviewStats((s) => s.fraction);
   const quality = usePreview((s) => s.effectQuality);
+  const project = useStudio((s) => s.project);
   useEffect(() => {
     let raf = 0;
-    const off = currentPreviewLoop()?.cache.subscribe(() => {
+    const again = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => bump((n) => n + 1));
-    });
+    };
+    const loop = currentPreviewLoop();
+    const off = loop?.cache.subscribe(again);
+    const offDisk = loop?.disk.subscribe(again);
     return () => {
       off?.();
+      offDisk?.();
       cancelAnimationFrame(raf);
     };
   });
   const loop = currentPreviewLoop();
   if (!loop) return null;
-  const frames = [...loop.cache.cachedFrames(compId, fraction, quality, 0, duration, rate)].sort((a, b) => a - b);
+  const memory = loop.cache.cachedFrames(compId, fraction, quality, 0, duration, rate);
+  const disk = project ? loop.disk.framesOnDisk(project, compId, fraction, quality) : new Set<number>();
+  for (const f of memory) disk.delete(f);
   const total = Math.max(1, Math.round((duration * rate.num) / (705_600_000 * rate.den)));
-  const runs: Array<[number, number]> = [];
-  for (const f of frames) {
-    const last = runs.at(-1);
-    if (last && f === last[1] + 1) last[1] = f;
-    else runs.push([f, f]);
-  }
+  const bar = (cls: string) => ([a, b]: [number, number]) => <span key={`${cls}${a}`} className={cls} style={{ left: `${(a / total) * 100}%`, width: `${((b - a + 1) / total) * 100}%` }} />;
   return (
     <div className="cache-strip" aria-hidden="true">
-      {runs.map(([a, b]) => (
-        <span key={a} style={{ left: `${(a / total) * 100}%`, width: `${((b - a + 1) / total) * 100}%` }} />
-      ))}
+      {runsOf(disk).map(bar("disk"))}
+      {runsOf(memory).map(bar(""))}
     </div>
   );
 };

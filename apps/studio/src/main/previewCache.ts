@@ -22,11 +22,11 @@
 import { execFile } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rmdir, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
-import { totalmem } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { cpus, totalmem } from "node:os";
+import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, ipcMain } from "electron";
-import type { DiskCacheConfig, DiskCacheScope, DiskCacheStatus, DiskCacheUsage, MachineMemory } from "../shared/api.ts";
+import type { CacheSpace, DiskCacheConfig, DiskCacheScope, DiskCacheStatus, DiskCacheUsage, MachineMemory } from "../shared/api.ts";
 import { type DiskEntry, DiskIndex, frameFile, frameOfKey, keyOfFile, parseRegQuery, pickGraphicsCard, scopeDir } from "../shared/diskFrames.ts";
 import { paths } from "./files.ts";
 import { log } from "./log.ts";
@@ -265,7 +265,24 @@ const readMachine = async (): Promise<MachineMemory> => {
     }
   }
   log(`machine memory: ${Math.round(totalmem() / GB)} GB; graphics card ${gpu ? `${gpu.name}, ${Math.round(gpu.bytes / GB)} GB` : "memory unknown"}`);
-  return { ramBytes: totalmem(), gpu };
+  return { ramBytes: totalmem(), gpu, cpuCores: cpus().length };
+};
+
+/** The drive the frames go on (the folder itself may not exist yet). */
+const space = async (): Promise<CacheSpace | null> => {
+  const want = rootFor(config);
+  let dir = want;
+  for (let i = 0; i < 12; i++) {
+    try {
+      const s = await statfs(dir);
+      const current = root === want && scanned;
+      return { drive: parse(want).root, root: want, freeBytes: Number(s.bavail) * Number(s.bsize), totalBytes: Number(s.blocks) * Number(s.bsize), usedBytes: current ? index.bytes : 0, files: current ? index.files : 0 };
+    } catch {
+      if (dirname(dir) === dir) break;
+      dir = dirname(dir);
+    }
+  }
+  return null;
 };
 
 // ---- IPC --------------------------------------------------------------------------------------
@@ -283,6 +300,7 @@ export const registerPreviewCacheIpc = () => {
   });
 
   ipcMain.handle("cache:status", () => status(true));
+  ipcMain.handle("cache:space", () => space());
 
   // Before a window uses a composition's frames: keep them only if they were made from this exact
   // show by this build. Returns the frames on disk.

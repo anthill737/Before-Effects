@@ -159,7 +159,7 @@ export const useStudio = create<StudioState>((set, get) => {
       );
       h.reset(h.project);
       attach(h);
-      set({ history: h, project: h.project, compId, screen: "studio", step: "animate", time: frameToTime(30, h.project.compositions[compId]!.frameRate), playing: true, range: null, filePath: null, savedAt: null, dirty: false, selection: { regionIds: [], recipeId: null, layerId: null } });
+      set({ history: h, project: h.project, lastTx: null, compId, screen: "studio", step: "animate", time: frameToTime(30, h.project.compositions[compId]!.frameRate), playing: true, range: null, filePath: null, savedAt: null, dirty: false, selection: { regionIds: [], recipeId: null, layerId: null } });
     },
 
     openProject(project, path) {
@@ -167,7 +167,7 @@ export const useStudio = create<StudioState>((set, get) => {
       h.markSaved();
       attach(h);
       const compId = project.mainCompId ?? project.compositionOrder[0] ?? null;
-      set({ history: h, project, compId, screen: "studio", step: "animate", time: 0, playing: false, range: null, filePath: path, savedAt: null, dirty: false, selection: { regionIds: [], recipeId: null, layerId: null } });
+      set({ history: h, project, lastTx: null, compId, screen: "studio", step: "animate", time: 0, playing: false, range: null, filePath: path, savedAt: null, dirty: false, selection: { regionIds: [], recipeId: null, layerId: null } });
     },
 
     apply(ops, opts = {}) {

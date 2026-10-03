@@ -12,7 +12,15 @@ interface ProjectMessage {
   readonly project: Project;
   readonly compId: string | null;
   readonly affected: Affected;
+  /** What the change did to each of the other compositions (a scene edit also changes the show around it). */
+  readonly others?: Readonly<Record<string, Affected>>;
 }
+
+const ALL: Affected = { all: true, ranges: [] };
+
+/** The change's effect on every composition other than `compId`. */
+const othersOf = (prev: Project | null, next: Project, patches: Parameters<typeof affectedByPatches>[2] | null, compId: string | null): Record<string, Affected> =>
+  Object.fromEntries(Object.keys(next.compositions).filter((c) => c !== compId).map((c) => [c, prev && patches ? affectedByPatches(prev, next, patches, c) : ALL]));
 
 let applyingRemote = false;
 
@@ -54,10 +62,13 @@ export const startEditorSync = (): (() => void) => {
     if (s.hoverPreview !== prev.hoverPreview) loop?.invalidateView();
     if (s.project === prev.project || !s.project) return;
     const compId = s.compId;
-    let affected: Affected = { all: true, ranges: [] };
-    if (prev.project && compId && s.lastTx) affected = affectedByPatches(prev.project, s.project, s.lastTx.patches, compId);
-    if (compId) loop?.invalidate(compId, affected);
-    window.be.sync.publishProject({ project: s.project, compId, affected } satisfies ProjectMessage);
+    // Another show (opened or started): nothing from before carries over.
+    const same = prev.project?.id === s.project.id ? prev.project : null;
+    let affected: Affected = ALL;
+    if (same && compId && s.lastTx) affected = affectedByPatches(same, s.project, s.lastTx.patches, compId);
+    const others = othersOf(same, s.project, s.lastTx?.patches ?? null, compId);
+    if (compId) loop?.invalidate(compId, affected, others);
+    window.be.sync.publishProject({ project: s.project, compId, affected, others } satisfies ProjectMessage);
   });
   const unsubTransport = startTransportPublishing();
   const offRemote = window.be.sync.onTransport(applyTransport);
@@ -76,7 +87,7 @@ export const startEditorSync = (): (() => void) => {
 export const startFollowerSync = async (onProject?: (m: ProjectMessage) => void): Promise<() => void> => {
   const applyProject = (m: ProjectMessage) => {
     useStudio.setState({ project: m.project, compId: m.compId ?? m.project.mainCompId ?? m.project.compositionOrder[0] ?? null, screen: "studio" });
-    if (m.compId) currentPreviewLoop()?.invalidate(m.compId, m.affected);
+    if (m.compId) currentPreviewLoop()?.invalidate(m.compId, m.affected, m.others);
     onProject?.(m);
   };
   const hello = await window.be.sync.hello();

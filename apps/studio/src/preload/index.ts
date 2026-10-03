@@ -58,6 +58,7 @@ const api: BeApi = {
     machine: () => ipcRenderer.invoke("cache:machine"),
     configure: (config) => ipcRenderer.invoke("cache:configure", config),
     status: () => ipcRenderer.invoke("cache:status"),
+    space: () => ipcRenderer.invoke("cache:space"),
     validate: (scope, fp) => ipcRenderer.invoke("cache:validate", scope, fp),
     stamp: (scope, fp) => ipcRenderer.invoke("cache:stamp", scope, fp),
     invalidate: (scope, ranges) => ipcRenderer.invoke("cache:invalidate", scope, ranges),

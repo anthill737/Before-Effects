@@ -34,6 +34,8 @@ import { usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
 import { addObject, addParticles, layerTime, makeArea3D, removeObject, setContain } from "../studio/actions3d.ts";
 import { hasAudio } from "../studio/audioEngine.ts";
+import { pausePreparing, startPreparing, stopPreparing, usePrepare } from "../preview/prepare.ts";
+import { applyPlan, computePlan } from "../preview/recommend.ts";
 import { driveMediaInUse } from "../studio/drive.ts";
 import { getRenderer } from "../studio/engineHost.ts";
 import { OUTCOMES, SIZES } from "../studio/ExportDialog.tsx";
@@ -421,13 +423,19 @@ method({
 
 // ---- preparation (simulations and physics) -----------------------------------------------------------
 
+const FRAME_JOB_ACTIVE = ["waiting", "preparing", "checking", "paused"];
 const prepStatus = () => {
   const p = st().project;
   const status = useSims.getState().status;
   const names: Record<string, string> = {};
   for (const c of Object.values(p?.compositions ?? {})) for (const l of Object.values(c.layers)) names[l.id] = `${c.name} / ${l.name}`;
   const items = Object.entries(status).map(([layer, s]) => ({ layer, name: names[layer] ?? layer, done: s.done, total: s.total, ready: s.done >= s.total }));
-  return { ready: items.every((i) => i.ready), items };
+  const job = usePrepare.getState().job;
+  const frames = job
+    ? { target: job.target, scene: job.compId, name: job.name, resolution: job.resolution, quality: job.quality, state: job.state, phase: job.phase, done: job.done, total: job.total, rendered: job.rendered, failedFrames: job.failedFrames, fps: job.fps, etaSeconds: job.etaSeconds, diskBytes: job.diskBytes, ...(job.timing ? { timing: job.timing } : {}), ...(job.reason ? { reason: job.reason } : {}) }
+    : null;
+  // Ready: simulations and physics prepared, and any frame preparation finished.
+  return { ready: items.every((i) => i.ready) && !(job && FRAME_JOB_ACTIVE.includes(job.state)), items, frames };
 };
 
 method({
@@ -438,8 +446,62 @@ method({
 });
 
 method({
+  name: "preview.recommend",
+  summary:
+    "Cache settings recommended for this computer (graphics card and its memory, the computer's memory, free space on the drive preview frames go on), what they hold of the current scene and the whole show, and why. apply: true uses them (every amount stays adjustable with preview.set).",
+  params: z.object({ apply: z.boolean().optional() }),
+  run: async (p) => {
+    const ctx = await computePlan();
+    if (p.apply) applyPlan(ctx.plan);
+    const s = usePreview.getState();
+    return {
+      hardware: { ...ctx.hardware, gpu: ctx.hardware.gpu ? { ...ctx.hardware.gpu, gb: Math.round(ctx.hardware.gpu.bytes / 1024 ** 3) } : null },
+      drive: ctx.space,
+      recommended: ctx.plan,
+      current: { frameCacheMB: s.cacheBudgetMB, videoCacheMB: s.videoCacheMB, diskCache: s.diskCache, diskCacheGB: s.diskCacheGB, diskCacheFolder: s.diskCacheFolder, resolution: s.resolution, playbackMode: s.playbackMode },
+      applied: !!p.apply,
+    };
+  },
+});
+
+method({
+  name: "prepare.frames",
+  summary:
+    "Prepare a whole scene (target scene: the current one, or `scene`) or the whole show (target show) for smooth playback: simulations first, then every frame rendered once at a preview size and kept in the disk cache (it plays smoothly even after restarting; edits re-prepare only what they change). Frames already on disk are skipped, so starting again resumes. Runs in the background: follow it with prepare.status or prepare.wait. Refuses (state failed, with the reason) when the disk cache can't hold every frame, unless raiseDiskLimit (default true) can raise it within the drive's free space.",
+  params: z.object({
+    target: z.enum(["scene", "show"]),
+    scene: z.string().optional().describe("target scene: a scene id or name (default the current one)"),
+    resolution: z.enum(["full", "half", "quarter"]).optional().describe("default: the preview's size (Auto counts as Full)"),
+    raiseDiskLimit: z.boolean().optional(),
+  }),
+  long: true,
+  run: async (p) => {
+    const pr = project();
+    const sceneId = p.scene ? (pr.compositions[p.scene] ? p.scene : Object.values(pr.compositions).find((c) => c.name === p.scene)?.id) : undefined;
+    if (p.scene && !sceneId) throw new AgentError("not_found", `No scene "${p.scene}".`);
+    try {
+      await startPreparing({ target: p.target, ...(sceneId ? { compId: sceneId } : {}), ...(p.resolution ? { resolution: p.resolution } : {}), raiseDiskLimit: p.raiseDiskLimit ?? true });
+    } catch (e) {
+      throw new AgentError("rejected", String((e as Error)?.message ?? e));
+    }
+    return prepStatus();
+  },
+});
+
+method({
+  name: "prepare.stop",
+  summary: "Stop, pause or resume frame preparation (prepare.frames). Frames already prepared stay on disk; starting again carries on.",
+  params: z.object({ action: z.enum(["stop", "pause", "resume"]).optional() }),
+  run: (p) => {
+    if ((p.action ?? "stop") === "stop") stopPreparing();
+    else pausePreparing(p.action === "pause");
+    return prepStatus();
+  },
+});
+
+method({
   name: "prepare.wait",
-  summary: "Wait until every simulation and 3D physics layer is prepared (or timeoutMs).",
+  summary: "Wait until every simulation and 3D physics layer is prepared and any frame preparation (prepare.frames) has finished, or timeoutMs. Long preparations: call again (each call waits at most 30 minutes).",
   params: z.object({ timeoutMs: z.number().int().min(0).max(1_800_000).optional() }),
   long: true,
   run: async (p) => {
@@ -478,30 +540,66 @@ method({
 
 method({
   name: "preview.get",
-  summary: "Preview settings and what it actually renders: view, resolution choice, rendered size, frames per second, cache.",
+  summary: "Preview settings and what it actually renders: view, resolution choice, rendered size, frames per second (and skipped frames), playback mode and cache amounts.",
   params: z.object({}),
   run: () => {
     const s = usePreview.getState();
     const stats = usePreviewStats.getState();
-    return { view: s.view, resolution: s.resolution, customScale: s.customScale, effectQuality: s.effectQuality, renderedSize: stats.size, achievedFps: stats.achievedFps, targetFps: stats.targetFps, cacheFrames: stats.cacheFrames, orbit: s.orbit };
+    return {
+      view: s.view,
+      resolution: s.resolution,
+      customScale: s.customScale,
+      effectQuality: s.effectQuality,
+      renderedSize: stats.size,
+      achievedFps: stats.achievedFps,
+      targetFps: stats.targetFps,
+      dropped: stats.dropped,
+      mode: stats.mode,
+      cacheFrames: stats.cacheFrames,
+      orbit: s.orbit,
+      playbackMode: s.playbackMode,
+      frameCacheGB: s.cacheBudgetMB / 1024,
+      videoCacheGB: s.videoCacheMB / 1024,
+      diskCache: s.diskCache,
+      diskCacheGB: s.diskCacheGB,
+      diskCacheFolder: s.diskCacheFolder,
+    };
   },
 });
 
 method({
   name: "preview.set",
-  summary: "Preview view (show, 3d inspection, projector), resolution (auto, full, half, quarter, eighth, custom with customScale), effect quality, 3D orbit. Never changes the project or export size.",
+  summary: "Preview view (show, 3d inspection, projector), resolution (auto, full, half, quarter, eighth, custom with customScale), effect quality, 3D orbit, playback mode and cache amounts (graphics memory and disk). Never changes the project or export size.",
   params: z.object({
     view: z.enum(["show", "venue", "3d", "projector"]).optional(),
     resolution: z.enum(["auto", "full", "half", "quarter", "eighth", "custom"]).optional(),
     customScale: z.number().min(0.05).max(1).optional(),
     effectQuality: z.enum(["full", "draft"]).optional(),
     orbit: z.object({ yaw: z.number(), pitch: z.number(), distance: z.number(), panX: z.number(), panY: z.number() }).partial().optional(),
+    playbackMode: z.enum(["realtime", "cache"]).optional().describe("cache: prepare frames first and play smoothly"),
+    frameCacheGB: z.number().min(0.25).optional().describe("graphics memory for finished frames (any amount; see preview.recommend)"),
+    videoCacheGB: z.number().min(0.25).optional().describe("graphics memory for decoded video frames"),
+    diskCache: z.boolean().optional().describe("also keep finished frames on disk"),
+    diskCacheGB: z.number().min(1).optional(),
+    diskCacheFolder: z.string().nullable().optional().describe("a folder for preview frames, or null for the data folder's Cache\\preview"),
   }),
   run: (p) => {
     const s = usePreview.getState();
-    s.set({ ...(p.view ? { view: p.view } : {}), ...(p.resolution ? { resolution: p.resolution } : {}), ...(p.customScale ? { customScale: p.customScale } : {}), ...(p.effectQuality ? { effectQuality: p.effectQuality } : {}), ...(p.orbit ? { orbit: { ...s.orbit, ...p.orbit } } : {}) });
+    s.set({
+      ...(p.view ? { view: p.view } : {}),
+      ...(p.resolution ? { resolution: p.resolution } : {}),
+      ...(p.customScale ? { customScale: p.customScale } : {}),
+      ...(p.effectQuality ? { effectQuality: p.effectQuality } : {}),
+      ...(p.orbit ? { orbit: { ...s.orbit, ...p.orbit } } : {}),
+      ...(p.playbackMode ? { playbackMode: p.playbackMode } : {}),
+      ...(p.frameCacheGB !== undefined ? { cacheBudgetMB: Math.round(p.frameCacheGB * 1024) } : {}),
+      ...(p.videoCacheGB !== undefined ? { videoCacheMB: Math.round(p.videoCacheGB * 1024) } : {}),
+      ...(p.diskCache !== undefined ? { diskCache: p.diskCache } : {}),
+      ...(p.diskCacheGB !== undefined ? { diskCacheGB: p.diskCacheGB } : {}),
+      ...(p.diskCacheFolder !== undefined ? { diskCacheFolder: p.diskCacheFolder } : {}),
+    });
     const n = usePreview.getState();
-    return { view: n.view, resolution: n.resolution, orbit: n.orbit };
+    return { view: n.view, resolution: n.resolution, orbit: n.orbit, playbackMode: n.playbackMode, frameCacheGB: n.cacheBudgetMB / 1024, videoCacheGB: n.videoCacheMB / 1024, diskCache: n.diskCache, diskCacheGB: n.diskCacheGB, diskCacheFolder: n.diskCacheFolder };
   },
 });
 

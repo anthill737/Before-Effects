@@ -353,6 +353,33 @@ describe("cache invalidation", () => {
     const cal = history.apply({ type: "calibration.movePoint", args: { venueId: "venue1", projectorId: "p1", pointId: "c1", output: [3, 3] } });
     expect(affectedByPatches(b2, history.project, cal.patches, compId)).toEqual({ all: false, ranges: [] });
   });
+  it("an edit inside a nested scene invalidates only where the show plays that part of it", () => {
+    const { history, compId } = makeProject();
+    const scene = newComposition({ id: "sceneA", width: 1000, height: 700, durationSeconds: 10 });
+    const other = newComposition({ id: "sceneB", width: 1000, height: 700, durationSeconds: 10 });
+    history.apply([
+      { type: "comp.add", args: { comp: scene } },
+      { type: "comp.add", args: { comp: other } },
+      { type: "layer.add", args: { compId: "sceneA", layer: newLayer({ id: "A", source: { kind: "adjustment" }, start: secondsToTime(2), duration: secondsToTime(1) }) } },
+      { type: "layer.add", args: { compId: "sceneB", layer: newLayer({ id: "B", source: { kind: "adjustment" }, start: 0, duration: secondsToTime(1) }) } },
+      // The show plays scene A from 10 s, and again twice as fast from 30 s.
+      { type: "layer.add", args: { compId, layer: newLayer({ id: "show A", source: { kind: "comp", compId: "sceneA" }, start: secondsToTime(10), duration: secondsToTime(10) }) } },
+      { type: "layer.add", args: { compId, layer: { ...newLayer({ id: "fast A", source: { kind: "comp", compId: "sceneA" }, start: secondsToTime(30), duration: secondsToTime(5) }), stretch: 2 } } },
+    ]);
+    const before = history.project;
+    const tx = history.apply({ type: "prop.set", args: { compId: "sceneA", layerId: "A", path: "transform.opacity", value: 50 } });
+    const r = affectedByPatches(before, history.project, tx.patches, compId);
+    expect(r.all).toBe(false);
+    // Scene A's 2–3 s is the show's 12–13 s and (twice as fast) 31–31.5 s, give or take a flick.
+    expect(r.ranges.length).toBe(2);
+    const [x, y] = r.ranges;
+    expect(Math.abs(x![0] - secondsToTime(12)) <= 1 && Math.abs(x![1] - secondsToTime(13)) <= 1).toBe(true);
+    expect(Math.abs(y![0] - secondsToTime(31)) <= 1 && Math.abs(y![1] - secondsToTime(31.5)) <= 1).toBe(true);
+    // A scene the show doesn't use changes nothing in it.
+    const b2 = history.project;
+    const t2 = history.apply({ type: "prop.set", args: { compId: "sceneB", layerId: "B", path: "transform.opacity", value: 20 } });
+    expect(affectedByPatches(b2, history.project, t2.patches, compId)).toEqual({ all: false, ranges: [] });
+  });
   it("region or comp-wide changes invalidate everything", () => {
     const { history, compId } = makeProject();
     const before = history.project;

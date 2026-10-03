@@ -174,6 +174,19 @@ export interface SavedFile {
 export interface MachineMemory {
   readonly ramBytes: number;
   readonly gpu: { readonly name: string; readonly bytes: number } | null;
+  readonly cpuCores?: number;
+}
+
+/** The drive preview frames go on (for recommendations; read even while the disk cache is off). */
+export interface CacheSpace {
+  /** The drive ("D:\\") and the frames' folder on it. */
+  readonly drive: string;
+  readonly root: string;
+  readonly freeBytes: number;
+  readonly totalBytes: number;
+  /** Space preview frames already use there (0 until the folder has been read). */
+  readonly usedBytes: number;
+  readonly files: number;
 }
 
 /** Preview frames on disk: one folder and size limit for all windows. */
@@ -370,6 +383,8 @@ export interface BeApi {
     /** Folder and size limit (shared by every window; a smaller limit deletes the least recently used frames). */
     configure(config: DiskCacheConfig): Promise<DiskCacheStatus>;
     status(): Promise<DiskCacheStatus>;
+    /** The drive the frames go on: free and total space, and what frames use there now. */
+    space(): Promise<CacheSpace | null>;
     /** Before first using a composition's frames: they're kept only if made from this exact show (fingerprint). Returns the frame keys on disk. */
     validate(scope: DiskCacheScope, fingerprint: string): Promise<string[]>;
     /** After edits were applied: the frames on disk now belong to this version of the show. */

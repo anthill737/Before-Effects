@@ -79,7 +79,22 @@ interface Built {
   backdrop: THREE.Mesh | null;
   backdropKey: string;
   frustum: THREE.LineSegments | null;
+  /** Shadow-map sizes asked for recently (size, when), see fitShadows. */
+  shadowAsks: Array<[number, number]>;
 }
+
+/**
+ * Shadow-map size for a render this tall: full detail (2048) at 1080 px and above, less for smaller
+ * previews (1024 at half, 512 at a quarter). A shadow map costs the same whatever the picture's
+ * size, and a point light draws six, so small previews (and preparing them) don't pay for detail
+ * they can't show. Exports render full size: full detail.
+ */
+export const shadowMapSize = (height: number): number => {
+  const want = 2048 * Math.min(1, height / 1080);
+  let s = 512;
+  while (s < want && s < 2048) s *= 2;
+  return s;
+};
 
 const srgb = (c: readonly number[]) => new THREE.Color().setRGB(c[0]!, c[1]!, c[2]!, THREE.SRGBColorSpace);
 
@@ -309,7 +324,7 @@ export class SceneHost implements ExternalSourceRenderer {
     const grid = new THREE.GridHelper(40, 40, 0x3a4250, 0x232a35);
     const helpers: THREE.Object3D[] = [grid];
     scene.add(grid);
-    b = { scene, showCam: new THREE.PerspectiveCamera(30, 16 / 9, 0.05, 500), inspectCam: new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 500), entries: new Map(), helpers, backdrop: null, backdropKey: "", frustum: null };
+    b = { scene, showCam: new THREE.PerspectiveCamera(30, 16 / 9, 0.05, 500), inspectCam: new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 500), entries: new Map(), helpers, backdrop: null, backdropKey: "", frustum: null, shadowAsks: [] };
     this.built.set(id, b);
     return b;
   }
@@ -708,8 +723,25 @@ export class SceneHost implements ExternalSourceRenderer {
     b.showCam.lookAt(cam.target[0], cam.target[1], cam.target[2]);
     b.showCam.updateProjectionMatrix();
     this.setInspectOnly(b, false);
+    this.fitShadows(b, height);
     const texture = this.draw(`show:${r.scene.id}`, b.scene, b.showCam, width, height);
     return texture ? { texture, pending: u.pending } : null;
+  }
+
+  /**
+   * Shadow maps sized for what's being drawn: the largest size asked for in the last second, so a
+   * full-size preview and a smaller preparation drawing in turn don't resize the maps every frame.
+   * (three.js resizes a light's shadow map when its mapSize changes.)
+   */
+  private fitShadows(b: Built, height: number): void {
+    const now = performance.now();
+    b.shadowAsks = b.shadowAsks.filter(([, at]) => now - at < 1000);
+    b.shadowAsks.push([shadowMapSize(height), now]);
+    const size = Math.max(...b.shadowAsks.map(([sz]) => sz));
+    for (const e of b.entries.values()) {
+      const sh = e.light?.castShadow ? (e.light as THREE.DirectionalLight).shadow : null;
+      if (sh && sh.mapSize.x !== size) sh.mapSize.set(size, size);
+    }
   }
 
   /** Render from an orbiting inspection camera, with the grid, the show camera's view and lights marked. */

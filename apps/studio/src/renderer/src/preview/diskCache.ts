@@ -27,13 +27,14 @@ import { COMMON, type FrameRenderer } from "@be/engine";
 import { create } from "zustand";
 import type { DiskCacheStatus, DiskCacheUsage } from "../../../shared/api.ts";
 import { fingerprint, frameKey, frameOfKey } from "../../../shared/diskFrames.ts";
+import { useStudio } from "../studio/store.ts";
 import type { FrameCache } from "./cache.ts";
 import { usePreview } from "./settings.ts";
 
 const GB = 1024 ** 3;
 const JPEG_QUALITY = 0.92;
-/** Saves at once, and the pixel memory they may hold while waiting for compression. */
-const MAX_SAVES = 4;
+/** Saves at once (enough to keep the graphics card and every compression worker busy), and the pixel memory they may hold while waiting for compression. */
+const MAX_SAVES = 8;
 const MAX_STAGING = 256 * 1024 ** 2;
 /** Reads at once (a frame needed right now always starts). */
 const MAX_READS = 6;
@@ -77,6 +78,10 @@ fn dec(y: vec3f) -> vec3f {
   return vec4f(dec(c.rgb), a);
 }
 `;
+
+/** Where saving a frame's time goes, on average (ms): the graphics card finishing it, compressing, writing. */
+export const saveTiming = { gpuMs: 0, compressMs: 0, writeMs: 0 };
+const ema = (k: keyof typeof saveTiming, ms: number) => (saveTiming[k] = saveTiming[k] ? saveTiming[k] * 0.9 + ms * 0.1 : ms);
 
 /** What's on disk, for the status line and the settings (shared by every preview in this window). */
 export const useDiskCache = create<{ status: DiskCacheStatus | null }>(() => ({ status: null }));
@@ -170,18 +175,83 @@ export class DiskFrames {
   private seq = 0;
   private warned = false;
   private disposed = false;
+  /** Waiting for a save to finish (frame preparation keeps pace with saving). */
+  private slotWaiters: Array<() => void> = [];
+  private listeners = new Set<() => void>();
 
   constructor(
     private readonly renderer: FrameRenderer,
-    private readonly cache: FrameCache,
     /** The show as edited (null while a temporary hover preview is showing). */
     private readonly project: () => Project | null,
   ) {
     live.add(this);
   }
 
+  /** Frames being saved right now. */
+  get pendingSaves(): number {
+    return this.saves.size;
+  }
+
   get enabled(): boolean {
     return !this.disposed && usePreview.getState().diskCache && !!window.be?.cache;
+  }
+
+  /** Called when frames are saved to disk or dropped (throttle in the listener). */
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit(): void {
+    for (const fn of this.listeners) fn();
+  }
+
+  /** Wait until a composition's frames on disk have been checked against this version of the show (false if they can't be). */
+  async ensureReady(project: Project, compId: string, timeoutMs = 30_000): Promise<boolean> {
+    const t0 = performance.now();
+    while (this.enabled && performance.now() - t0 < timeoutMs) {
+      if (this.scope(project, compId)) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  }
+
+  /** Is this frame on disk (as far as this window knows; false until the composition has been checked)? */
+  has(project: Project, compId: string, frame: number, fraction: number, quality: string): boolean {
+    const s = this.enabled ? this.scope(project, compId) : null;
+    return !!s && s.onDisk.has(frameKey(frame, fraction, quality));
+  }
+
+  /** The frames of a composition on disk at a size and quality. */
+  framesOnDisk(project: Project, compId: string, fraction: number, quality: string): Set<number> {
+    const out = new Set<number>();
+    const s = this.enabled ? this.scope(project, compId) : null;
+    if (!s) return out;
+    const tail = frameKey(0, fraction, quality).slice(1);
+    for (const k of s.onDisk) if (k.endsWith(tail)) out.add(frameOfKey(k));
+    return out;
+  }
+
+  /**
+   * Save a frame now and wait until it's on disk: the size in bytes, or null when it wasn't kept
+   * (the show changed meanwhile, the drive is nearly full, or the disk cache is off). Waits for a
+   * free slot instead of setting the frame aside, so preparing many frames never outruns saving.
+   * The texture can be released as soon as this returns its promise (the GPU copy is queued).
+   */
+  async saveNow(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): Promise<number | null> {
+    const s = this.enabled ? this.scope(project, compId) : null;
+    if (!s) return null;
+    const key = frameKey(frame, fraction, quality);
+    if (s.onDisk.has(key)) return 0;
+    await this.slot(tex.width, tex.height);
+    if (!this.enabled) return null;
+    return (await this.save(s, frame, fraction, quality, tex, true)) ?? null;
+  }
+
+  /** Wait until a frame of this size can start saving (call before rendering it, to keep pace with saving). */
+  async slot(width: number, height: number): Promise<void> {
+    const size = Math.ceil((width * 4) / 256) * 256 * height;
+    while (this.enabled && (this.saves.size >= MAX_SAVES || this.staging + size > MAX_STAGING)) await new Promise<void>((r) => this.slotWaiters.push(r));
   }
 
   /** A composition's frames on disk, once checked against this version of the show (null until then). */
@@ -210,7 +280,7 @@ export class DiskFrames {
    * "wait" when it's on disk but enough reads are running (try again later), "absent" when it isn't
    * on disk. `now`: the frame is needed right now, so it starts even when many reads are running.
    */
-  fetch(project: Project, compId: string, frame: number, fraction: number, quality: string, now = false): DiskFetch {
+  fetch(cache: FrameCache, project: Project, compId: string, frame: number, fraction: number, quality: string, now = false): DiskFetch {
     const comp = project.compositions[compId];
     const s = this.enabled && comp ? this.scope(project, compId) : null;
     if (!s || !comp) return "absent";
@@ -220,7 +290,7 @@ export class DiskFrames {
     if (!s.onDisk.has(key)) return "absent";
     if (!now && this.reads.size >= MAX_READS) return "wait";
     this.reads.set(id, performance.now());
-    void this.read(s, s.epoch, key, frame, fraction, quality, comp.height / comp.width).finally(() => this.reads.delete(id));
+    void this.read(cache, s, s.epoch, key, frame, fraction, quality, comp.height / comp.width).finally(() => this.reads.delete(id));
     return "reading";
   }
 
@@ -230,7 +300,7 @@ export class DiskFrames {
     return started === undefined ? -1 : performance.now() - started;
   }
 
-  private async read(s: Scope, epoch: number, key: string, frame: number, fraction: number, quality: string, aspect: number): Promise<void> {
+  private async read(cache: FrameCache, s: Scope, epoch: number, key: string, frame: number, fraction: number, quality: string, aspect: number): Promise<void> {
     const current = () => s.epoch === epoch && this.scopes.get(s.id) === s;
     try {
       const bytes = await window.be.cache.get({ project: s.project, comp: s.comp }, key);
@@ -241,7 +311,7 @@ export class DiskFrames {
       if (!current()) return;
       const bmp = await createImageBitmap(new Blob([bytes as BlobPart], { type: "image/jpeg" }), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
       try {
-        if (!current() || this.cache.has(s.comp, frame, fraction, quality)) return;
+        if (!current() || cache.has(s.comp, frame, fraction, quality)) return;
         // Saved with an alpha band the image is twice as tall as the frame's shape.
         const banded = bmp.height / bmp.width > aspect * 1.5;
         const w = bmp.width;
@@ -254,7 +324,7 @@ export class DiskFrames {
         gpu.pass(enc, DECODE_FROM_DISK, tex, [raw.createView(), { buffer: gpu.uniform(new Uint32Array([h, banded ? 1 : 0, 0, 0])) }]);
         gpu.defer(raw);
         gpu.submit(enc);
-        if (!this.cache.put(s.comp, frame, fraction, quality, tex)) tex.destroy();
+        if (!cache.put(s.comp, frame, fraction, quality, tex)) tex.destroy();
       } finally {
         bmp.close();
       }
@@ -270,20 +340,22 @@ export class DiskFrames {
     if (s) this.save(s, frame, fraction, quality, tex);
   }
 
-  private save(s: Scope, frame: number, fraction: number, quality: string, tex: GPUTexture): void {
+  /** Start saving a frame; resolves with its size on disk (null when it wasn't kept). `direct`: not from graphics memory, so never set aside for later. */
+  private save(s: Scope, frame: number, fraction: number, quality: string, tex: GPUTexture, direct = false): Promise<number | null> | null {
     const key = frameKey(frame, fraction, quality);
     const id = `${s.id}|${key}`;
-    if (s.onDisk.has(key) || this.saves.has(id)) return;
+    if (s.onDisk.has(key) || this.saves.has(id)) return null;
     const w = tex.width;
     const h = tex.height;
     const stride = Math.ceil((w * 4) / 256) * 256;
     const size = stride * h;
     if (this.saves.size >= MAX_SAVES || this.staging + size > MAX_STAGING) {
+      if (direct) return null;
       // Busy: save it later if it's still in graphics memory then.
       this.backlog.delete(id);
       this.backlog.set(id, { scope: s, key, frame, fraction, quality });
       if (this.backlog.size > MAX_BACKLOG) this.backlog.delete(this.backlog.keys().next().value!);
-      return;
+      return null;
     }
     const { gpu } = this.renderer;
     const target = gpu.acquire(w, h, "rgba8unorm", "disk frame");
@@ -296,40 +368,50 @@ export class DiskFrames {
     const epoch = s.epoch;
     this.saves.add(id);
     this.staging += size;
-    void (async () => {
+    return (async (): Promise<number | null> => {
       try {
         // Resolves when the GPU has finished; nothing waits for it meanwhile.
+        const t0 = performance.now();
         await buf.mapAsync(GPUMapMode.READ);
         const data = buf.getMappedRange().slice(0);
         buf.unmap();
+        const t1 = performance.now();
         const jpeg = await this.compress(data, w, h, stride);
+        const t2 = performance.now();
+        ema("gpuMs", t1 - t0);
+        ema("compressMs", t2 - t1);
         if (s.epoch !== epoch || this.scopes.get(s.id) !== s || !this.enabled) {
           // The show changed meanwhile; if the frame survived the edit, save it again later.
-          if (this.scopes.get(s.id) === s) this.backlog.set(id, { scope: s, key, frame, fraction, quality });
-          return;
+          if (this.scopes.get(s.id) === s && !direct) this.backlog.set(id, { scope: s, key, frame, fraction, quality });
+          return null;
         }
+        const t3 = performance.now();
         const u = await window.be.cache.put({ project: s.project, comp: s.comp }, key, new Uint8Array(jpeg));
-        if (u) {
-          s.onDisk.add(key);
-          setUsage(u);
-        }
+        ema("writeMs", performance.now() - t3);
+        if (!u) return null;
+        s.onDisk.add(key);
+        setUsage(u);
+        this.emit();
+        return jpeg.byteLength;
       } catch (e) {
         this.warn(`couldn't save a frame: ${String(e)}`);
+        return null;
       } finally {
         buf.destroy();
         this.saves.delete(id);
         this.staging -= size;
+        this.slotWaiters.shift()?.();
       }
     })();
   }
 
-  /** Save one remembered frame, if there's room and it's still in graphics memory. Call once per tick. */
-  pump(): void {
+  /** Save one remembered frame, if there's room and it's still in this graphics memory. Call once per tick. */
+  pump(cache: FrameCache): void {
     if (!this.enabled || this.backlog.size === 0 || this.saves.size >= MAX_SAVES) return;
     for (const [id, r] of this.backlog) {
       this.backlog.delete(id);
       if (this.scopes.get(r.scope.id) !== r.scope || r.scope.onDisk.has(r.key)) continue;
-      const tex = this.cache.peek(r.scope.comp, r.frame, r.fraction, r.quality);
+      const tex = cache.peek(r.scope.comp, r.frame, r.fraction, r.quality);
       if (!tex) continue;
       this.save(r.scope, r.frame, r.fraction, r.quality, tex);
       return;
@@ -338,8 +420,10 @@ export class DiskFrames {
 
   private compress(data: ArrayBuffer, width: number, height: number, stride: number): Promise<ArrayBuffer> {
     if (this.workers.length === 0) {
-      // Two workers: compressing a 4K frame takes tens of milliseconds.
-      for (let i = 0; i < 2; i++) {
+      // Compressing a 1080p frame takes tens of milliseconds, a 4K one far more: a worker per two
+      // processor cores (2 to 6), so preparing a show isn't held up by compression.
+      const n = Math.max(2, Math.min(6, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+      for (let i = 0; i < n; i++) {
         const w = new Worker(new URL("./diskCodec.worker.ts", import.meta.url), { type: "module" });
         w.onmessage = (e: MessageEvent<{ id: number; bytes?: ArrayBuffer; error?: string }>) => {
           this.jobs.get(e.data.id)?.(e.data);
@@ -357,28 +441,36 @@ export class DiskFrames {
   }
 
   /**
-   * The show changed (called with the FrameCache's invalidation). The edited composition loses
-   * exactly the frames the FrameCache drops; other compositions are checked again before use.
+   * The show changed (called with the FrameCache's invalidation). Each composition loses exactly
+   * the frames the change affected in it (`others` for those besides the edited one; an edit in a
+   * scene changes the show around it only where the show plays that part). Compositions with no
+   * such information are checked again before use.
    */
-  changed(project: Project | null, compId: string, affected: Affected, rate: Rational | null): void {
-    const id = project ? `${project.id}/${compId}` : "";
-    for (const [sid, sc] of this.scopes) {
-      if (sid === id) continue;
-      this.drop(sc);
-    }
-    const s = this.scopes.get(id);
-    if (!s) return;
-    if (affected.all || !rate) return this.drop(s);
-    if (affected.ranges.length) {
-      s.epoch++;
-      const frames = frameRanges(affected.ranges, rate);
-      for (const k of [...s.onDisk]) {
-        const f = frameOfKey(k);
-        if (frames.some(([a, b]) => f >= a && f < b)) s.onDisk.delete(k);
+  changed(project: Project | null, compId: string, affected: Affected, rate: Rational | null, others?: Readonly<Record<string, Affected>>): void {
+    for (const sc of [...this.scopes.values()]) {
+      // Another show (or none): its frames are checked against it again before use.
+      if (!project || sc.project !== project.id) {
+        this.drop(sc);
+        continue;
       }
-      void window.be.cache.invalidate({ project: s.project, comp: s.comp }, frames).then(setUsage, () => undefined);
+      const a = sc.comp === compId ? affected : others?.[sc.comp];
+      const r = sc.comp === compId ? rate : (project.compositions[sc.comp]?.frameRate ?? null);
+      if (!a || a.all || !r) {
+        this.drop(sc);
+        continue;
+      }
+      if (a.ranges.length) {
+        sc.epoch++;
+        const frames = frameRanges(a.ranges, r);
+        for (const k of [...sc.onDisk]) {
+          const f = frameOfKey(k);
+          if (frames.some(([x, y]) => f >= x && f < y)) sc.onDisk.delete(k);
+        }
+        void window.be.cache.invalidate({ project: sc.project, comp: sc.comp }, frames).then(setUsage, () => undefined);
+      }
+      this.restampLater(sc);
     }
-    this.restampLater(s);
+    this.emit();
   }
 
   /** Forget a composition's frames here; they're checked against the show again before use. */
@@ -412,6 +504,7 @@ export class DiskFrames {
   forget(): void {
     for (const s of [...this.scopes.values()]) this.drop(s);
     this.backlog.clear();
+    this.emit();
   }
 
   dispose(): void {
@@ -426,6 +519,7 @@ export class DiskFrames {
     this.workers = [];
     for (const done of this.jobs.values()) done({ error: "closed" });
     this.jobs.clear();
+    for (const w of this.slotWaiters.splice(0)) w();
     live.delete(this);
   }
 
@@ -435,3 +529,21 @@ export class DiskFrames {
     window.be.app.log(`preview disk cache: ${message}`);
   }
 }
+
+let windowDisk: DiskFrames | null = null;
+/**
+ * The window's frames on disk: one for every preview in the window and for frame preparation, so
+ * what one saves the others know about, and a preview that's rebuilt (another step, popping out)
+ * doesn't interrupt saving. It lasts as long as the window.
+ */
+export const diskFramesFor = (renderer: FrameRenderer): DiskFrames => {
+  if (!windowDisk) {
+    windowDisk = new DiskFrames(renderer, () => {
+      const s = useStudio.getState();
+      return s.hoverPreview ? null : s.project;
+    });
+    // Closing the window: stamps waiting for edits to pause are written now, so the frames stay usable next time.
+    window.addEventListener("beforeunload", () => windowDisk?.dispose());
+  }
+  return windowDisk;
+};

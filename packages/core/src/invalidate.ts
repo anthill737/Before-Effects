@@ -38,6 +38,38 @@ const layerRange = (c: Composition | undefined, layerId: Id): readonly [Flicks, 
 const hasDependents = (c: Composition | undefined, layerId: Id): boolean =>
   !!c && Object.values(c.layers).some((l) => l.parentId === layerId || l.trackMatte?.layerId === layerId);
 
+/**
+ * Where a change inside a nested composition shows in `compId`: each layer that shows `nestedId`
+ * (directly or through other nested compositions) maps the nested times onto its own timeline
+ * (start + nested time ÷ speed), within the layer's in and out points. A nested change with no
+ * known times (`all`) covers the whole span of those layers.
+ */
+const mapUp = (p: Project, compId: Id, nestedId: Id, inner: Affected, depth = 0): Array<readonly [Flicks, Flicks]> => {
+  const out: Array<readonly [Flicks, Flicks]> = [];
+  const c = p.compositions[compId];
+  if (!c || depth > 32) return out;
+  for (const l of Object.values(c.layers)) {
+    if (l.source.kind !== "comp") continue;
+    const src = l.source.compId;
+    const at: Affected | null = src === nestedId ? inner : src !== compId && nestedComps(p, src).has(nestedId) ? { all: false, ranges: mapUp(p, src, nestedId, inner, depth + 1) } : null;
+    if (!at) continue;
+    if (at.all || !l.stretch) {
+      out.push([l.inPoint, l.outPoint]);
+      continue;
+    }
+    for (const [x0, x1] of at.ranges) {
+      let a = l.startTime + x0 / l.stretch;
+      let b = l.startTime + x1 / l.stretch;
+      if (a > b) [a, b] = [b, a];
+      // Rounding (and a reversed layer's flipped ends) can move a frame across the edge: one flick wider.
+      const s = Math.max(l.inPoint, Math.floor(a) - 1);
+      const e = Math.min(l.outPoint, Math.ceil(b) + 1);
+      if (s < e) out.push([s, e]);
+    }
+  }
+  return out;
+};
+
 export const affectedByPatches = (before: Project, after: Project, patches: readonly Patch[], compId: Id): Affected => {
   const ranges: Array<readonly [Flicks, Flicks]> = [];
   const used = new Set([...nestedComps(before, compId), ...nestedComps(after, compId)]);
@@ -49,7 +81,10 @@ export const affectedByPatches = (before: Project, after: Project, patches: read
         if (a === undefined) return ALL;
         const id = String(a);
         if (id !== compId) {
-          if (used.has(id)) return ALL; // a nested composition changed
+          if (!used.has(id)) continue;
+          // A nested composition changed: the times it changed, where this composition shows them.
+          const inner = affectedByPatches(before, after, [patch], id);
+          for (const proj of [before, after]) ranges.push(...mapUp(proj, compId, id, inner));
           continue;
         }
         if (b === undefined) return ALL;
@@ -82,8 +117,10 @@ export const affectedByPatches = (before: Project, after: Project, patches: read
             const c = proj.compositions[cid];
             for (const l of Object.values(c?.layers ?? {})) {
               if (l.source.kind !== "scene3d" || l.source.sceneId !== sid) continue;
-              if (cid !== compId || hasDependents(c, l.id)) return ALL;
-              ranges.push([l.inPoint, l.outPoint]);
+              const here: Affected = hasDependents(c, l.id) ? ALL : { all: false, ranges: [[l.inPoint, l.outPoint]] };
+              if (cid !== compId) ranges.push(...mapUp(proj, compId, cid, here));
+              else if (here.all) return ALL;
+              else ranges.push(...here.ranges);
             }
           }
         }
