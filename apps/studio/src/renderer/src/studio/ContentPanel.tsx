@@ -10,6 +10,7 @@ import { applyEffect, applyRecipeToSelection } from "./actions.ts";
 import { contentForArea, dropOnArea, isContentDrag, readDragPayload, setDragPayload } from "./assign.ts";
 import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, effect3dFor, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
+import { PICTURE_EFFECTS, pictureEffectFor } from "./pictureEffects.ts";
 import { addAssetLayer, importMediaFiles } from "./media.ts";
 import { findMissingInFolder, findOne } from "./relink.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
@@ -29,6 +30,8 @@ const SIM_KIND: Record<string, string> = {
   "blocks-columns": "procedural: columns moved by rule (a wave across), not simulated",
   "blocks-slats": "procedural: slats turned by rule (a wave across), not simulated",
   "melt-area": "procedural: the picture is warped downward by rule, not simulated",
+  "ripple-area": "procedural: the picture is bent by rings drawn by rule, not a water simulation",
+  "glitch-area": "procedural: the picture is broken up by rule in seeded bursts",
   "particles-sparks": "procedural: particles placed by rule (drag, gravity, wind), not simulated — they don't hit the house",
   "particles-embers": "procedural: particles placed by rule (rise, sway, flicker), not simulated",
   "particles-snow": "procedural: flakes placed by rule (fall, sway, wind), not simulated — they don't settle",
@@ -216,7 +219,7 @@ export const ContentPanel = () => {
 
       <h3 className="subhead">Animations</h3>
       <div className="anim-cards">
-        {[...ANIMATIONS.map((id) => getRecipe(id)).filter((r): r is NonNullable<typeof r> => !!r), ...BREAK_EFFECTS, ...BLOCK_EFFECTS, ...PARTICLE_EFFECTS, MELT_EFFECT]
+        {[...ANIMATIONS.map((id) => getRecipe(id)).filter((r): r is NonNullable<typeof r> => !!r), ...BREAK_EFFECTS, ...BLOCK_EFFECTS, ...PARTICLE_EFFECTS, MELT_EFFECT, ...PICTURE_EFFECTS]
           .map((r) => (
             <div
               key={r.id}
@@ -229,6 +232,8 @@ export const ContentPanel = () => {
                 if (e3 && "particles" in e3 && e3.particles === "snow") return void addParticles("snow", sel.regionIds);
                 if (!sel.regionIds.length) return useStudio.getState().toast({ kind: "info", text: `Drag “${r.title}” onto an area, or select areas and click it.` });
                 if (r.id === MELT_EFFECT.id) return void meltAreas(sel.regionIds);
+                const onPicture = pictureEffectFor(r.id);
+                if (onPicture) return void onPicture.apply(sel.regionIds);
                 if (!e3) return void applyEffect(r.id);
                 return "break" in e3 ? void makeArea3D(sel.regionIds, true, e3.break) : "blocks" in e3 ? void makeArea3D(sel.regionIds, false, "collapse", e3.blocks) : void addParticles(e3.particles, sel.regionIds);
               }}

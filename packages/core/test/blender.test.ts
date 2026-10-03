@@ -181,7 +181,8 @@ describe("layer effects", () => {
       const e = newEffect(type, "fx1");
       expect(Object.keys(e.params).sort()).toEqual(spec.params.map((p) => p.key).sort());
       for (const p of spec.params) {
-        expect(e.params[p.key]!.value).toBe(p.default);
+        expect(e.params[p.key]!.value).toEqual(p.default);
+        if (p.kind === "color") continue;
         expect(p.default).toBeGreaterThanOrEqual(p.min);
         expect(p.default).toBeLessThanOrEqual(p.max);
       }

@@ -11,6 +11,7 @@ import { create } from "zustand";
 import { applyEffect, applyRecipeToSelection } from "./actions.ts";
 import { addParticles, effect3dFor, makeArea3D } from "./actions3d.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
+import { pictureEffectFor } from "./pictureEffects.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
 export const DRAG_ASSET = "application/x-be-asset";
@@ -89,6 +90,9 @@ export const finishDrop = async (payload: DragPayload, areaIds: string[], mode: 
   useDropChoice.setState({ pending: null });
   if (payload.kind === "asset") return assignMedia(payload.id, areaIds, mode);
   if (payload.id === MELT_EFFECT.id) return meltAreas(areaIds);
+  // Ripple and Glitch, like Melt, work on all the chosen areas' picture together.
+  const onPicture = pictureEffectFor(payload.id);
+  if (onPicture) return onPicture.apply(areaIds);
   const e3 = effect3dFor(payload.id);
   if (e3) return "break" in e3 ? makeArea3D(areaIds, true, e3.break) : "blocks" in e3 ? makeArea3D(areaIds, false, "collapse", e3.blocks) : addParticles(e3.particles, areaIds);
   const def = getRecipe(payload.id);

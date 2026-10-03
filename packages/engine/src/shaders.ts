@@ -4,6 +4,7 @@
  *   - Coverage textures (rasterised paths and masks) are single-channel 0..1.
  *   - pcg_hash/rand01 must stay bit-identical to packages/core/src/rng.ts.
  */
+import { RIPPLE_MAX_DROPS } from "@be/core";
 
 export const COMMON = /* wgsl */ `
 fn pcg_hash(input: u32) -> u32 {
@@ -176,6 +177,120 @@ fn n1(x: f32) -> f32 { let i = floor(x); let f = fract(x); return mix(h1(i), h1(
     if (y >= 0.0 && y <= 1.0) { acc += textureSampleLevel(src, samp, vec2f(x, y), 0.0); }
   }
   return acc / 8.0;
+}
+`;
+
+/**
+ * Ripple: rings of water spread from each drop and bend the picture under them (refraction: each
+ * point shows the picture a little way along the wave's slope), with light added on the crests.
+ * Procedural (a look, not a simulation). The drops — where, how long ago, how strong — come from the
+ * CPU (core rippleDrops), so a frame always looks the same.
+ */
+export const RIPPLE = /* wgsl */ `
+${COMMON}
+struct U {
+  size: vec2f,          // texture size (px)
+  strength: f32,        // how far the waves bend the picture (px)
+  wavelength: f32,      // ring spacing (px)
+  speed: f32,           // px per second
+  fade: f32,            // weakening per px away from the drop
+  rings: f32,           // rings per drop; 0 = keeps rippling
+  count: f32,           // drops in use
+  light: vec4f,         // crest light: sRGB colour, amount
+  drops: array<vec4f, ${RIPPLE_MAX_DROPS}>,  // x, y (px), seconds since it landed, strength
+};
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<uniform> u: U;
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let p = i.uv * u.size;
+  let soft = u.wavelength * 0.5;
+  let train = u.rings * u.wavelength;
+  var bend = vec2f(0.0);
+  var crest = 0.0;
+  let count = min(u32(u.count), ${RIPPLE_MAX_DROPS}u);
+  for (var k = 0u; k < count; k++) {
+    let d = u.drops[k];
+    let delta = p - d.xy;
+    let r = length(delta);
+    // How far this point is behind the leading ring, which left the drop d.z seconds ago.
+    let behind = u.speed * d.z - r;
+    if (behind <= 0.0) { continue; }
+    // A soft leading ring, calm right at the drop, and (with a ring count) a soft last ring.
+    var env = smoothstep(0.0, soft, behind) * smoothstep(0.0, soft, r);
+    if (u.rings > 0.0) { env = env * (1.0 - smoothstep(train - soft, train, behind)); }
+    let a = env * d.w * exp(-u.fade * r);
+    let phase = behind / u.wavelength * 6.2831853;
+    // The slope of the water bends the light: shift along the ring's direction by the slope.
+    bend += delta / max(r, 1e-3) * (cos(phase) * a);
+    crest += smoothstep(0.5, 1.0, sin(phase)) * a;
+  }
+  // Overlapping drops never bend further than the strength (the bounds the effect declares).
+  bend = bend / max(1.0, length(bend));
+  let c = textureSampleLevel(src, samp, (p - bend * u.strength) / u.size, 0.0);
+  // Light only where there is picture (premultiplied: scaled by coverage).
+  let glow = srgb_to_linear(u.light.rgb) * (u.light.a * min(crest, 1.5) * c.a);
+  return vec4f(c.rgb + glow, c.a);
+}
+`;
+
+/**
+ * Glitch: one moment of a digital glitch. Strips of the picture jump sideways, square blocks show a
+ * coarse copy of the picture nearby, red and blue split apart, the brightness flickers and scanlines
+ * roll down. Which strips and blocks break comes from this moment's key (core glitchAt), so a frame
+ * always looks the same. Between bursts (strength 0) only the scanlines remain.
+ */
+export const GLITCH = /* wgsl */ `
+${COMMON}
+struct U {
+  size: vec2f,          // texture size (px)
+  strength: f32,        // how hard it glitches now (0 between bursts)
+  slice: f32,           // strip height (px)
+  shift: f32,           // how far strips jump (px)
+  split: f32,           // colour split (px)
+  blocks: f32,          // share of blocks that break up (0..1)
+  scan: f32,            // scanline darkness (0..1)
+  scanPeriod: f32,      // px from one scanline to the next
+  scanOffset: f32,      // px the scanlines have rolled
+  flicker: f32,         // brightness now
+  key: u32,             // this moment's random pattern
+};
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<uniform> u: U;
+fn rnd(stream: u32, n: u32) -> f32 { return rand01(u.key ^ stream, n); }
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  var p = i.uv * u.size;
+  let s = u.strength;
+  var c = vec4f(0.0);
+  if (s > 0.0) {
+    // Strips jump sideways: thin ones often, wide ones (three strips tall) now and then.
+    let row = u32(max(floor(p.y / u.slice), 0.0));
+    let band = u32(max(floor(p.y / (u.slice * 3.0)), 0.0));
+    if (rnd(1u, row) < s * 0.45) { p.x += (rnd(2u, row) * 2.0 - 1.0) * u.shift * s; }
+    if (rnd(3u, band) < s * 0.25) { p.x += (rnd(4u, band) * 2.0 - 1.0) * u.shift * s * 0.5; }
+    // Blocks break up: a coarse, pixelated copy of a block up to two blocks away.
+    let bs = u.slice * 2.0;
+    let cell = vec2u(max(floor(p / bs), vec2f(0.0)));
+    let id = (cell.x * 73856093u) ^ (cell.y * 19349663u);
+    if (rnd(5u, id) < u.blocks * s * 0.35) {
+      let jump = floor(vec2f(rnd(6u, id), rnd(7u, id)) * 5.0) - 2.0;
+      let coarse = bs / 6.0;
+      p = floor((p + jump * bs) / coarse) * coarse + coarse * 0.5;
+    }
+    // Red and blue pull apart. Premultiplied: each channel keeps its own coverage, so the result stays valid.
+    let d = vec2f(u.split * s, 0.0);
+    let cr = textureSampleLevel(src, samp, (p + d) / u.size, 0.0);
+    let cg = textureSampleLevel(src, samp, p / u.size, 0.0);
+    let cb = textureSampleLevel(src, samp, (p - d) / u.size, 0.0);
+    c = vec4f(cr.r, cg.g, cb.b, max(max(cr.a, cg.a), cb.a));
+  } else {
+    c = textureSampleLevel(src, samp, i.uv, 0.0);
+  }
+  let line = 0.5 + 0.5 * cos((i.uv.y * u.size.y + u.scanOffset) * 6.2831853 / u.scanPeriod);
+  return vec4f(c.rgb * ((1.0 - u.scan * line) * u.flicker), c.a);
 }
 `;
 

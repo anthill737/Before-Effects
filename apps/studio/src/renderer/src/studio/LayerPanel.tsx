@@ -1,5 +1,5 @@
 /** Inspector for a plain layer: pictures and videos, text, and sound. Simple controls first. */
-import { type AnimProp, defaultAudio, evalProp, formatSecondsFriendly, keyAt, LAYER_EFFECTS, type Layer, newEffect, newId, type PropValue, secondsToTime, type Vec3 } from "@be/core";
+import { type AnimProp, defaultAudio, type EffectSettingSpec, evalProp, formatSecondsFriendly, isColorSetting, keyAt, LAYER_EFFECTS, type Layer, newEffect, newId, type PropValue, secondsToTime, type Vec3 } from "@be/core";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { layerLocal, setLayerValue, toggleLayerKey } from "./layerKeys.ts";
 import { BlenderLinkSection } from "./BlenderPanel.tsx";
@@ -25,8 +25,9 @@ const KeyToggle = ({ layer, path, prop, label }: { layer: Layer; path: string; p
 };
 
 /**
- * The layer's effects (blur, glow, melt…): every setting of each, each with ◆ for keyframes, on/off,
- * remove, and adding more. Effects a recipe made are adjusted from the recipe's own settings too.
+ * The layer's effects (blur, glow, melt, ripple, glitch): every setting of each, numbers and colours,
+ * each with ◆ for keyframes, on/off, remove, and adding more. Effects a recipe made are adjusted from
+ * the recipe's own settings too.
  */
 const LayerEffects = ({ layer }: { layer: Layer }) => {
   const time = useStudio((s) => s.time);
@@ -52,15 +53,19 @@ const LayerEffects = ({ layer }: { layer: Layer }) => {
               </button>
             </div>
             {spec && <p className="muted small">{spec.description}</p>}
-            {(spec?.params ?? Object.keys(e.params).map((key) => ({ key, label: key, min: 0, max: 100, step: 0.1, default: 0 }))).map((ps) => {
+            {(spec?.params ?? Object.keys(e.params).map((key): EffectSettingSpec => ({ key, label: key, min: 0, max: 100, step: 0.1, default: 0 }))).map((ps) => {
               const prop = e.params[ps.key];
               if (!prop) return null;
               const path = `effects.${e.id}.params.${ps.key}`;
-              const v = evalProp(prop as AnimProp<number>, lt);
+              const v = evalProp(prop, lt);
               return (
-                <Field key={ps.key} label={ps.label} help={"help" in ps ? ps.help : undefined}>
+                <Field key={ps.key} label={ps.label} help={ps.help}>
                   <div className="row gap">
-                    <Slider value={typeof v === "number" ? v : 0} min={ps.min} max={ps.max} step={ps.step} unit={"unit" in ps ? ps.unit : undefined} onChange={(nv) => setLayerValue(comp, layer, path, prop as AnimProp<number>, nv, `Change ${ps.label.toLowerCase()}`)} label={`${spec?.title ?? e.type} ${ps.label}`} />
+                    {isColorSetting(ps) ? (
+                      <ColorField value={typeof v === "number" ? ps.default : v} onChange={(c) => setLayerValue(comp, layer, path, prop, c, `Change ${ps.label.toLowerCase()}`)} label={`${spec?.title ?? e.type} ${ps.label}`} />
+                    ) : (
+                      <Slider value={typeof v === "number" ? v : 0} min={ps.min} max={ps.max} step={ps.step} unit={ps.unit} onChange={(nv) => setLayerValue(comp, layer, path, prop as AnimProp<number>, nv, `Change ${ps.label.toLowerCase()}`)} label={`${spec?.title ?? e.type} ${ps.label}`} />
+                    )}
                     <KeyToggle layer={layer} path={path} prop={prop} label={`${(spec?.title ?? e.type).toLowerCase()} ${ps.label.toLowerCase()}`} />
                   </div>
                 </Field>

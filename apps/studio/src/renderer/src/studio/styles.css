@@ -538,3 +538,12 @@ body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px;
 .thumb-crack { fill: none; stroke: #ffd18c; stroke-width: 1.6; }
 .thumb-dot { fill: #ffb35a; }
 .thumb-melt { fill: #8a93a6; }
+
+/* Ripple, Glitch and Lightning thumbnails. */
+.thumb-ripple { fill: none; stroke: #9fd3ff; stroke-width: 1.2; opacity: 0.8; }
+.thumb-glitch { fill: #ff4f8b; opacity: 0.75; }
+.thumb-glitch.b { fill: #45e0ff; }
+.thumb-flash { fill: #dfe8ff; opacity: 0; animation: thumb-flash 2.4s infinite; }
+.thumb-bolt { fill: none; stroke: #e8f1ff; stroke-width: 2; stroke-linejoin: round; filter: drop-shadow(0 0 2px #7fb2ff); opacity: 0; animation: thumb-flash 2.4s infinite; }
+@keyframes thumb-flash { 0%, 100% { opacity: 0; } 4% { opacity: 0.9; } 9% { opacity: 0.15; } 20% { opacity: 0.6; } 26%, 99% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .thumb-flash, .thumb-bolt { animation: none; opacity: 0.6; } }

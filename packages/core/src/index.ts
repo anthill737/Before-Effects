@@ -33,4 +33,5 @@ export * from "./parts3d.ts";
 export * from "./particles3d.ts";
 export * from "./blender.ts";
 export * from "./layerEffects.ts";
+export * from "./effectMotion.ts";
 export * from "./projection.ts";

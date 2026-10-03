@@ -330,14 +330,16 @@ export class Compositor {
     }
 
     if (layer.masks.length) tex = this.applyMasks(layer, toLayer, target, tex, encoder);
-    const ectx: EffectContext = { gpu, encoder, scale: density, quality: this.quality };
+    // The layer's own picture inside the padded texture (effects that place things on it, e.g. a ripple's centre).
+    const picture = { x: (content.x - rect.x) * density, y: (content.y - rect.y) * density, w: content.w * density, h: content.h * density };
+    const ectx: EffectContext = { gpu, encoder, scale: density, quality: this.quality, picture };
     for (const e of layer.effects) {
       const def = getEffect(e.type);
       if (!def) {
         this.stats.warnings.push(`The effect "${e.type}" isn't available yet and was skipped.`);
         continue;
       }
-      const next = def.render(tex, e.params, ectx);
+      const next = def.render(tex, e.params, { ...ectx, time: e.time });
       if (next !== tex) {
         gpu.release(tex);
         tex = next;
@@ -470,7 +472,7 @@ export class Compositor {
     for (const e of layer.effects) {
       const def = getEffect(e.type);
       if (!def) continue;
-      const next = def.render(tex, e.params, ectx);
+      const next = def.render(tex, e.params, { ...ectx, time: e.time });
       if (next !== tex) {
         gpu.release(tex);
         tex = next;

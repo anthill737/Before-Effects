@@ -4,6 +4,8 @@
  */
 import {
   regionHoles,
+  hexToRgba,
+  isColorSetting,
   LAYER_EFFECTS,
   type Layer,
   newEffect,
@@ -41,6 +43,7 @@ import { assignMedia, refForAreas, replaceMedia } from "../studio/assign.ts";
 import { ensureHits, prepareLightning } from "../studio/lightningSounds.ts";
 import { analyseBeats, assetLayerOps, importMediaFiles } from "../studio/media.ts";
 import { meltAreas } from "../studio/melt.ts";
+import { glitchAreas, rippleAreas } from "../studio/pictureEffects.ts";
 import { newEmptyScene, newSceneCopy, openShow, pickScene, showComp } from "../studio/ScenesBar.tsx";
 import { activeVenue, currentComp, useStudio } from "../studio/store.ts";
 import { AgentError, currentRevision, method } from "./core.ts";
@@ -865,7 +868,7 @@ method({
   },
 });
 
-// ---- layer effects (blur, glow, melt) -------------------------------------------------------------------
+// ---- layer effects (blur, glow, melt, ripple, glitch) -------------------------------------------------------
 
 const effectOf = (l: Layer, ref: string) => {
   const e = l.effects.find((x) => x.id === ref) ?? l.effects.find((x) => x.type === ref || LAYER_EFFECTS[x.type]?.title.toLowerCase() === ref.toLowerCase());
@@ -873,9 +876,35 @@ const effectOf = (l: Layer, ref: string) => {
   return e;
 };
 
+/** An effect setting as an agent gives it: a number, or for a colour "#rrggbb" or [r, g, b, a] (0–1). */
+const settingValue = z.union([z.number(), z.string(), z.array(z.number()).min(3).max(4)]);
+
+/** Check a value fits the setting (a number for numbers, a colour for colours) and convert it. */
+const toSetting = (type: string, key: string, v: z.infer<typeof settingValue>): PropValue => {
+  const sp = LAYER_EFFECTS[type]?.params.find((x) => x.key === key);
+  if (sp && isColorSetting(sp)) {
+    const c = typeof v === "string" ? hexToRgba(v) : Array.isArray(v) ? [v[0]!, v[1]!, v[2]!, v[3] ?? 1] : null;
+    if (!c) throw new AgentError("invalid_params", `"${key}" is a colour: give "#rrggbb" or [r, g, b, a] with values 0–1.`);
+    return c.map((x) => Math.min(1, Math.max(0, x)));
+  }
+  if (typeof v !== "number") throw new AgentError("invalid_params", `"${key}" takes a number${sp ? ` (${sp.min}–${sp.max}${sp.unit ? ` ${sp.unit}` : ""})` : ""}.`);
+  return v;
+};
+
+/** Starting values for a new effect; an unknown setting is an error, never ignored. */
+const toSettings = (type: string, values: Readonly<Record<string, z.infer<typeof settingValue>>> = {}): Record<string, PropValue> => {
+  const keys = (LAYER_EFFECTS[type]?.params ?? []).map((x) => x.key);
+  return Object.fromEntries(
+    Object.entries(values).map(([k, v]) => {
+      if (!keys.includes(k)) throw new AgentError("invalid_params", `${LAYER_EFFECTS[type]?.title ?? type} has no setting "${k}" (it has ${keys.join(", ")}).`);
+      return [k, toSetting(type, k, v)];
+    }),
+  );
+};
+
 method({
   name: "layers.effects",
-  summary: `A layer's effects with every setting: value now, range, and keyframes if animated. Types: ${Object.entries(LAYER_EFFECTS).map(([t, e]) => `${t} (${e.title}: ${e.params.map((x) => x.key).join(", ")})`).join("; ")}.`,
+  summary: `A layer's effects with every setting: value now, range (or kind "color": [r, g, b, a] 0–1), and keyframes if animated. Types: ${Object.entries(LAYER_EFFECTS).map(([t, e]) => `${t} (${e.title}: ${e.params.map((x) => x.key).join(", ")})`).join("; ")}.`,
   params: z.object({ scene: z.string().optional(), layer: z.string() }),
   run: (p) => {
     const l = layerOf(sceneId(p.scene), p.layer);
@@ -885,7 +914,8 @@ method({
       enabled: e.enabled,
       params: Object.entries(e.params).map(([k, prop]) => {
         const sp = LAYER_EFFECTS[e.type]?.params.find((x) => x.key === k);
-        return { key: k, label: sp?.label ?? k, value: prop.value, min: sp?.min, max: sp?.max, unit: sp?.unit ?? null, keyframes: (prop.keyframes ?? []).map((kf) => ({ seconds: r2(timeToSeconds(kf.t)), value: kf.v })) };
+        const range = sp && !isColorSetting(sp) ? sp : undefined;
+        return { key: k, label: sp?.label ?? k, kind: sp && isColorSetting(sp) ? "color" : "number", value: prop.value, min: range?.min, max: range?.max, unit: range?.unit ?? null, keyframes: (prop.keyframes ?? []).map((kf) => ({ seconds: r2(timeToSeconds(kf.t)), value: kf.v })) };
       }),
     }));
   },
@@ -893,13 +923,14 @@ method({
 
 method({
   name: "layers.effectAdd",
-  summary: "Add an effect to a layer (gaussian-blur, glow, melt) with optional starting values for its settings.",
-  params: z.object({ scene: z.string().optional(), layer: z.string(), type: z.enum(Object.keys(LAYER_EFFECTS) as [string, ...string[]]), values: z.record(z.string(), z.number()).optional() }),
+  summary: `Add an effect to a layer (${Object.keys(LAYER_EFFECTS).join(", ")}) with optional starting values for its settings (colours as "#rrggbb").`,
+  params: z.object({ scene: z.string().optional(), layer: z.string(), type: z.enum(Object.keys(LAYER_EFFECTS) as [string, ...string[]]), values: z.record(z.string(), settingValue).optional() }),
   mutates: true,
+  example: { layer: "Logo", type: "glitch", values: { amount: 0.8, frequency: 4 } },
   run: (p, ctx) => {
     const sid = sceneId(p.scene);
     const l = layerOf(sid, p.layer);
-    const e = newEffect(p.type, newId("fx"), p.values ?? {});
+    const e = newEffect(p.type, newId("fx"), toSettings(p.type, p.values));
     ctx.edit(() => st().apply({ type: "layer.update", args: { compId: sid, layerId: l.id, changes: { effects: [...l.effects, e] } } }, { label: `Add ${LAYER_EFFECTS[p.type]!.title.toLowerCase()}` }));
     return { layer: l.id, effect: e.id, revision: currentRevision() };
   },
@@ -907,8 +938,8 @@ method({
 
 method({
   name: "layers.effectSet",
-  summary: "Change an effect setting (effect by id or type). With seconds: set it at that time as a keyframe (animating it). Also turn the effect on/off.",
-  params: z.object({ scene: z.string().optional(), layer: z.string(), effect: z.string(), param: z.string().optional(), value: z.number().optional(), seconds: z.number().min(0).optional(), enabled: z.boolean().optional() }),
+  summary: "Change an effect setting (effect by id or type; colours as \"#rrggbb\"). With seconds: set it at that time as a keyframe (animating it). Also turn the effect on/off.",
+  params: z.object({ scene: z.string().optional(), layer: z.string(), effect: z.string(), param: z.string().optional(), value: settingValue.optional(), seconds: z.number().min(0).optional(), enabled: z.boolean().optional() }),
   mutates: true,
   example: { layer: "Melt — Window", effect: "melt", param: "amount", seconds: 3, value: 1 },
   run: (p, ctx) => {
@@ -921,12 +952,13 @@ method({
       const prop = e.params[p.param];
       if (!prop) throw new AgentError("not_found", `The effect has no setting "${p.param}" (it has ${Object.keys(e.params).join(", ")}).`);
       const path = `effects.${e.id}.params.${p.param}`;
+      const value = toSetting(e.type, p.param, p.value);
       if (p.seconds !== undefined) {
         const t = snapToFrame(secondsToTime(p.seconds), project().compositions[sid]!.frameRate);
         let next: AnimProp = prop.keyframes?.length ? prop : toggleKeyAt(prop, l.inPoint);
-        next = setPropAt(next, t, p.value);
+        next = setPropAt(next, t, value);
         ctx.edit(() => st().apply({ type: "prop.setAnimation", args: { compId: sid, layerId: l.id, path, keyframes: [...(next.keyframes ?? [])] } }, { label: "Animate effect setting" }));
-      } else ctx.edit(() => st().apply({ type: "prop.set", args: { compId: sid, layerId: l.id, path, value: p.value! } }, { label: "Change effect setting" }));
+      } else ctx.edit(() => st().apply({ type: "prop.set", args: { compId: sid, layerId: l.id, path, value } }, { label: "Change effect setting" }));
     }
     return { layer: l.id, effect: e.id, revision: currentRevision() };
   },
@@ -955,6 +987,36 @@ method({
     const ids = areaIds(p.areas);
     const layerId = ctx.edit(() => meltAreas(ids));
     if (!layerId) throw new AgentError("rejected", "Melt needs the building photo and at least one area.");
+    return { layer: layerId, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "effects.ripple",
+  summary: `Ripple areas: their own photo is projected back onto them and a drop lands at their middle when the 6 s layer starts (the playhead); rings of water spread across it, bending the picture, then calm. Procedural, no keyframes needed. Optional starting values; adjust later with layers.effectSet (ripple: ${LAYER_EFFECTS.ripple!.params.map((x) => x.key).join(", ")}).`,
+  params: z.object({ areas: z.array(z.string()).min(1), values: z.record(z.string(), settingValue).optional() }),
+  mutates: true,
+  example: { areas: ["Garage door"], values: { rain: 4, highlightColor: "#9fd8ff" } },
+  run: (p, ctx) => {
+    const ids = areaIds(p.areas);
+    const values = toSettings("ripple", p.values);
+    const layerId = ctx.edit(() => rippleAreas(ids, values));
+    if (!layerId) throw new AgentError("rejected", "Ripple needs the building photo and at least one area.");
+    return { layer: layerId, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "effects.glitch",
+  summary: `Glitch areas: their own photo is projected back onto them for 4 s from the playhead and breaks up in seeded digital bursts (strips jump sideways, colours split, blocks break, flicker, scanlines). Procedural, no keyframes needed. Optional starting values; adjust later with layers.effectSet (glitch: ${LAYER_EFFECTS.glitch!.params.map((x) => x.key).join(", ")}).`,
+  params: z.object({ areas: z.array(z.string()).min(1), values: z.record(z.string(), settingValue).optional() }),
+  mutates: true,
+  example: { areas: ["Window"], values: { amount: 0.8, frequency: 4 } },
+  run: (p, ctx) => {
+    const ids = areaIds(p.areas);
+    const values = toSettings("glitch", p.values);
+    const layerId = ctx.edit(() => glitchAreas(ids, values));
+    if (!layerId) throw new AgentError("rejected", "Glitch needs the building photo and at least one area.");
     return { layer: layerId, revision: currentRevision() };
   },
 });

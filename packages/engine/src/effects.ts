@@ -1,13 +1,22 @@
 /**
  * Effect registry. Every effect declares:
  *   - how far it can draw outside its input (bounds expansion, in layer pixels),
- *   - which frames it reads (temporal dependencies; none for these),
+ *   - which frames it reads (temporal dependencies; none for these — Ripple and Glitch move with the
+ *     layer's own time, but each frame is a pure function of that time),
  *   - the colour space it expects (scene-linear premultiplied for all current effects),
  * and renders as a small graph of GPU passes. Effects never touch projector mapping or output correction.
  */
-import type { PropValue } from "@be/core";
+import { glitchAt, type PropValue, RIPPLE_MAX_DROPS, rippleDrops } from "@be/core";
 import type { Gpu } from "./gpu.ts";
-import { BLUR, DOWNSAMPLE, GLOW_COMBINE, MELT, THRESHOLD } from "./shaders.ts";
+import { BLUR, DOWNSAMPLE, GLITCH, GLOW_COMBINE, MELT, RIPPLE, THRESHOLD } from "./shaders.ts";
+
+/** A rectangle in texture pixels. */
+export interface TexRect {
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
 
 export interface EffectContext {
   readonly gpu: Gpu;
@@ -16,6 +25,10 @@ export interface EffectContext {
   readonly scale: number;
   /** "draft" trades a little smoothness for speed in preview; exports always use "full". */
   readonly quality?: "full" | "draft";
+  /** The layer's own time in seconds (0 at its start), for effects that move by themselves. */
+  readonly time?: number;
+  /** Where the layer's own picture sits in the texture (the rest is padding for effects). Omitted: all of it. */
+  readonly picture?: TexRect;
 }
 
 export interface EffectDef {
@@ -123,7 +136,109 @@ export const MeltEffect: EffectDef = {
   },
 };
 
-const registry = new Map<string, EffectDef>([GaussianBlurEffect, GlowEffect, MeltEffect].map((e) => [e.type, e]));
+const col = (v: PropValue | undefined, d: readonly number[]): readonly number[] => (Array.isArray(v) && v.length >= 3 && v.every((x) => Number.isFinite(x)) ? v : d);
+const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+
+/** Bytes in the RIPPLE shader's uniform block (must match `struct U` in shaders.ts). */
+export const RIPPLE_UNIFORM_BYTES = 48 + 16 * RIPPLE_MAX_DROPS;
+
+/**
+ * The RIPPLE shader's uniforms, in texture pixels (`struct U` in shaders.ts):
+ *   [0..1] texture size, [2] strength, [3] ring spacing, [4] speed per second, [5] fade per pixel,
+ *   [6] rings per drop (0 = keeps rippling), [7] number of drops, [8..11] crest light (sRGB colour,
+ *   amount), then one vec4 per drop: x, y, seconds since it landed, strength.
+ * Null when there's nothing to draw (calm water and no light, or no drop has landed yet).
+ */
+export const rippleUniforms = (p: Readonly<Record<string, PropValue>>, time: number, size: { readonly w: number; readonly h: number }, picture: TexRect, scale: number): Float32Array | null => {
+  const strength = Math.max(0, n(p.strength, 12)) * scale;
+  const light = Math.max(0, n(p.highlight, 0.3));
+  if (strength <= 0 && light <= 0) return null;
+  const drops = rippleDrops(time, { rain: n(p.rain, 0), centerX: n(p.centerX, 50), centerY: n(p.centerY, 50), seed: n(p.seed, 1) });
+  if (!drops.length) return null;
+  // "Fades with distance" at 1 leaves e^-4 (2%) of a wave by the time it reaches the picture's corners from its middle.
+  const reach = Math.max(1, Math.hypot(picture.w, picture.h) / 2);
+  const c = col(p.highlightColor, [1, 1, 1, 1]);
+  const u = new Float32Array(RIPPLE_UNIFORM_BYTES / 4);
+  u.set([size.w, size.h, strength, Math.max(1, n(p.wavelength, 80) * scale), Math.max(0.01, n(p.speed, 200) * scale), (clamp(n(p.decay, 0.3), 0, 1) * 4) / reach, Math.max(0, Math.round(n(p.rings, 0))), drops.length]);
+  u.set([clamp(c[0]!, 0, 1), clamp(c[1]!, 0, 1), clamp(c[2]!, 0, 1), light * clamp(c[3] ?? 1, 0, 1)], 8);
+  drops.forEach((d, i) => u.set([picture.x + d.x * picture.w, picture.y + d.y * picture.h, d.age, d.strength], 12 + i * 4));
+  return u;
+};
+
+/**
+ * Ripple: rings of water spread from a point (or from raindrops) and bend the picture under them,
+ * with optional light on the crests. Moves with the layer's own time; the drops come from core's
+ * rippleDrops, so a frame always looks the same.
+ */
+export const RippleEffect: EffectDef = {
+  type: "ripple",
+  title: "Ripple",
+  expand: (p) => Math.max(0, n(p.strength, 12)),
+  render: (input, p, ctx) => {
+    const { gpu, encoder } = ctx;
+    const u = rippleUniforms(p, ctx.time ?? 0, { w: input.width, h: input.height }, ctx.picture ?? { x: 0, y: 0, w: input.width, h: input.height }, ctx.scale);
+    if (!u) return input;
+    const out = gpu.acquire(input.width, input.height, input.format, "ripple");
+    gpu.pass(encoder, RIPPLE, out, [input.createView(), gpu.samplerLinear, { buffer: gpu.uniform(u) }]);
+    return out;
+  },
+};
+
+/** Bytes in the GLITCH shader's uniform block (must match `struct U` in shaders.ts). */
+export const GLITCH_UNIFORM_BYTES = 48;
+
+/**
+ * The GLITCH shader's uniforms, in texture pixels (`struct U` in shaders.ts): f32 [0..1] texture size,
+ * [2] strength now, [3] strip height, [4] jump, [5] colour split, [6] blocks, [7] scanline darkness,
+ * [8] scanline spacing, [9] scanline roll, [10] brightness; u32 [11] this moment's pattern key.
+ * Null when the picture stays clean (Amount 0, or between bursts with no scanlines).
+ */
+export const glitchUniforms = (p: Readonly<Record<string, PropValue>>, time: number, size: { readonly w: number; readonly h: number }, scale: number): ArrayBuffer | null => {
+  const amount = clamp(n(p.amount, 0.6), 0, 1);
+  if (amount <= 0) return null;
+  const m = glitchAt(time, n(p.frequency, 2), n(p.seed, 1));
+  const strength = amount * m.strength;
+  const scan = clamp(n(p.scanlines, 0.2), 0, 1) * amount;
+  if (strength <= 0 && scan <= 0) return null;
+  // Scanlines a few layer pixels apart (never finer than 2 texture pixels), rolling slowly downward.
+  const period = Math.max(2, Math.max(3, n(p.slice, 24) / 6) * scale);
+  const buf = new ArrayBuffer(GLITCH_UNIFORM_BYTES);
+  new Float32Array(buf, 0, 11).set([
+    size.w,
+    size.h,
+    strength,
+    Math.max(1, n(p.slice, 24) * scale),
+    Math.max(0, n(p.shift, 60)) * scale,
+    Math.max(0, n(p.split, 8)) * scale,
+    clamp(n(p.blocks, 0.3), 0, 1),
+    scan,
+    period,
+    (((time * 12 * scale) % period) + period) % period,
+    strength > 0 ? 1 + (m.flicker - 1) * amount : 1,
+  ]);
+  new Uint32Array(buf, 44, 1)[0] = m.key >>> 0;
+  return buf;
+};
+
+/**
+ * Glitch: in seeded bursts (core's glitchAt), strips of the picture jump sideways, red and blue split
+ * apart, square blocks break up and the brightness flickers; scanlines roll across throughout.
+ */
+export const GlitchEffect: EffectDef = {
+  type: "glitch",
+  title: "Glitch",
+  expand: (p) => Math.max(0, n(p.shift, 60)) + Math.max(0, n(p.split, 8)),
+  render: (input, p, ctx) => {
+    const { gpu, encoder } = ctx;
+    const u = glitchUniforms(p, ctx.time ?? 0, { w: input.width, h: input.height }, ctx.scale);
+    if (!u) return input;
+    const out = gpu.acquire(input.width, input.height, input.format, "glitch");
+    gpu.pass(encoder, GLITCH, out, [input.createView(), gpu.samplerLinear, { buffer: gpu.uniform(u) }]);
+    return out;
+  },
+};
+
+const registry = new Map<string, EffectDef>([GaussianBlurEffect, GlowEffect, MeltEffect, RippleEffect, GlitchEffect].map((e) => [e.type, e]));
 
 export const getEffect = (type: string): EffectDef | undefined => registry.get(type);
 export const registerEffect = (def: EffectDef): void => {

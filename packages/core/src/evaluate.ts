@@ -22,7 +22,7 @@ import type {
 import { unpackPath } from "./model.ts";
 import { refRegions, regionFillPaths } from "./areas.ts";
 import { type ResolvedSim, resolveSim, type SimSettings } from "./simulation.ts";
-import { type Flicks, timeToFrame } from "./time.ts";
+import { FLICKS_PER_SECOND, type Flicks, timeToFrame } from "./time.ts";
 import { type ResolvedScene3D, resolveScene3D } from "./world3d.ts";
 
 export interface EvaluatedMask {
@@ -81,6 +81,8 @@ export interface EvaluatedEffect {
   readonly id: Id;
   readonly type: string;
   readonly params: Readonly<Record<string, PropValue>>;
+  /** The layer's own time in seconds (0 at its start), for effects that move by themselves (Ripple, Glitch). */
+  readonly time: number;
 }
 
 export interface EvaluatedLayer {
@@ -320,12 +322,14 @@ const evaluateLayer = (
       opacity: ev(m.opacity, t, o) / 100,
     };
   });
+  const effectTime = layerLocalTime(l, t) / FLICKS_PER_SECOND;
   const effects: EvaluatedEffect[] = l.effects
     .filter((e) => e.enabled)
     .map((e) => ({
       id: e.id,
       type: e.type,
       params: Object.fromEntries(Object.entries(e.params).map(([k, p]) => [k, ev(p, t, o)])),
+      time: effectTime,
     }));
   const matteLayer = withMatte && l.trackMatte ? comp.layers[l.trackMatte.layerId] : undefined;
   return {

@@ -5,6 +5,7 @@
  */
 import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
+import { PICTURE_EFFECTS } from "./pictureEffects.ts";
 
 export interface CatalogEffect {
   readonly id: string;
@@ -64,6 +65,16 @@ export const CATALOG: readonly CatalogEffect[] = [
     needsAreas: true,
     apply: (ids: readonly string[]) => meltAreas(ids),
   },
+  ...PICTURE_EFFECTS.map((e) => ({
+    id: e.id,
+    title: e.title,
+    description: e.description,
+    group: "Picture effects",
+    keywords: e.id === "ripple-area" ? ["ripple", "water", "drop", "rain", "waves", "puddle", "liquid"] : ["glitch", "digital", "broken", "static", "tv", "distort", "corrupt", "haunted"],
+    kind: "procedural: the picture is distorted by rule, not simulated",
+    needsAreas: true,
+    apply: (ids: readonly string[]) => e.apply(ids),
+  })),
 ];
 
 export const catalogEffect = (id: string): CatalogEffect | undefined => CATALOG.find((e) => e.id === id);
