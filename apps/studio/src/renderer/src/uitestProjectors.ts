@@ -11,7 +11,9 @@ import { usePreviewStats } from "./preview/loop.ts";
 import { applyPlan, computePlan } from "./preview/recommend.ts";
 import { usePreview } from "./preview/settings.ts";
 import { applyEffect } from "./studio/actions.ts";
+import { encodeWav } from "./studio/audioEngine.ts";
 import { getRenderer } from "./studio/engineHost.ts";
+import { addAssetLayer, importMediaFiles } from "./studio/media.ts";
 import { useProjectorPick } from "./studio/projectors.ts";
 import { activeVenue, useStudio } from "./studio/store.ts";
 
@@ -97,6 +99,27 @@ const restorePreview = () => {
 };
 
 /**
+ * A show plays by its soundtrack's clock: give the test show a quiet one (a low tone, 10 s) so the
+ * editor and the outputs follow the sound card, as they do with a real show.
+ */
+const ensureSoundtrack = async () => {
+  const c = st().project!.compositions[st().compId!]!;
+  if (Object.values(c.layers).some((l) => l.source.kind === "audio")) return;
+  const rate = 48000;
+  const ctx = new OfflineAudioContext(2, rate * 10, rate);
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = 220;
+  gain.gain.value = 0.02;
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  const path = `${(await window.be.app.paths()).renders}\\ui-test\\soundtrack.wav`;
+  await window.be.files.writeBinary(path, encodeWav(await ctx.startRendering()));
+  const [asset] = await importMediaFiles([path], { quiet: true });
+  if (asset) addAssetLayer(asset, 0, { select: false });
+};
+
+/**
  * The show-night way: memory as recommended for this computer, the opening seconds prepared to disk
  * (in a folder of the test's own), then these projectors' outputs play them read from disk, following
  * the editor's clock, for 3 s from when it plays. Counted from what each put on its screen: different
@@ -109,6 +132,7 @@ const playOutputs = async (projectors: Projector[]) => {
     applyPlan((await computePlan()).plan);
     usePreview.getState().set({ diskCacheFolder: `${(await window.be.app.paths()).renders}\\ui-test\\preview-cache`, diskCacheGB: 2, playbackMode: "cache", resolution: "full" });
   }
+  await ensureSoundtrack();
   const c = st().project!.compositions[st().compId!]!;
   const fps = c.frameRate.num / c.frameRate.den;
   const call = async (method: string, params: Record<string, unknown>) => {
