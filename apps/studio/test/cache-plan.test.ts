@@ -23,7 +23,11 @@ describe("cache recommendations", () => {
     // 35,340 frames of 1080p at ~0.9 MB each, with room to spare.
     const need = footageCost(show, "full").frames * footageCost(show, "full").diskFrameBytes;
     expect(p.diskCacheGB * GB).toBeGreaterThan(need);
-    expect(p.diskCacheGB).toBeLessThan(60);
+    // Room for several shows on a roomy drive, not just this one (at most 200 GB).
+    expect(p.diskCacheGB * GB).toBeGreaterThanOrEqual(3 * need);
+    expect(p.diskCacheGB).toBeLessThanOrEqual(200);
+    expect(p.diskCacheGB % 10).toBe(0);
+    expect(p.reasons.some((r) => r.includes("room for other shows"))).toBe(true);
     const showFit = p.fits.find((f) => f.name === "The show")!;
     expect(showFit.frames).toBe(35340);
     expect(showFit.diskFits).toBe(true);
@@ -31,6 +35,13 @@ describe("cache recommendations", () => {
     expect(showFit.memorySeconds).toBeGreaterThan(5);
     expect(showFit.memorySeconds).toBeLessThan(15);
     expect(p.reasons.join(" ")).toContain("12 GB");
+  });
+
+  it("with frame sizes measured on this computer and 750 GB free, keeps 80 GB: a tenth of the free space", () => {
+    // About 0.29 MB a 1080p frame measured: the 19-minute show takes about 10 GB.
+    const p = recommendCache({ ramBytes: 31 * GB, gpu: { name: "Card", bytes: 12 * GB }, drive: { path: "D:", freeBytes: 750 * GB, totalBytes: 954 * GB }, diskBytesPerPixel: 0.14, cacheUsedBytes: 10.24 * GB }, [show]);
+    expect(p.resolution).toBe("full");
+    expect(p.diskCacheGB).toBe(80);
   });
 
   it("drops to a smaller preview size when the drive can't spare the whole show at Full", () => {

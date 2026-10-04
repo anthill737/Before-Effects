@@ -136,7 +136,15 @@ export const recommendCache = (hw: Hardware, footage: readonly Footage[]): Cache
     resolution = r;
     if (need * 1.15 <= spare) break;
   }
-  const diskCacheGB = Math.max(10, Math.ceil(Math.min(Math.max(need * 1.15 + 2 * GB, 10 * GB), Math.max(10 * GB, spare)) / GB));
+  // Room for the biggest show (with some to spare) and for other shows and versions of this one:
+  // three times that, or a tenth of the drive's free space, whichever is more (at most 200 GB) —
+  // within what the drive can spare. Large amounts are rounded to tens of GB.
+  const one = need * 1.15 + 2 * GB;
+  const several = Math.min(200 * GB, Math.max(3 * need * 1.15, (drive?.freeBytes ?? 0) * 0.1));
+  const cap = Math.max(10 * GB, spare);
+  let diskGB = Math.ceil(Math.min(Math.max(one, several, 10 * GB), cap) / GB);
+  if (diskGB > 50) diskGB = Math.min(Math.floor(cap / GB), Math.ceil(diskGB / 10) * 10);
+  const diskCacheGB = Math.max(10, diskGB);
   if (biggest) {
     const fitsAll = need * 1.15 <= spare;
     reasons.push(
@@ -145,6 +153,8 @@ export const recommendCache = (hw: Hardware, footage: readonly Footage[]): Cache
         : `${drive ? `${drive.path} has ${sizeText(drive.freeBytes)} free` : "The drive's free space isn't known"}: not enough for every frame of “${biggest.name}” even at Quarter size (about ${sizeText(need)}). Prepared frames past the limit replace the ones used longest ago.`,
     );
     if (resolution !== order[0] && fitsAll) reasons.push(`At ${order[0] === "full" ? "Full" : "Half"} size it would take more disk space than the drive can spare.`);
+    if (diskCacheGB * GB > one * 1.5)
+      reasons.push(`${diskCacheGB} GB leaves room for other shows and other versions of this one too${drive ? ` (about a tenth of the ${sizeText(drive.freeBytes)} free on ${drive.path})` : ""}: their prepared frames stay while you work on this one.`);
   }
   const frameBytes = frameCacheMB * MB;
   const fits = footage.map((f) => fitOf(f, resolution, frameBytes, diskCacheGB * GB, hw.diskBytesPerPixel));
