@@ -5,7 +5,7 @@
  * picture below changes it, and "Show only through" sets a track matte (that layer stops being drawn
  * itself) and clears it. Everything is undone afterwards. Skipped when the house isn't there.
  */
-import { evaluateComp, secondsToTime } from "@be/core";
+import { type BlendMode, evaluateComp, newLayer, secondsToTime, staticProp } from "@be/core";
 import { currentPreviewLoop } from "./preview/PreviewPanel.tsx";
 import { activeVenue, currentComp, useStudio } from "./studio/store.ts";
 
@@ -90,6 +90,55 @@ const change = (a: Float32Array, b: Float32Array, r: { x: number; y: number; w: 
   return { inside: din / Math.max(1, nin), outside: dout / Math.max(1, nout) };
 };
 
+
+// ---- Blend-mode arithmetic (W3C Compositing / Photoshop / After Effects), for checking drawn colours ----
+type C3 = [number, number, number];
+const toLin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const toSrgb = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.max(0, c) ** (1 / 2.4) - 0.055);
+const map3 = (a: C3, f: (x: number, i: number) => number): C3 => [f(a[0], 0), f(a[1], 1), f(a[2], 2)];
+const lum = (c: C3) => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+const clipColor = (c: C3): C3 => {
+  const l = lum(c), n = Math.min(...c), x = Math.max(...c);
+  let o = c;
+  if (n < 0) o = map3(o, (v) => l + ((v - l) * l) / (l - n));
+  if (x > 1) o = map3(o, (v) => l + ((v - l) * (1 - l)) / (x - l));
+  return o;
+};
+const setLum = (c: C3, l: number) => clipColor(map3(c, (v) => v + (l - lum(c))));
+const sat = (c: C3) => Math.max(...c) - Math.min(...c);
+const setSat = (c: C3, sv: number): C3 => {
+  const mn = Math.min(...c), mx = Math.max(...c);
+  return mx <= mn ? [0, 0, 0] : map3(c, (v) => ((v - mn) * sv) / (mx - mn));
+};
+const screen1 = (b: number, x: number) => b + x - b * x;
+const hard1 = (b: number, x: number) => (x <= 0.5 ? b * 2 * x : screen1(b, 2 * x - 1));
+const soft1 = (b: number, x: number) => (x <= 0.5 ? b - (1 - 2 * x) * b * (1 - b) : b + (2 * x - 1) * ((b <= 0.25 ? ((16 * b - 12) * b + 4) * b : Math.sqrt(b)) - b));
+/** What a fully opaque layer of colour `S` over an opaque `B` looks like in each mode (display values 0–1). */
+const expected = (mode: BlendMode, B: C3, S: C3): C3 => {
+  const lin = (f: (b: number, x: number) => number) => map3(B, (b, i) => toSrgb(Math.min(1, f(toLin(b), toLin(S[i]!)))));
+  const each = (f: (b: number, x: number) => number) => map3(B, (b, i) => f(b, S[i]!));
+  switch (mode) {
+    case "normal": return S;
+    case "add": return lin((b, x) => b + x);
+    case "screen": return lin(screen1);
+    case "multiply": return lin((b, x) => b * x);
+    case "overlay": return each((b, x) => hard1(x, b));
+    case "soft-light": return each(soft1);
+    case "hard-light": return each(hard1);
+    case "color-dodge": return each((b, x) => (b <= 0 ? 0 : x >= 1 ? 1 : Math.min(1, b / (1 - x))));
+    case "color-burn": return each((b, x) => (b >= 1 ? 1 : x <= 0 ? 0 : 1 - Math.min(1, (1 - b) / x)));
+    case "darken": return each(Math.min);
+    case "lighten": return each(Math.max);
+    case "difference": return each((b, x) => Math.abs(b - x));
+    case "exclusion": return each((b, x) => b + x - 2 * b * x);
+    case "hue": return setLum(setSat(S, sat(B)), lum(B));
+    case "saturation": return setLum(setSat(B, sat(S)), lum(B));
+    case "color": return setLum(S, lum(B));
+    case "luminosity": return setLum(B, lum(S));
+  }
+};
+const MODES: BlendMode[] = ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity"];
+
 let skip = "";
 const skipped = () => ({ ok: true, note: `SKIPPED: ${skip}` });
 let undoTo = 0;
@@ -168,6 +217,53 @@ export const COMPOSITING_STEPS: Record<string, Step> = {
     const cleared = await until(() => !topLayer().trackMatte);
     const back = drawn().includes(other);
     return { ok: set && hidden && mode && cleared && back, note: `“${l.name}” shown only through “${comp().layers[other]!.name}” (which then isn't drawn itself), where it's dark; cleared, and that layer is drawn again` };
+  },
+  "comp-blend-math": async () => {
+    // Every blend mode drawn over a known colour, measured against the formulas, then undone.
+    const c = comp();
+    const at = st().time;
+    const before = st().history!.transactions().length;
+    const B: C3 = [0.25, 0.5, 0.75];
+    const S: C3 = [0.8, 0.4, 0.2];
+    const solid = (id: string, color: C3, w: number, h: number, x: number, y: number) => {
+      const l = newLayer({ id, name: id, source: { kind: "solid", color: staticProp([...color, 1] as [number, number, number, number]), width: w, height: h }, start: at, duration: secondsToTime(2) });
+      return { ...l, transform: { ...l.transform, anchor: staticProp<[number, number, number]>([w / 2, h / 2, 0]), position: staticProp<[number, number, number]>([x, y, 0], true) } };
+    };
+    const tileW = c.width / (MODES.length + 1);
+    st().apply({ type: "layer.add", args: { compId: c.id, layer: solid("blend-check-back", B, c.width, c.height, c.width / 2, c.height / 2) } });
+    MODES.forEach((mode, i) => {
+      const id = `blend-check-${i}`;
+      st().apply({ type: "layer.add", args: { compId: c.id, layer: { ...solid(id, S, tileW * 0.8, c.height * 0.4, tileW * (i + 1), c.height / 2), blendMode: mode } } });
+    });
+    await sleep(500);
+    const loop = currentPreviewLoop();
+    const shot = await loop?.sample();
+    const off: string[] = [];
+    let worst = 0;
+    if (shot?.pixels) {
+      const k = Math.min(shot.width / c.width, shot.height / c.height);
+      const ox = (shot.width - c.width * k) / 2, oy = (shot.height - c.height * k) / 2;
+      MODES.forEach((mode, i) => {
+        const cx = Math.round(ox + tileW * (i + 1) * k), cy = Math.round(oy + (c.height / 2) * k);
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let y = cy - 3; y <= cy + 3; y++)
+          for (let x = cx - 3; x <= cx + 3; x++) {
+            const q = (y * shot.width + x) * 4;
+            b += shot.pixels![q]!; g += shot.pixels![q + 1]!; r += shot.pixels![q + 2]!; n++;
+          }
+        const want = expected(mode, B, S).map((v) => Math.max(0, Math.min(1, v)) * 255);
+        const err = Math.max(Math.abs(r / n - want[0]!), Math.abs(g / n - want[1]!), Math.abs(b / n - want[2]!));
+        worst = Math.max(worst, err);
+        if (err > 3) off.push(`${mode} ${Math.round(r / n)},${Math.round(g / n)},${Math.round(b / n)} (want ${want.map(Math.round).join(",")})`);
+      });
+    }
+    let undone = 0;
+    while (st().history!.transactions().length > before && undone < 40) {
+      st().undo();
+      undone++;
+    }
+    const gone = !Object.keys(comp().layers).some((id) => id.startsWith("blend-check-"));
+    return { ok: !!shot?.pixels && off.length === 0 && gone, note: shot?.pixels ? `${MODES.length} blend modes drawn over a known colour: worst difference from the formulas ${worst.toFixed(1)}/255${off.length ? `; off: ${off.join("; ")}` : ""}; undone` : "no preview picture" };
   },
   "comp-undo": async () => {
     if (skip) return skipped();
