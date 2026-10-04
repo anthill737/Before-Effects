@@ -22,7 +22,7 @@
  * (glows) compressed into the rest, and alpha as a grey band below, so the "On the house", 3D and
  * projector views stay close to a fresh render. It's a preview: exports always render afresh.
  */
-import { type Affected, frameToTime, type Project, type Rational, timeToFrame } from "@be/core";
+import { type Affected, type ContentKind, frameToTime, framesUsing, type Project, type Rational, timeToFrame } from "@be/core";
 import { COMMON, type FrameRenderer } from "@be/engine";
 import { create } from "zustand";
 import type { DiskCacheStatus, DiskCacheUsage } from "../../../shared/api.ts";
@@ -32,6 +32,19 @@ import type { FrameCache } from "./cache.ts";
 import { usePreview } from "./settings.ts";
 
 const GB = 1024 ** 3;
+
+/**
+ * Builds of the app whose prepared frames a newer build keeps where it draws them the same: the
+ * build a composition's frames were stamped with → the kinds of content drawn differently since.
+ * Frames using any of those kinds are made again; the rest are kept. An entry is added only after
+ * checking that frames of the other kinds come out identical (byte for byte on disk).
+ */
+const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
+  // a3cc304 as installed on 2026-10-04 (its build time is its stamp). Since then 3D scenes, track
+  // mattes, adjustment layers and the newer blend modes draw differently; 2D layers (pictures,
+  // video, text, shapes, effects, masks, the basic blend modes) and simulations don't.
+  "2026-10-04T01:38:20.094Z": ["3d", "track-matte", "adjustment", "blend-mode"],
+};
 const JPEG_QUALITY = 0.92;
 /** Saves at once (enough to keep the graphics card and every compression worker busy), and the pixel memory they may hold while waiting for compression. */
 const MAX_SAVES = 8;
@@ -267,18 +280,32 @@ export class DiskFrames {
     if (!s) {
       const sc: Scope = { id, project: project.id, comp: compId, ready: false, onDisk: new Set(), epoch: 0 };
       this.scopes.set(id, sc);
-      window.be.cache.validate({ project: project.id, comp: compId }, fingerprint(JSON.stringify(project))).then(
-        (keys) => {
-          if (this.scopes.get(id) !== sc) return;
-          for (const k of keys) sc.onDisk.add(k);
-          sc.ready = true;
-        },
-        // Try again a little later (e.g. the folder was briefly unavailable).
-        () => setTimeout(() => this.scopes.get(id) === sc && this.scopes.delete(id), 5000),
-      );
+      const fp = fingerprint(JSON.stringify(project));
+      this.carryOver(project, compId, fp)
+        .then(() => window.be.cache.validate({ project: project.id, comp: compId }, fp))
+        .then(
+          (keys) => {
+            if (this.scopes.get(id) !== sc) return;
+            for (const k of keys) sc.onDisk.add(k);
+            sc.ready = true;
+          },
+          // Try again a little later (e.g. the folder was briefly unavailable).
+          () => setTimeout(() => this.scopes.get(id) === sc && this.scopes.delete(id), 5000),
+        );
       s = sc;
     }
     return s.ready ? s : null;
+  }
+
+  /** Frames an older build made from this same show: keep those it draws the same way (see CARRY_OVER). */
+  private async carryOver(project: Project, compId: string, fp: string): Promise<void> {
+    const scope = { project: project.id, comp: compId };
+    const prev = await window.be.cache.previous(scope).catch(() => null);
+    if (!prev || prev.fingerprint !== fp || prev.build === prev.current) return;
+    const changed = CARRY_OVER[prev.build];
+    if (!changed) return;
+    const drop = framesUsing(project, compId, new Set(changed));
+    await window.be.cache.carryOver(scope, fp, prev.build, drop).catch(() => 0);
   }
 
   /**

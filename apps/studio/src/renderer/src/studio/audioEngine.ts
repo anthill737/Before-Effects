@@ -219,6 +219,13 @@ class PreviewPlayer {
     this.startT = cur;
     this.startCtx = at;
     this.running = true;
+    this.startCount++;
+  }
+
+  private startCount = 0;
+  /** Times sound has started playing (each play, and each resync after drifting from the picture). */
+  get starts(): number {
+    return this.startCount;
   }
 
   stop(): void {

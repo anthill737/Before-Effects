@@ -44,6 +44,8 @@ export interface PrepareJob {
   readonly name: string;
   readonly resolution: PlanResolution;
   readonly quality: "full" | "draft";
+  /** Only these frames of the scene (half-open), when preparing part of it. */
+  readonly frames?: { readonly from: number; readonly to: number };
   state: PrepareState;
   /** Frames on disk at this size (of `total`). */
   done: number;
@@ -110,6 +112,8 @@ export interface PrepareOptions {
   readonly resolution?: PlanResolution;
   /** Raise the disk cache's size when it's too small for every frame and the drive can spare it. */
   readonly raiseDiskLimit?: boolean;
+  /** Only part of it (seconds into the scene): e.g. its most demanding section, to try playback first. */
+  readonly range?: { readonly startSeconds: number; readonly endSeconds: number };
 }
 
 /**
@@ -130,9 +134,16 @@ export const startPreparing = async (opts: PrepareOptions): Promise<PrepareJob> 
   const fps = comp.frameRate.num / comp.frameRate.den;
   const seconds = comp.duration / 705_600_000;
   const cost = footageCost({ name: t.name, width: comp.width, height: comp.height, fps, seconds }, resolution, measuredBytesPerPixel() ?? DEFAULT_DISK_BYTES_PER_PIXEL);
-  const total = Math.max(1, timeToFrame(comp.duration - 1, comp.frameRate) + 1);
+  const all = Math.max(1, timeToFrame(comp.duration - 1, comp.frameRate) + 1);
+  const frames = opts.range
+    ? (() => {
+        const from = Math.min(all - 1, Math.max(0, Math.floor(opts.range.startSeconds * fps)));
+        return { from, to: Math.max(from + 1, Math.min(all, Math.ceil(opts.range.endSeconds * fps))) };
+      })()
+    : undefined;
+  const total = frames ? frames.to - frames.from : all;
   const diskBytes = Math.round(total * cost.diskFrameBytes);
-  const job: PrepareJob = { target: opts.target, compId: t.id, name: t.name, resolution, quality, state: "waiting", done: 0, total, rendered: 0, failedFrames: 0, fps: 0, etaSeconds: null, phase: "Starting", diskBytes, startedAt: Date.now() };
+  const job: PrepareJob = { target: opts.target, compId: t.id, name: t.name, resolution, quality, ...(frames ? { frames } : {}), state: "waiting", done: 0, total, rendered: 0, failedFrames: 0, fps: 0, etaSeconds: null, phase: "Starting", diskBytes, startedAt: Date.now() };
   usePrepare.setState({ job });
 
   // Prepared frames live on disk, and playback uses them at this size from the cache.
@@ -187,6 +198,8 @@ const simsReady = () => Object.values(useSims.getState().status).every((s) => s.
 const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl: { stop: boolean; pause: boolean }) => {
   const startJob = usePrepare.getState().job!;
   const { compId, resolution, quality, total } = startJob;
+  const f0 = startJob.frames?.from ?? 0;
+  const f1 = startJob.frames?.to ?? total;
   const fraction = PLAN_FRACTION[resolution];
   const projectId = useStudio.getState().project?.id;
   const current = () => {
@@ -224,7 +237,8 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
   const ema = (k: keyof typeof timing, ms: number) => (timing[k] = timing[k] ? timing[k] * 0.9 + ms * 0.1 : ms);
   const report = (round: number) => {
     const p = current();
-    const onDisk = disk.framesOnDisk(p, compId, fraction, quality).size;
+    let onDisk = 0;
+    for (const f of disk.framesOnDisk(p, compId, fraction, quality)) if (f >= f0 && f < f1) onDisk++;
     const now = performance.now();
     while (speed.length && now - speed[0]! > 10_000) speed.shift();
     const fps = speed.length > 1 ? (speed.length - 1) / ((now - speed[0]!) / 1000) : 0;
@@ -236,7 +250,7 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
   for (let round = 1; round <= MAX_ROUNDS; round++) {
     update({ state: "preparing" });
     let sliceStart = performance.now();
-    for (let f = 0; f < total; f++) {
+    for (let f = f0; f < f1; f++) {
       if (await halt()) return;
       let p = current();
       if (disk.has(p, compId, f, fraction, quality) || failed.has(f)) continue;

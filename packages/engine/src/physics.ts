@@ -138,8 +138,9 @@ export class PhysicsEngine {
     r.bodies = p.bodies.map((b, i) => {
       const desc = b.kind === "dynamic" ? RAPIER.RigidBodyDesc.dynamic() : b.kind === "kinematic" || b.kind === "released" ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed();
       desc.setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] });
-      // Something fast may come through: keep it from tunnelling through thin pieces.
-      if (b.kind === "dynamic" || b.kind === "released") desc.setCcdEnabled(true);
+      // Thrown things and what they break can move fast: keep them from tunnelling through thin
+      // pieces. Only those, so other motion stays exactly as it was prepared before (same key).
+      if (b.kind === "released" || b.impact) desc.setCcdEnabled(true);
       const body = world.createRigidBody(desc);
       world.createCollider(colliderFor(b), body);
       r.byHandle.set(body.handle, i);

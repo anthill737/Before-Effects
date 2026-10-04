@@ -4,6 +4,7 @@
  */
 import {
   sceneCameraDistance,
+  scene3dResolves,
   balancesPicture,
   type AnimProp,
   areaObject,
@@ -38,7 +39,7 @@ import { usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
 import { addObject, addParticles, ensureModelInfo, layerTime, makeArea3D, makeHouse3D, removeObject, setContain } from "../studio/actions3d.ts";
 import { importMediaFiles } from "../studio/media.ts";
-import { hasAudio } from "../studio/audioEngine.ts";
+import { hasAudio, previewAudio } from "../studio/audioEngine.ts";
 import { pausePreparing, startPreparing, stopPreparing, usePrepare } from "../preview/prepare.ts";
 import { applyPlan, computePlan } from "../preview/recommend.ts";
 import { driveMediaInUse } from "../studio/drive.ts";
@@ -617,6 +618,8 @@ method({
     scene: z.string().optional().describe("target scene: a scene id or name (default the current one)"),
     resolution: z.enum(["full", "half", "quarter"]).optional().describe("default: the preview's size (Auto counts as Full)"),
     raiseDiskLimit: z.boolean().optional(),
+    fromSeconds: z.number().min(0).optional().describe("only part of the scene: from here (seconds)…"),
+    toSeconds: z.number().min(0).optional().describe("…to here"),
   }),
   long: true,
   run: async (p) => {
@@ -624,7 +627,8 @@ method({
     const sceneId = p.scene ? (pr.compositions[p.scene] ? p.scene : Object.values(pr.compositions).find((c) => c.name === p.scene)?.id) : undefined;
     if (p.scene && !sceneId) throw new AgentError("not_found", `No scene "${p.scene}".`);
     try {
-      await startPreparing({ target: p.target, ...(sceneId ? { compId: sceneId } : {}), ...(p.resolution ? { resolution: p.resolution } : {}), raiseDiskLimit: p.raiseDiskLimit ?? true });
+      const range = p.fromSeconds !== undefined || p.toSeconds !== undefined ? { range: { startSeconds: p.fromSeconds ?? 0, endSeconds: p.toSeconds ?? Number.POSITIVE_INFINITY } } : {};
+      await startPreparing({ target: p.target, ...(sceneId ? { compId: sceneId } : {}), ...(p.resolution ? { resolution: p.resolution } : {}), raiseDiskLimit: p.raiseDiskLimit ?? true, ...range });
     } catch (e) {
       throw new AgentError("rejected", String((e as Error)?.message ?? e));
     }
@@ -702,6 +706,10 @@ method({
       cacheFrames: stats.cacheFrames,
       buffering: stats.mode === "preparing" && s.diskCache ? stats.preparing : null,
       diskReadMs: stats.diskReadMs,
+      avSyncMs: stats.avSyncMs,
+      avSyncMaxMs: stats.avSyncMaxMs,
+      audioStarts: previewAudio.starts,
+      scene3dResolves: scene3dResolves(),
       orbit: s.orbit,
       playbackMode: s.playbackMode,
       frameCacheGB: s.cacheBudgetMB / 1024,

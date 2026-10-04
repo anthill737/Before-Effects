@@ -51,6 +51,9 @@ export interface PreviewStats {
   mode: "playing" | "paused" | "preparing";
   /** Reading a frame back from disk: recent average (ms). */
   diskReadMs: number;
+  /** Playing with sound: how far each new picture is from the sound (ms; positive = picture ahead), on average over the last second, and the largest since playback started. */
+  avSyncMs: number | null;
+  avSyncMaxMs: number | null;
   stale: boolean;
   everyFrame: boolean;
 }
@@ -68,6 +71,8 @@ export const usePreviewStats = create<PreviewStats>(() => ({
   preparing: null,
   mode: "paused",
   diskReadMs: 0,
+  avSyncMs: null,
+  avSyncMaxMs: null,
   stale: false,
   everyFrame: false,
 }));
@@ -84,6 +89,10 @@ export class PreviewLoop {
   /** When each distinct composition frame was first shown (redraws of the same frame don't count). */
   private presented: number[] = [];
   private lastPresentedFrame = -1;
+  /** Picture-to-sound offsets of recent new pictures (when, ms) and the largest since playback started. */
+  private sync: Array<[number, number]> = [];
+  private syncMax: number | null = null;
+  private wasPlaying = false;
   private dropped = 0;
   /** Playing prepared frames from disk: playback caught up with the reading, so the next second is read in before going on. */
   private buffering = false;
@@ -197,6 +206,11 @@ export class PreviewLoop {
     let preparing: PreviewStats["preparing"] = null;
 
     if (!playing || this.fixed || s.playbackMode !== "cache") this.buffering = false;
+    if (playing && !this.wasPlaying) {
+      this.sync = [];
+      this.syncMax = null;
+    }
+    this.wasPlaying = playing;
     if (playing && !this.fixed && s.playbackMode === "cache") {
       // Prepare the whole range first, then play smoothly from the cache. A range longer than
       // graphics memory holds needs only what fits from the playhead on; frames prepared on disk
@@ -338,6 +352,12 @@ export class PreviewLoop {
     if (frame !== this.lastPresentedFrame) {
       this.presented.push(now);
       this.lastPresentedFrame = frame;
+      const sound = mode === "playing" ? (this.source.clock?.() ?? null) : null;
+      if (sound !== null) {
+        const ms = ((frameToTime(frame, comp.frameRate) - sound) / 705_600_000) * 1000;
+        this.sync.push([now, ms]);
+        this.syncMax = Math.max(this.syncMax ?? 0, Math.abs(ms));
+      }
     }
     this.onFrame?.(frame);
 
@@ -383,6 +403,12 @@ export class PreviewLoop {
     }
   }
 
+  private syncStats(now: number): { avSyncMs: number | null; avSyncMaxMs: number | null } {
+    while (this.sync.length && now - this.sync[0]![0] > 1000) this.sync.shift();
+    const avg = this.sync.length ? this.sync.reduce((a, [, ms]) => a + Math.abs(ms), 0) / this.sync.length : null;
+    return { avSyncMs: avg === null ? null : Math.round(avg), avSyncMaxMs: this.syncMax === null ? null : Math.round(this.syncMax) };
+  }
+
   private achieved(now: number): number {
     while (this.presented.length && now - this.presented[0]! > 1000) this.presented.shift();
     return this.presented.length;
@@ -407,6 +433,7 @@ export class PreviewLoop {
       preparing,
       mode,
       diskReadMs: Math.round(this.disk.readMs),
+      ...this.syncStats(now),
       stale: false,
       everyFrame,
     });

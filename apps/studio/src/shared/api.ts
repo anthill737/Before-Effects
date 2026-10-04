@@ -389,6 +389,13 @@ export interface BeApi {
     validate(scope: DiskCacheScope, fingerprint: string): Promise<string[]>;
     /** After edits were applied: the frames on disk now belong to this version of the show. */
     stamp(scope: DiskCacheScope, fingerprint: string): Promise<void>;
+    /** What a composition's frames on disk were made from (show fingerprint and app build), and this app's build; null when unknown. */
+    previous(scope: DiskCacheScope): Promise<{ fingerprint: string; build: string; current: string } | null>;
+    /**
+     * Frames made by an older build of the app (`fromBuild`) from this same show: keep them, except
+     * these frames (half-open ranges), drawn differently now. Returns how many frames were kept.
+     */
+    carryOver(scope: DiskCacheScope, fingerprint: string, fromBuild: string, drop: Array<[number, number]>): Promise<number>;
     /** An edit changed these frames (half-open frame ranges): delete them. */
     invalidate(scope: DiskCacheScope, ranges: Array<[number, number]>): Promise<DiskCacheUsage>;
     /** Save a frame (a compact image). Null when it wasn't kept (drive nearly full, or the show changed meanwhile). */

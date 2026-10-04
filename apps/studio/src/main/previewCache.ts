@@ -323,6 +323,36 @@ export const registerPreviewCacheIpc = () => {
     return index.keys(s);
   });
 
+  // A newer build: what a composition's frames were made from, so the window can keep the ones it
+  // still draws the same (renderer/src/preview/diskCache.ts, carry-over).
+  ipcMain.handle("cache:previous", async (_e, scope: DiskCacheScope): Promise<{ fingerprint: string; build: string; current: string } | null> => {
+    await whenReady();
+    const stamp = stamps.get(scopeDir(scope.project, scope.comp));
+    return stamp ? { fingerprint: stamp.fingerprint, build: stamp.build, current: BUILD } : null;
+  });
+
+  // Keep frames an older build made from this same show, except the ones drawn differently now.
+  ipcMain.handle("cache:carryOver", async (_e, scope: DiskCacheScope, fp: string, fromBuild: string, drop: Array<[number, number]>): Promise<number> => {
+    await whenReady();
+    const s = scopeDir(scope.project, scope.comp);
+    const stamp = stamps.get(s);
+    if (!stamp || stamp.fingerprint !== fp || stamp.build !== fromBuild || fromBuild === BUILD) return 0;
+    const r = drop.map(([a, b]) => [Number(a), Number(b)] as const);
+    const before = index.keys(s).length;
+    deleteFiles(index.removeFrames(s, r));
+    for (const k of [...pending.keys()]) {
+      if (!k.startsWith(`${s}/`)) continue;
+      const f = frameOfKey(k.slice(s.length + 1));
+      if (r.some(([a, b]) => f >= a && f < b)) pending.delete(k);
+    }
+    const next = { fingerprint: fp, build: BUILD };
+    stamps.set(s, next);
+    writeStamp(s, next);
+    const kept = index.keys(s).length;
+    log(`preview frames: ${s}: kept ${kept} of ${before} frames made by build ${fromBuild} (drawn the same by ${BUILD}); ${before - kept} to make again`);
+    return kept;
+  });
+
   // After edits: the frames on disk now match this version of the show.
   ipcMain.handle("cache:stamp", async (_e, scope: DiskCacheScope, fp: string) => {
     await whenReady();

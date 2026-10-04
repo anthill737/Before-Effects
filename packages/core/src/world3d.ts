@@ -1011,6 +1011,9 @@ const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: 
 };
 
 const resolveCache = new WeakMap<Scene3D, Array<{ sig: string; venue: unknown; result: ResolvedScene3D }>>();
+let resolves = 0;
+/** How many times a 3D scene has been worked out from scratch (not remembered) in this window (diagnostics: playing prepared frames needs none). */
+export const scene3dResolves = (): number => resolves;
 
 /**
  * Everything needed to draw and simulate a 3D scene shown in a layer `frames` frames long at `fps`.
@@ -1023,6 +1026,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
   const hit = list.find((e) => e.sig === sig && e.venue === venue);
   if (hit) return hit.result;
 
+  resolves++;
   const { canvas, fps, frames } = opts;
   const camDist = sceneCameraDistance(project, scene, opts.venueId);
   const objects: ResolvedObject[] = [];
