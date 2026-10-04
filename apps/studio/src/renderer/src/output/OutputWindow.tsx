@@ -154,7 +154,7 @@ export const OutputWindow = () => {
         const onDisk = s.project && s.compId ? loop.disk.framesOnDisk(s.project, s.compId, 1, "full").size : 0;
         const MB = (n: number) => Math.round(n / 1048576);
         const pool = r.gpu.poolReport();
-        const memoryMB = { frameCache: MB(loop.cache.stats().bytes), media: MB(getMediaHost()?.memoryReport().bytes ?? 0), poolInUse: MB(pool.inUseBytes), poolFree: MB(pool.freeBytes), scene3d: MB(r.scenes.memoryReport().targetBytes) };
+        const memoryMB = { frameCache: MB(loop.cache.stats().bytes), media: MB(getMediaHost()?.memoryReport().bytes ?? 0), poolInUse: MB(pool.inUseBytes), poolFree: MB(pool.freeBytes), scene3d: MB(r.scenes.memoryReport().targetBytes + r.scenes.memoryReport().sceneBytes) };
         const ahead = s.compId ? loop.readyAhead(s.compId, frameNow, 1, "full", 90) : 0;
         const clock = followerClockError();
         window.be.windows.reportOutputFrame({ frame: frameNow, fps: drawn.length, unique: st.achievedFps, skipped: st.dropped, stepsBack: st.stepsBack, causes: { ...loop.causes }, clockErrMs: clock.recentMs, clockErrMaxMs: clock.maxMs, syncMs: st.avSyncMs, syncMaxMs: st.avSyncMaxMs, diskReadMs: st.diskReadMs, framesOnDisk: onDisk, ahead, playing: s.playing, memoryMB });

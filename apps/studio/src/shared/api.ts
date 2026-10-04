@@ -280,7 +280,7 @@ export interface OutputShowing {
   /** Frames ready in its graphics memory from the one it shows on (the editor waits for a second of them before playing). */
   readonly ahead?: number;
   readonly playing?: boolean;
-  /** Graphics memory this output holds, by owner (MB): finished frames, pictures and video, texture pool (lent out / kept), 3D render targets. */
+  /** Graphics memory this output holds, by owner (MB): finished frames, pictures and video, texture pool (lent out / kept), 3D (render targets and built scenes). */
   readonly memoryMB?: { readonly frameCache: number; readonly media: number; readonly poolInUse: number; readonly poolFree: number; readonly scene3d: number };
   /** When the editor received the report (ms epoch). */
   readonly at: number;

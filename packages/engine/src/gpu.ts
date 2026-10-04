@@ -169,6 +169,7 @@ export class Gpu {
     this.free.set(key, list);
     this.freeAt.set(t, performance.now());
     this.freeBytes += texBytes(t);
+    this.flushSoon(Gpu.FREE_AFTER_MS + 100);
   }
 
   /** Free pooled textures that are not in use (call when memory is tight or sizes change). */
@@ -211,12 +212,32 @@ export class Gpu {
     const buf = this.device.createBuffer({ size: Math.max(16, size), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(buf, 0, data instanceof ArrayBuffer ? data : (data.buffer as ArrayBuffer), data instanceof ArrayBuffer ? 0 : data.byteOffset, data.byteLength);
     this.garbage.push(buf);
+    this.flushSoon(IDLE_FLUSH_MS);
     return buf;
   }
 
   /** Destroy a non-pooled resource once the current frame has been submitted. */
   defer(resource: GPUTexture | GPUBuffer): void {
     this.garbage.push(resource);
+    this.flushSoon(IDLE_FLUSH_MS);
+  }
+
+  /**
+   * When nothing is submitted for a moment (an idle window, or between preparation steps), free
+   * what's waiting to be freed: deferred resources (e.g. video frames let go to stay within the
+   * video memory amount) would otherwise stay until the next frame drawn, and returned pool
+   * textures until the next submit after they're due.
+   */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushSoon(ms: number): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      if (!this.garbage.length && !this.freeBytes) return;
+      this.lastTidy = 0;
+      this.submit(this.device.createCommandEncoder());
+      if (this.freeBytes) this.flushSoon(Gpu.FREE_AFTER_MS);
+    }, ms);
   }
 
   /** Submit the frame's commands, then free its transient resources (safe: work already queued keeps them alive). */
@@ -264,6 +285,9 @@ const hashCode = (s: string): number => {
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
   return h;
 };
+
+/** Deferred resources are freed this long after the last one when nothing is submitted (ms). */
+const IDLE_FLUSH_MS = 500;
 
 /** Bytes a texture takes (colour formats used here). */
 const texBytes = (t: GPUTexture): number => t.width * t.height * (t.format === "rgba16float" ? 8 : t.format === "rgba32float" ? 16 : 4) * Math.max(1, t.depthOrArrayLayers);

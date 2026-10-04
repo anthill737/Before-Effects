@@ -699,7 +699,7 @@ export const memoryReport = async () => {
   const physics = r.physics?.memoryReport();
   const disk = loop?.disk.memoryReport();
   const heap = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0;
-  const gpuTotal = (fc?.bytes ?? 0) + (media?.bytes ?? 0) + pool.inUseBytes + pool.freeBytes + scenes.targetBytes + (sims?.bytes ?? 0);
+  const gpuTotal = (fc?.bytes ?? 0) + (media?.bytes ?? 0) + pool.inUseBytes + pool.freeBytes + scenes.targetBytes + scenes.sceneBytes + (sims?.bytes ?? 0);
   return {
     graphicsMB: {
       frameCache: MB(fc?.bytes ?? 0),
@@ -713,6 +713,7 @@ export const memoryReport = async () => {
       poolFreeCount: pool.free,
       scene3dTargets: MB(scenes.targetBytes),
       scene3dTargetCount: scenes.targets,
+      scene3dScenes: MB(scenes.sceneBytes),
       simulationFrames: MB(sims?.bytes ?? 0),
       counted: MB(gpuTotal),
     },

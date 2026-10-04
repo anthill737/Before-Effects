@@ -715,12 +715,42 @@ export class SceneHost implements ExternalSourceRenderer {
   }
 
   /** What the 3D host holds on the graphics card: its render targets, built scenes and three.js's own count. */
-  memoryReport(): { targets: number; targetBytes: number; builtScenes: number; geometries: number; textures: number } {
+  memoryReport(): { targets: number; targetBytes: number; builtScenes: number; sceneBytes: number; geometries: number; textures: number } {
     let targetBytes = 0;
     // Half-float colour with 4x multisampling, plus the resolved copy and depth.
     for (const rt of this.targets.values()) targetBytes += rt.width * rt.height * (8 * 4 + 8 + 4 * 4);
     const info = this.renderer.info.memory as { geometries?: number; textures?: number };
-    return { targets: this.targets.size, targetBytes, builtScenes: this.built.size, geometries: info.geometries ?? 0, textures: info.textures ?? 0 };
+    return { targets: this.targets.size, targetBytes, builtScenes: this.built.size, sceneBytes: this.sceneBytes(), geometries: info.geometries ?? 0, textures: info.textures ?? 0 };
+  }
+
+  /**
+   * What the built scenes hold on the graphics card, each geometry and picture counted once (scenes
+   * can share them): vertex data, pictures on surfaces (with their smaller copies), shadow maps
+   * (a point light's six). Estimated from their sizes.
+   */
+  private sceneBytes(): number {
+    const seen = new Set<object>();
+    let bytes = 0;
+    const picture = (t: THREE.Texture) => {
+      if (seen.has(t)) return;
+      seen.add(t);
+      const img = t.image as { width?: number; height?: number } | null;
+      if (img?.width && img.height) bytes += img.width * img.height * 4 * (t.generateMipmaps ? 4 / 3 : 1);
+    };
+    for (const b of this.built.values())
+      b.scene.traverse((o) => {
+        const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (g && !seen.has(g)) {
+          seen.add(g);
+          for (const a of Object.values(g.attributes)) bytes += (a as THREE.BufferAttribute).array.byteLength;
+          if (g.index) bytes += g.index.array.byteLength;
+        }
+        const mats = (o as THREE.Mesh).material;
+        for (const m of mats ? [mats].flat() : []) for (const v of Object.values(m)) if ((v as THREE.Texture | null)?.isTexture) picture(v as THREE.Texture);
+        const l = o as THREE.Light & { shadow?: THREE.LightShadow };
+        if (l.isLight && l.castShadow && l.shadow?.map) bytes += l.shadow.mapSize.x * l.shadow.mapSize.y * 4 * ((l as THREE.PointLight).isPointLight ? 6 : 1);
+      });
+    return bytes;
   }
 
   /** Free render targets and built scenes nobody has drawn for a while (at most once a second). */
