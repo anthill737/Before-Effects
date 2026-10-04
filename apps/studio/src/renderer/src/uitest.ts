@@ -27,6 +27,7 @@ import { BLENDER_STEPS } from "./uitestBlender.ts";
 import { EFFECT_STEPS } from "./uitestEffects.ts";
 import { COMPOSITING_STEPS } from "./uitestCompositing.ts";
 import { PROJECTOR_STEPS } from "./uitestProjectors.ts";
+import { STEPS_3D } from "./uitest3d.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn: () => boolean, timeout = 5000) => {
@@ -352,7 +353,7 @@ const STEPS: Record<string, () => Promise<Result>> = {
   },
 };
 
-Object.assign(STEPS, PHOTO_STEPS, MEDIA_STEPS, ASSISTANT_STEPS, RENDER_STEPS, SIM_STEPS, AE_STEPS, WORKFLOW_A_STEPS, WORKFLOW_B_STEPS, PERF_STEPS, HEIC_STEPS, HOUSE_STEPS, BLENDER_STEPS, EFFECT_STEPS, COMPOSITING_STEPS, PROJECTOR_STEPS, KEY_STEPS);
+Object.assign(STEPS, PHOTO_STEPS, MEDIA_STEPS, ASSISTANT_STEPS, RENDER_STEPS, SIM_STEPS, AE_STEPS, WORKFLOW_A_STEPS, WORKFLOW_B_STEPS, PERF_STEPS, HEIC_STEPS, HOUSE_STEPS, BLENDER_STEPS, EFFECT_STEPS, COMPOSITING_STEPS, PROJECTOR_STEPS, KEY_STEPS, STEPS_3D);
 
 // Last: every preview view draws without a single WebGPU validation error (shader typos, bad pipelines).
 STEPS["no-gpu-errors"] = async () => {
