@@ -700,6 +700,8 @@ method({
       dropped: stats.dropped,
       mode: stats.mode,
       cacheFrames: stats.cacheFrames,
+      buffering: stats.mode === "preparing" && s.diskCache ? stats.preparing : null,
+      diskReadMs: stats.diskReadMs,
       orbit: s.orbit,
       playbackMode: s.playbackMode,
       frameCacheGB: s.cacheBudgetMB / 1024,

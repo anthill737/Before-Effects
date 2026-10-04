@@ -1151,7 +1151,8 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
     : null;
   const result: ResolvedScene3D = { scene, canvas, cameraDistance: camDist, ...(venue?.referenceAssetId ? { photoAssetId: venue.referenceAssetId } : {}), objects, physics, fps };
   list.push({ sig, venue, result });
-  if (list.length > 4) list.shift();
+  // A scene shown by several layers of different lengths is resolved once for each; keep them all.
+  if (list.length > 16) list.shift();
   resolveCache.set(scene, list);
   return result;
 };

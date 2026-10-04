@@ -49,6 +49,12 @@ export class FrameCache {
     return this.entries.has(this.key(compId, frame, fraction, quality));
   }
 
+  /** Make a frame the first to go when room is needed (played from disk: it's behind the playhead now, and the frames read ahead matter more). */
+  demote(compId: string, frame: number, fraction: number, quality: string): void {
+    const e = this.entries.get(this.key(compId, frame, fraction, quality));
+    if (e) e.used = 0;
+  }
+
   /** Like get(), without counting as a use (saving a frame to disk isn't watching it). */
   peek(compId: string, frame: number, fraction: number, quality: string): GPUTexture | null {
     return this.entries.get(this.key(compId, frame, fraction, quality))?.tex ?? null;

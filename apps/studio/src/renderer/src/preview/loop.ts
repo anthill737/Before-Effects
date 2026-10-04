@@ -49,6 +49,8 @@ export interface PreviewStats {
   cacheBudgetMB: number;
   preparing: { done: number; total: number } | null;
   mode: "playing" | "paused" | "preparing";
+  /** Reading a frame back from disk: recent average (ms). */
+  diskReadMs: number;
   stale: boolean;
   everyFrame: boolean;
 }
@@ -65,6 +67,7 @@ export const usePreviewStats = create<PreviewStats>(() => ({
   cacheBudgetMB: 1536,
   preparing: null,
   mode: "paused",
+  diskReadMs: 0,
   stale: false,
   everyFrame: false,
 }));
@@ -82,6 +85,8 @@ export class PreviewLoop {
   private presented: number[] = [];
   private lastPresentedFrame = -1;
   private dropped = 0;
+  /** Playing prepared frames from disk: playback caught up with the reading, so the next second is read in before going on. */
+  private buffering = false;
   private slow = 0;
   private fast = 0;
   private gpuPending = false;
@@ -191,6 +196,7 @@ export class PreviewLoop {
     let mode: PreviewStats["mode"] = playing ? "playing" : "paused";
     let preparing: PreviewStats["preparing"] = null;
 
+    if (!playing || this.fixed || s.playbackMode !== "cache") this.buffering = false;
     if (playing && !this.fixed && s.playbackMode === "cache") {
       // Prepare the whole range first, then play smoothly from the cache. A range longer than
       // graphics memory holds needs only what fits from the playhead on; frames prepared on disk
@@ -204,10 +210,19 @@ export class PreviewLoop {
       const from = fits ? f0 : Math.min(f1 - 1, Math.max(f0, timeToFrame(t, comp.frameRate)));
       const missing: number[] = [];
       const count = Math.min(n, fit);
+      // Frames on disk play from graphics memory, like a video player: before playing, and whenever
+      // playback catches up with the reading, picture and sound wait while the next second is read
+      // in — rather than skipping frames, or rendering ones that are already prepared.
+      const second = !fits && useDisk ? Math.min(count, Math.max(2, Math.round(fps))) : 0;
+      let ready = 0;
+      while (ready < second && this.cache.has(compId, f0 + ((from - f0 + ready) % n), fraction, quality)) ready++;
+      if (ready < Math.min(second, 2)) this.buffering = true;
+      else if (ready >= second) this.buffering = false;
+      const lead = this.buffering ? second : 0;
       for (let k = 0; k < count; k++) {
         const f = f0 + ((from - f0 + k) % n);
         if (this.cache.has(compId, f, fraction, quality)) continue;
-        if (!fits && useDisk && this.disk.has(project, compId, f, fraction, quality)) continue;
+        if (!fits && useDisk && k >= lead && this.disk.has(project, compId, f, fraction, quality)) continue;
         missing.push(f);
       }
       if (missing.length) {
@@ -228,8 +243,8 @@ export class PreviewLoop {
           if (this.renderer.lastFrameIncomplete || !this.cache.put(compId, f, fraction, quality, content)) this.renderer.gpu.defer(content);
           else if (useDisk) this.disk.offer(project, compId, f, fraction, quality, content);
         }
-        preparing = { done: count - missing.length - fromDisk, total: count };
-        if (this.cache.stats().bytes >= this.cache.stats().budget * 0.89 && (missing.length || fromDisk)) {
+        preparing = this.buffering ? { done: ready, total: second } : { done: count - missing.length - fromDisk, total: count };
+        if (!this.buffering && this.cache.stats().bytes >= this.cache.stats().budget * 0.89 && (missing.length || fromDisk)) {
           // The range doesn't fit in the cache budget; play what fits in real time.
           preparing = null;
           mode = "playing";
@@ -279,8 +294,11 @@ export class PreviewLoop {
 
     if (useDisk && mode === "playing") this.readAhead(project, compId, frame, fraction, quality, range);
     let content = cacheable ? this.cache.get(compId, frame, fraction, quality) : null;
-    // On disk: keep the previous picture until it's read (usually a few hundredths of a second), unless that takes too long.
-    if (!content && useDisk && this.disk.fetch(this.cache, project, compId, frame, fraction, quality, true) === "reading" && this.disk.readingFor(project, compId, frame, fraction, quality) < DISK_WAIT_MS) {
+    // Playing from disk, a frame shown is behind the playhead: it goes before the frames read ahead.
+    if (content && useDisk && mode === "playing" && this.disk.has(project, compId, frame, fraction, quality)) this.cache.demote(compId, frame, fraction, quality);
+    // On disk: keep the previous picture until it's read (usually a few hundredths of a second), unless that takes too long
+    // (while buffering it's always read: rendering a prepared frame again is slower).
+    if (!content && useDisk && this.disk.fetch(this.cache, project, compId, frame, fraction, quality, true) === "reading" && (this.buffering || this.disk.readingFor(project, compId, frame, fraction, quality) < DISK_WAIT_MS)) {
       this.report(fps, size, fraction, mode, preparing, false);
       return;
     }
@@ -342,14 +360,20 @@ export class PreviewLoop {
     this.report(fps, size, fraction, mode, preparing, playing && !this.fixed && !s.frameSkipping);
   }
 
-  /** While playing from disk: start reading the next frames (looping round the range), as many as a quarter of the frame cache holds. */
+  /**
+   * While playing from disk: start reading the next frames (looping round the range), up to three
+   * seconds or half the frame cache. Playing as it comes (not "prepare first"), frames playback will
+   * have passed before a read could finish aren't read.
+   */
   private readAhead(project: Project, compId: string, frame: number, fraction: number, quality: string, range: { start: Flicks; end: Flicks }) {
     const comp = project.compositions[compId]!;
+    const fps = rateToFps(comp.frameRate);
     const f0 = timeToFrame(range.start, comp.frameRate);
     const f1 = Math.max(f0 + 1, timeToFrame(range.end - 1, comp.frameRate) + 1);
     const frameBytes = Math.max(1, comp.width * fraction * comp.height * fraction * 8);
-    const ahead = Math.max(2, Math.min(24, Math.floor((this.cache.stats().budget * 0.25) / frameBytes)));
-    for (let k = 1; k <= ahead; k++) {
+    const ahead = Math.max(2, Math.min(Math.round(fps * 3), Math.floor((this.cache.stats().budget * 0.5) / frameBytes)));
+    const late = usePreview.getState().playbackMode === "cache" ? 1 : Math.max(1, Math.ceil((this.disk.readMs * fps) / 1000));
+    for (let k = late; k <= ahead; k++) {
       let f = frame + k;
       if (f >= f1) {
         if (!this.source.loop()) break;
@@ -382,6 +406,7 @@ export class PreviewLoop {
       cacheBudgetMB: Math.round(c.budget / 1048576),
       preparing,
       mode,
+      diskReadMs: Math.round(this.disk.readMs),
       stale: false,
       everyFrame,
     });

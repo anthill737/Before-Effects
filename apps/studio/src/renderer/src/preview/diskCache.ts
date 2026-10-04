@@ -36,8 +36,8 @@ const JPEG_QUALITY = 0.92;
 /** Saves at once (enough to keep the graphics card and every compression worker busy), and the pixel memory they may hold while waiting for compression. */
 const MAX_SAVES = 8;
 const MAX_STAGING = 256 * 1024 ** 2;
-/** Reads at once (a frame needed right now always starts). */
-const MAX_READS = 6;
+/** Reads at once (a frame needed right now always starts): enough to read ahead faster than playback. */
+const MAX_READS = 12;
 /** Frames remembered for saving later. */
 const MAX_BACKLOG = 4096;
 
@@ -192,6 +192,12 @@ export class DiskFrames {
     return this.saves.size;
   }
 
+  private readAvg = 0;
+  /** How long reading a frame back takes, from asking for it to its being in graphics memory (ms, recent average). */
+  get readMs(): number {
+    return this.readAvg;
+  }
+
   get enabled(): boolean {
     return !this.disposed && usePreview.getState().diskCache && !!window.be?.cache;
   }
@@ -302,6 +308,7 @@ export class DiskFrames {
 
   private async read(cache: FrameCache, s: Scope, epoch: number, key: string, frame: number, fraction: number, quality: string, aspect: number): Promise<void> {
     const current = () => s.epoch === epoch && this.scopes.get(s.id) === s;
+    const t0 = performance.now();
     try {
       const bytes = await window.be.cache.get({ project: s.project, comp: s.comp }, key);
       if (!bytes) {
@@ -325,6 +332,8 @@ export class DiskFrames {
         gpu.defer(raw);
         gpu.submit(enc);
         if (!cache.put(s.comp, frame, fraction, quality, tex)) tex.destroy();
+        const ms = performance.now() - t0;
+        this.readAvg = this.readAvg ? this.readAvg * 0.9 + ms * 0.1 : ms;
       } finally {
         bmp.close();
       }
