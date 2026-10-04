@@ -37,6 +37,7 @@ import {
 } from "@be/core";
 import { z } from "zod";
 import { addRegion } from "../space/actions.ts";
+import { adjustmentLayer } from "../studio/adjust.ts";
 import { KIND_CHOICES } from "../space/traceStore.ts";
 import { recipeOpsFor } from "../studio/actions.ts";
 import { assignMedia, refForAreas, replaceMedia } from "../studio/assign.ts";
@@ -756,6 +757,7 @@ method({
 
 const LAYER_PROPS: Record<string, string> = { opacity: "transform.opacity", position: "transform.position", scale: "transform.scale", rotation: "transform.rotation", anchor: "transform.anchor", volume: "audio.volume", pan: "audio.pan" };
 
+const BLEND_MODES = ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity"] as const;
 const layerOf = (sid: string, ref: string) => {
   const c = project().compositions[sid]!;
   const l = c.layers[ref] ?? Object.values(c.layers).find((x) => x.name.toLowerCase() === ref.toLowerCase());
@@ -796,6 +798,10 @@ method({
         scale: l.transform.scale.value,
         rotation: l.transform.rotation.value,
         animated,
+        blend: l.blendMode,
+        trackMatte: l.trackMatte ? { layer: l.trackMatte.layerId, mode: l.trackMatte.mode } : null,
+        masks: l.masks.length,
+        effects: l.effects.length,
         madeBy: l.generatedBy?.recipeInstanceId ?? null,
       };
     });
@@ -804,8 +810,18 @@ method({
 
 method({
   name: "layers.update",
-  summary: "Show/hide, rename or retime a layer (seconds).",
-  params: z.object({ scene: z.string().optional(), layer: z.string(), name: z.string().optional(), enabled: z.boolean().optional(), fromSeconds: z.number().min(0).optional(), toSeconds: z.number().min(0).optional(), blend: z.enum(["normal", "add", "screen", "multiply"]).optional() }),
+  summary:
+    "Show/hide, rename or retime a layer (seconds); how it mixes with what's below (blend: any After Effects blend mode); and the layer it shows only through (trackMatte: {layer, mode: alpha | alpha-inverted | luma | luma-inverted}, or null) — that layer then isn't drawn itself.",
+  params: z.object({
+    scene: z.string().optional(),
+    layer: z.string(),
+    name: z.string().optional(),
+    enabled: z.boolean().optional(),
+    fromSeconds: z.number().min(0).optional(),
+    toSeconds: z.number().min(0).optional(),
+    blend: z.enum(BLEND_MODES).optional(),
+    trackMatte: z.object({ layer: z.string(), mode: z.enum(["alpha", "alpha-inverted", "luma", "luma-inverted"]).optional() }).nullable().optional(),
+  }),
   mutates: true,
   run: (p, ctx) => {
     const sid = sceneId(p.scene);
@@ -816,8 +832,30 @@ method({
     if (p.fromSeconds !== undefined) changes.inPoint = secondsToTime(p.fromSeconds);
     if (p.toSeconds !== undefined) changes.outPoint = secondsToTime(p.toSeconds);
     if (p.blend) changes.blendMode = p.blend;
+    if (p.trackMatte === null) changes.trackMatte = null;
+    else if (p.trackMatte) changes.trackMatte = { layerId: layerOf(sid, p.trackMatte.layer).id, mode: p.trackMatte.mode ?? l.trackMatte?.mode ?? "alpha" };
     ctx.edit(() => st().apply({ type: "layer.update", args: { compId: sid, layerId: l.id, changes } }, { label: `Change “${l.name}”` }));
     return { layer: l.id, revision: currentRevision() };
+  },
+});
+
+method({
+  name: "layers.addAdjustment",
+  summary:
+    "Add an adjustment layer on top of a scene: effects added to it (layers.effectAdd) change everything below it — over the whole picture, or only within `areas` (names or ids). Returns the layer id.",
+  params: z.object({ scene: z.string().optional(), name: z.string().optional(), areas: z.array(z.string()).optional(), fromSeconds: z.number().min(0).optional(), toSeconds: z.number().min(0).optional() }),
+  mutates: true,
+  example: { areas: ["Window"], fromSeconds: 0, toSeconds: 8 },
+  run: (p, ctx) => {
+    const sid = sceneId(p.scene);
+    const c = project().compositions[sid]!;
+    const from = secondsToTime(p.fromSeconds ?? 0);
+    const to = p.toSeconds !== undefined ? secondsToTime(p.toSeconds) : c.duration;
+    if (to <= from) throw new AgentError("invalid_params", "toSeconds must be after fromSeconds.");
+    const regionIds = p.areas?.length ? areaIds(p.areas) : [];
+    const layer = adjustmentLayer(c, { ...(p.name ? { name: p.name } : {}), regionIds, from, to: Math.min(c.duration, to) });
+    ctx.edit(() => st().apply({ type: "layer.add", args: { compId: sid, layer } }, { label: layer.name }));
+    return { layer: layer.id, name: layer.name, areas: regionIds, revision: currentRevision() };
   },
 });
 

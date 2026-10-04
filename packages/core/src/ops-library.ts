@@ -220,6 +220,8 @@ const layerChanges = z
     outPoint: z.number().int(),
     stretch: z.number().finite().refine((x) => x !== 0, "stretch cannot be 0"),
     parentId: z.string().nullable(),
+    /** Shown only through another layer of the same scene (that layer isn't drawn itself); null: shown whole. */
+    trackMatte: z.object({ layerId: z.string(), mode: z.enum(["alpha", "alpha-inverted", "luma", "luma-inverted"]) }).nullable(),
     label: z.string(),
     /** The whole clipping stack (masks) or effect stack, replaced as a unit. */
     masks: z.array(obj<Mask>("mask")),
@@ -231,13 +233,23 @@ export const layerUpdate = defineOp({
   type: "layer.update",
   title: "Change layer",
   description:
-    "Change a layer's name, visibility, solo, lock, blend mode, timing (startTime/inPoint/outPoint in flicks), speed (stretch), parent, or replace its masks or effects.",
+    "Change a layer's name, visibility, solo, lock, blend mode, timing (startTime/inPoint/outPoint in flicks), speed (stretch), parent, track matte (another layer it's shown through, or null), or replace its masks or effects.",
   args: z.object({ compId: id, layerId: id, changes: layerChanges }),
   apply: (d, a, ctx) => {
     const l = layerOf(d, a.compId, a.layerId);
     if (l.locked && a.changes.locked !== false) assertUnlocked(l);
-    const { parentId, ...rest } = a.changes;
+    const { parentId, trackMatte, ...rest } = a.changes;
     Object.assign(l, rest);
+    if (trackMatte !== undefined) {
+      if (trackMatte === null) delete l.trackMatte;
+      else {
+        const c = comp(d, a.compId);
+        if (trackMatte.layerId === a.layerId) throw new OpError("A layer can't be shown through itself.");
+        if (!c.layers[trackMatte.layerId]) throw new OpError("That matte layer isn't in this scene.");
+        if (c.layers[trackMatte.layerId]!.trackMatte?.layerId === a.layerId) throw new OpError("Two layers can't each be shown through the other.");
+        l.trackMatte = { layerId: trackMatte.layerId, mode: trackMatte.mode };
+      }
+    }
     if (parentId !== undefined) {
       if (parentId === null) delete l.parentId;
       else {

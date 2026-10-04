@@ -97,7 +97,8 @@ export interface EvaluatedLayer {
   readonly is3D: boolean;
   readonly masks: readonly EvaluatedMask[];
   readonly effects: readonly EvaluatedEffect[];
-  readonly trackMatte?: { readonly layer: EvaluatedLayer; readonly mode: "alpha" | "alpha-inverted" | "luma" | "luma-inverted" };
+  /** Shown only through another layer. `active`: that layer is on at this moment (when it isn't, its matte is empty). */
+  readonly trackMatte?: { readonly layer: EvaluatedLayer; readonly mode: "alpha" | "alpha-inverted" | "luma" | "luma-inverted"; readonly active: boolean };
 }
 
 export interface EvaluatedComp {
@@ -344,7 +345,13 @@ const evaluateLayer = (
     masks,
     effects,
     ...(matteLayer && l.trackMatte
-      ? { trackMatte: { layer: evaluateLayer(project, comp, matteLayer, t, o, depth, false), mode: l.trackMatte.mode } }
+      ? {
+          trackMatte: {
+            layer: evaluateLayer(project, comp, matteLayer, t, o, depth, false),
+            mode: l.trackMatte.mode,
+            active: isLayerActiveAt(matteLayer, t) && matteLayer.source.kind !== "null" && matteLayer.source.kind !== "audio",
+          },
+        }
       : {}),
   };
 };
@@ -357,11 +364,13 @@ export const evaluateCompAt = (
   depth = 0,
 ): EvaluatedComp => {
   const anySolo = comp.layerOrder.some((id) => comp.layers[id]?.solo);
+  // A layer another one is shown through (its track matte) only shapes that layer; it isn't drawn itself.
+  const mattes = new Set(comp.layerOrder.map((id) => comp.layers[id]?.trackMatte?.layerId).filter((id): id is Id => !!id && id in comp.layers));
   const layers: EvaluatedLayer[] = [];
   // layerOrder is top-first; composite bottom-up.
   for (let i = comp.layerOrder.length - 1; i >= 0; i--) {
     const l = comp.layers[comp.layerOrder[i]!];
-    if (!l) continue;
+    if (!l || mattes.has(l.id)) continue;
     if (!l.enabled || (anySolo && !l.solo) || !isLayerActiveAt(l, t)) continue;
     if (l.source.kind === "null" || l.source.kind === "audio") continue;
     layers.push(evaluateLayer(project, comp, l, t, o, depth, true));

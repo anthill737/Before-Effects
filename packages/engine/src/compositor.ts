@@ -21,7 +21,7 @@ import {
 import { type EffectContext, gaussianBlur, getEffect } from "./effects.ts";
 import { BLEND_ADD, BLEND_MULTIPLY, BLEND_OVER, BLEND_SCREEN, type Gpu, WORK_FORMAT } from "./gpu.ts";
 import { CoverageRasterizer, type RasterTarget } from "./raster.ts";
-import { APPLY_MASK, COLORIZE, LAYER_COMPOSITE, MASK_COMBINE } from "./shaders.ts";
+import { APPLY_MASK, COLORIZE, LAYER_BLEND, LAYER_COMPOSITE, MASK_COMBINE } from "./shaders.ts";
 import type { SimEngine } from "./sim/engine.ts";
 
 export interface Rect {
@@ -139,8 +139,8 @@ const orthoComp = (w: number, h: number): Mat4 => {
   return m;
 };
 
-/** Must handle exactly RENDERED_BLEND_MODES (core/model.ts); everything else draws as Normal. */
-const blendFor = (mode: EvaluatedLayer["blendMode"], warnings: string[]): GPUBlendState => {
+/** Normal, Add, Screen and Multiply mix in hardware (on linear light); the rest go through LAYER_BLEND. */
+const hardwareBlend = (mode: EvaluatedLayer["blendMode"]): GPUBlendState | null => {
   switch (mode) {
     case "normal":
       return BLEND_OVER;
@@ -151,10 +151,32 @@ const blendFor = (mode: EvaluatedLayer["blendMode"], warnings: string[]): GPUBle
     case "multiply":
       return BLEND_MULTIPLY;
     default:
-      warnings.push(`Blend mode "${mode}" is shown as Normal in this build.`);
-      return BLEND_OVER;
+      return null;
   }
 };
+
+/** LAYER_BLEND's mode numbers (see shaders.ts). */
+const BLEND_INDEX: Record<EvaluatedLayer["blendMode"], number> = {
+  normal: 0,
+  overlay: 1,
+  "soft-light": 2,
+  "hard-light": 3,
+  "color-dodge": 4,
+  "color-burn": 5,
+  darken: 6,
+  lighten: 7,
+  difference: 8,
+  exclusion: 9,
+  hue: 10,
+  saturation: 11,
+  color: 12,
+  luminosity: 13,
+  add: 14,
+  screen: 15,
+  multiply: 16,
+};
+
+type MatteMode = "alpha" | "alpha-inverted" | "luma" | "luma-inverted";
 
 export class Compositor {
   readonly raster: CoverageRasterizer;
@@ -202,8 +224,7 @@ export class Compositor {
       }
       const rendered = this.renderLayer(layer, comp, encoder, scale);
       if (!rendered) continue;
-      let matte: GPUTexture | null = null;
-      if (layer.trackMatte) matte = this.renderLayerToComp(layer.trackMatte.layer, comp, encoder, scale);
+      const matte = layer.trackMatte ? this.matteFor(layer.trackMatte, comp, encoder, scale) : null;
       this.composite(rendered.tex, rendered.rect, layer, comp, out, encoder, scale, matte, layer.trackMatte?.mode);
       gpu.release(rendered.tex);
       if (matte) gpu.release(matte);
@@ -211,12 +232,18 @@ export class Compositor {
     return out;
   }
 
+  /** A track matte in composition space: the matte layer drawn on its own (empty while that layer is off). */
+  private matteFor(tm: NonNullable<EvaluatedLayer["trackMatte"]>, comp: EvaluatedComp, encoder: GPUCommandEncoder, scale: number): GPUTexture {
+    return this.renderLayerToComp(tm.layer, comp, encoder, scale, !tm.active);
+  }
+
   /** Render a layer on its own into a transparent comp-sized texture (used for track mattes). */
-  private renderLayerToComp(layer: EvaluatedLayer, comp: EvaluatedComp, encoder: GPUCommandEncoder, scale: number): GPUTexture {
+  private renderLayerToComp(layer: EvaluatedLayer, comp: EvaluatedComp, encoder: GPUCommandEncoder, scale: number, empty = false): GPUTexture {
     const W = Math.max(1, Math.round(comp.width * scale));
     const H = Math.max(1, Math.round(comp.height * scale));
     const t = this.gpu.acquire(W, H, WORK_FORMAT, "matte");
     this.gpu.pass(encoder, COLORIZE, t, [this.transparent.createView(), this.gpu.samplerNearest, { buffer: this.gpu.uniform(new Float32Array(4)) }], { clear: { r: 0, g: 0, b: 0, a: 0 } });
+    if (empty) return t;
     const r = this.renderLayer(layer, comp, encoder, scale);
     if (r) {
       this.composite(r.tex, r.rect, layer, comp, t, encoder, scale, null, undefined);
@@ -420,10 +447,47 @@ export class Compositor {
     encoder: GPUCommandEncoder,
     _scale: number,
     matte: GPUTexture | null,
-    matteMode: "alpha" | "alpha-inverted" | "luma" | "luma-inverted" | undefined,
+    matteMode: MatteMode | undefined,
   ): void {
     const mvp = mat4Mul(orthoComp(comp.width, comp.height), layer.matrix);
-    this.drawQuad(tex, rect, mvp, layer.opacity, out, encoder, blendFor(layer.blendMode, this.stats.warnings), matte, matteMode, { w: out.width, h: out.height });
+    const hw = hardwareBlend(layer.blendMode);
+    if (hw) this.drawQuad(tex, rect, mvp, layer.opacity, out, encoder, hw, matte, matteMode, { w: out.width, h: out.height });
+    else this.drawBlended(tex, rect, mvp, layer.opacity, out, encoder, BLEND_INDEX[layer.blendMode] ?? 0, matte, matteMode, false);
+  }
+
+  /**
+   * Draw a layer onto `target` with a blend mode that reads the picture below: over a copy of it,
+   * replacing the pixels the layer covers (see LAYER_BLEND).
+   */
+  private drawBlended(src: GPUTexture, rect: Rect, mvp: Mat4, opacity: number, target: GPUTexture, encoder: GPUCommandEncoder, mode: number, matte: GPUTexture | null, matteMode: MatteMode | undefined, adjust: boolean): void {
+    const { gpu } = this;
+    const below = gpu.acquire(target.width, target.height, target.format, "backdrop");
+    encoder.copyTextureToTexture({ texture: target }, { texture: below }, [target.width, target.height]);
+    const u = new ArrayBuffer(112);
+    new Float32Array(u, 0, 16).set(Float32Array.from(mvp));
+    new Float32Array(u, 64, 5).set([rect.x, rect.y, rect.w, rect.h, opacity]);
+    const modes = { alpha: 1, "alpha-inverted": 2, luma: 3, "luma-inverted": 4 } as const;
+    new Uint32Array(u, 84, 1)[0] = matte && matteMode ? modes[matteMode] : 0;
+    new Float32Array(u, 88, 2).set([target.width, target.height]);
+    new Uint32Array(u, 96, 2).set([mode, adjust ? 1 : 0]);
+    const pipe = gpu.pipeline(LAYER_BLEND, target.format);
+    const bind = gpu.device.createBindGroup({
+      layout: pipe.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: src.createView() },
+        { binding: 1, resource: gpu.samplerLinear },
+        { binding: 2, resource: { buffer: gpu.uniform(u) } },
+        { binding: 3, resource: (matte ?? this.transparent).createView() },
+        { binding: 4, resource: below.createView() },
+      ],
+    });
+    const rp = encoder.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: "load", storeOp: "store" }] });
+    rp.setPipeline(pipe);
+    rp.setBindGroup(0, bind);
+    rp.draw(6);
+    rp.end();
+    gpu.release(below);
+    this.stats.passes++;
   }
 
   private drawQuad(
@@ -435,7 +499,7 @@ export class Compositor {
     encoder: GPUCommandEncoder,
     blend: GPUBlendState,
     matte: GPUTexture | null,
-    matteMode: "alpha" | "alpha-inverted" | "luma" | "luma-inverted" | undefined,
+    matteMode: MatteMode | undefined,
     size: { w: number; h: number },
   ): void {
     const u = new ArrayBuffer(96);
@@ -462,7 +526,11 @@ export class Compositor {
     this.stats.passes++;
   }
 
-  /** Adjustment layer: run its effects on everything below it, limited by its masks and opacity. */
+  /**
+   * Adjustment layer: run its effects on everything below it, where it applies — its frame (the
+   * composition's size in its own space, so moving or scaling it moves that), its masks and its track
+   * matte — mixed in by its opacity and blend mode.
+   */
   private applyAdjustment(layer: EvaluatedLayer, out: GPUTexture, comp: EvaluatedComp, encoder: GPUCommandEncoder, scale: number): void {
     if (layer.effects.length === 0) return;
     const { gpu } = this;
@@ -471,21 +539,39 @@ export class Compositor {
     const ectx: EffectContext = { gpu, encoder, scale, quality: this.quality };
     for (const e of layer.effects) {
       const def = getEffect(e.type);
-      if (!def) continue;
+      if (!def) {
+        this.stats.warnings.push(`The effect "${e.type}" isn't available yet and was skipped.`);
+        continue;
+      }
       const next = def.render(tex, e.params, { ...ectx, time: e.time });
       if (next !== tex) {
         gpu.release(tex);
         tex = next;
       }
     }
-    // Replace the accumulated image with the adjusted one, weighted by opacity (masks: milestone C).
-    const identity = orthoRect({ x: 0, y: 0, w: comp.width, h: comp.height });
-    const mixed = gpu.acquire(out.width, out.height, WORK_FORMAT, "adjust-mix");
-    encoder.copyTextureToTexture({ texture: out }, { texture: mixed }, [out.width, out.height]);
-    this.drawQuad(tex, { x: 0, y: 0, w: comp.width, h: comp.height }, identity, layer.opacity, mixed, encoder, BLEND_OVER, null, undefined, { w: out.width, h: out.height });
-    encoder.copyTextureToTexture({ texture: mixed }, { texture: out }, [out.width, out.height]);
-    gpu.release(mixed);
+    const coverage = this.adjustmentCoverage(layer, comp, out, encoder, scale);
+    const whole: Rect = { x: 0, y: 0, w: comp.width, h: comp.height };
+    this.drawBlended(tex, whole, orthoRect(whole), layer.opacity, out, encoder, BLEND_INDEX[layer.blendMode] ?? 0, coverage, "alpha", true);
+    gpu.release(coverage);
     gpu.release(tex);
+  }
+
+  /** Where an adjustment layer applies, in composition space (alpha): its frame, its masks, its track matte. */
+  private adjustmentCoverage(layer: EvaluatedLayer, comp: EvaluatedComp, out: GPUTexture, encoder: GPUCommandEncoder, scale: number): GPUTexture {
+    const { gpu } = this;
+    const rect: Rect = { x: 0, y: 0, w: comp.width, h: comp.height };
+    const density = Math.min(scale, MAX_LAYER_TEXTURE / Math.max(rect.w, rect.h));
+    const target: RasterTarget = { ...rect, scale: density };
+    let area = gpu.acquire(Math.max(1, Math.ceil(rect.w * density)), Math.max(1, Math.ceil(rect.h * density)), WORK_FORMAT, "adjust-area");
+    gpu.pass(encoder, COLORIZE, area, [this.white.createView(), gpu.samplerNearest, { buffer: gpu.uniform(new Float32Array([1, 1, 1, 1])) }], { clear: { r: 0, g: 0, b: 0, a: 0 } });
+    if (layer.masks.length) area = this.applyMasks(layer, invert2D(layer.matrix), target, area, encoder);
+    const cov = gpu.acquire(out.width, out.height, WORK_FORMAT, "adjust-coverage");
+    gpu.pass(encoder, COLORIZE, cov, [this.transparent.createView(), gpu.samplerNearest, { buffer: gpu.uniform(new Float32Array(4)) }], { clear: { r: 0, g: 0, b: 0, a: 0 } });
+    const matte = layer.trackMatte ? this.matteFor(layer.trackMatte, comp, encoder, scale) : null;
+    this.drawQuad(area, rect, mat4Mul(orthoComp(comp.width, comp.height), layer.matrix), 1, cov, encoder, BLEND_OVER, matte, layer.trackMatte?.mode, { w: out.width, h: out.height });
+    gpu.release(area);
+    if (matte) gpu.release(matte);
+    return cov;
   }
 
   /** A 1x1 white texture (e.g. "no output mask"). */

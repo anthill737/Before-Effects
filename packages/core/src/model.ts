@@ -146,10 +146,29 @@ export interface Asset {
 // Layers
 
 /**
- * Blend modes the compositor draws today. Others are kept in the project (so nothing is lost) but
- * draw as Normal; importers and the UI must say so. Keep in sync with engine/compositor.ts blendFor.
+ * Blend modes the compositor draws (all of them). Normal, Add, Screen and Multiply mix light as it
+ * is (linear); the others use the usual formulas on the picture as displayed, as After Effects and
+ * Photoshop do. Keep in sync with engine/compositor.ts.
  */
-export const RENDERED_BLEND_MODES = ["normal", "add", "screen", "multiply"] as const;
+export const RENDERED_BLEND_MODES = [
+  "normal",
+  "add",
+  "screen",
+  "multiply",
+  "overlay",
+  "soft-light",
+  "hard-light",
+  "color-dodge",
+  "color-burn",
+  "darken",
+  "lighten",
+  "difference",
+  "exclusion",
+  "hue",
+  "saturation",
+  "color",
+  "luminosity",
+] as const;
 
 export type BlendMode =
   | "normal"

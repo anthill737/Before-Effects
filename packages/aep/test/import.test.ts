@@ -63,12 +63,12 @@ describe(".aep → Before Effects project", () => {
     );
     const c = Object.values(project.compositions)[0]!;
     const by = (n: string) => Object.values(c.layers).find((l) => l.name === n)!;
-    expect(by("Over").blendMode).toBe("overlay"); // kept for later…
+    expect(by("Over").blendMode).toBe("overlay");
     const notes = report.notes.filter((n) => /Blend mode/.test(n.text));
-    expect(notes.find((n) => n.where.endsWith("Over"))?.text).toMatch(/isn't drawn yet: the layer currently draws as Normal/);
     expect(notes.find((n) => n.where.endsWith("Dissolve"))?.text).toMatch(/no Before Effects equivalent; Normal is used/);
-    expect(notes.some((n) => n.where.endsWith("Screen"))).toBe(false); // drawn as in After Effects
+    // Overlay and Screen are drawn as in After Effects: nothing to note.
+    expect(notes.some((n) => n.where.endsWith("Over") || n.where.endsWith("Screen"))).toBe(false);
     expect(notes.every((n) => n.level === "approximated")).toBe(true);
-    expect(report.layerFidelity).toEqual({ drawn: 1, approximated: 2, preservedNotDrawn: 0, notImported: 0 });
+    expect(report.layerFidelity).toEqual({ drawn: 2, approximated: 1, preservedNotDrawn: 0, notImported: 0 });
   });
 });

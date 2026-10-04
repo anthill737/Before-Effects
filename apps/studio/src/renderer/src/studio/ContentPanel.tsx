@@ -9,6 +9,7 @@ import { useState } from "react";
 import { applyEffect, applyRecipeToSelection } from "./actions.ts";
 import { contentForArea, dropOnArea, isContentDrag, readDragPayload, setDragPayload } from "./assign.ts";
 import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, effect3dFor, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
+import { addAdjustmentLayer } from "./adjust.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
 import { PICTURE_EFFECTS, pictureEffectFor } from "./pictureEffects.ts";
 import { addAssetLayer, importMediaFiles } from "./media.ts";
@@ -171,6 +172,9 @@ export const ContentPanel = () => {
         </button>
         <button className="ghost" onClick={() => void importFromDrive()} title="From anywhere in your Google Drive: only the files you choose are copied to this computer">
           From Google Drive…
+        </button>
+        <button className="ghost" onClick={() => addAdjustmentLayer()} title={sel.regionIds.length ? "Effects on it change everything below it within the selected areas" : "Effects on it change everything below it (select areas first to limit it to them)"}>
+          {sel.regionIds.length ? "Adjust these areas" : "Adjust what's below"}
         </button>
         <button className="ghost" onClick={addText}>
           {sel.regionIds.length ? "Add text to the selection" : "Add text"}

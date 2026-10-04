@@ -88,8 +88,29 @@ const LayerEffects = ({ layer }: { layer: Layer }) => {
 export const BLEND_CHOICES = [
   { value: "normal", label: "Cover what's below" },
   { value: "add", label: "Add light" },
-  { value: "screen", label: "Lighten" },
-  { value: "multiply", label: "Tint (darken)" },
+  { value: "screen", label: "Lighten (screen)" },
+  { value: "multiply", label: "Tint (darken, multiply)" },
+  { value: "overlay", label: "Overlay (more contrast)" },
+  { value: "soft-light", label: "Soft light" },
+  { value: "hard-light", label: "Hard light" },
+  { value: "color-dodge", label: "Brighten strongly (colour dodge)" },
+  { value: "color-burn", label: "Darken strongly (colour burn)" },
+  { value: "lighten", label: "Whichever is lighter" },
+  { value: "darken", label: "Whichever is darker" },
+  { value: "difference", label: "Difference" },
+  { value: "exclusion", label: "Exclusion" },
+  { value: "hue", label: "Its hue only" },
+  { value: "saturation", label: "Its saturation only" },
+  { value: "color", label: "Its colour only (hue and saturation)" },
+  { value: "luminosity", label: "Its brightness only" },
+] as const;
+
+/** How a layer shows through another (its track matte). */
+export const MATTE_CHOICES = [
+  { value: "alpha", label: "Inside its shape" },
+  { value: "alpha-inverted", label: "Outside its shape" },
+  { value: "luma", label: "Where it's bright" },
+  { value: "luma-inverted", label: "Where it's dark" },
 ] as const;
 
 /** Name, show/hide and how it mixes with the layers below: for every kind of layer. */
@@ -97,6 +118,10 @@ export const LayerIdentity = ({ layer }: { layer: Layer }) => {
   const comp = currentComp(useStudio.getState())!;
   const apply = useStudio.getState().apply;
   const update = (changes: Partial<Layer>, label: string, key: string) => apply({ type: "layer.update", args: { compId: comp.id, layerId: layer.id, changes } }, { label, coalesceKey: `${layer.id}:${key}` });
+  // Layers it could show through: the scene's other visible layers that don't show through it.
+  const others = comp.layerOrder
+    .map((id) => comp.layers[id]!)
+    .filter((o) => o && o.id !== layer.id && o.source.kind !== "audio" && o.source.kind !== "null" && o.source.kind !== "adjustment" && o.trackMatte?.layerId !== layer.id);
   return (
     <>
       <Field label="Layer name">
@@ -107,9 +132,22 @@ export const LayerIdentity = ({ layer }: { layer: Layer }) => {
           </button>
         </div>
       </Field>
-      <Field label="Mix with what's below" help="Add light suits glows, sparks and fire on a dark house; Cover hides what's underneath.">
+      <Field label="Mix with what's below" help="Add light suits glows, sparks and fire on a dark house; Cover hides what's underneath. The others mix as in After Effects.">
         <Choice label="Mix with what's below" value={layer.blendMode} choices={BLEND_CHOICES} onChange={(v) => update({ blendMode: v as Layer["blendMode"] }, "Change how the layer mixes", "blend")} />
       </Field>
+      {others.length > 0 && (
+        <Field label="Show only through" help="Another layer shapes where this one shows (a track matte); that layer isn't drawn itself.">
+          <Choice
+            label="Show only through"
+            value={layer.trackMatte?.layerId ?? ""}
+            choices={[{ value: "", label: "Nothing (show all of it)" }, ...others.map((o) => ({ value: o.id, label: o.name }))]}
+            onChange={(v) => update({ trackMatte: v ? { layerId: v, mode: layer.trackMatte?.mode ?? "alpha" } : null } as unknown as Partial<Layer>, v ? "Show through another layer" : "Show all of the layer", "matte")}
+          />
+          {layer.trackMatte && (
+            <Choice label="Where it shows" value={layer.trackMatte.mode} choices={MATTE_CHOICES} onChange={(v) => update({ trackMatte: { layerId: layer.trackMatte!.layerId, mode: v as NonNullable<Layer["trackMatte"]>["mode"] } }, "Change where the layer shows", "matte-mode")} />
+          )}
+        </Field>
+      )}
     </>
   );
 };

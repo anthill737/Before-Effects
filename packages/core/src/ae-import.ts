@@ -30,7 +30,6 @@ import {
   packPath,
   type PathValue,
   type Project,
-  RENDERED_BLEND_MODES,
   type RGBA,
   type ShapeContents,
   type TextDocument,
@@ -535,8 +534,6 @@ class Importer {
       const mapped = BLEND[L.blendingMode];
       const label = BLEND_NAME[L.blendingMode] ?? String(L.blendingMode);
       if (!mapped) this.note("approximated", where, `Blend mode “${label}” has no Before Effects equivalent; Normal is used.`);
-      else if (!(RENDERED_BLEND_MODES as readonly string[]).includes(mapped))
-        this.note("approximated", where, `Blend mode “${label}” is kept with the layer but isn't drawn yet: the layer currently draws as Normal.`);
     }
     if (L.markers?.length) this.note("not-imported", where, `${L.markers.length} layer marker(s) weren't imported.`);
     if (is3D && source.kind !== "camera" && source.kind !== "light") this.note("approximated", where, "3D layer: kept as 3D, but rendered flat until 3D rendering arrives.");

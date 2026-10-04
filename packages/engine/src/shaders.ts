@@ -353,6 +353,131 @@ struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 `;
 
 /**
+ * A layer mixed with what's below it by a blend mode that reads the picture below (overlay, soft
+ * light, colour dodge, hue, …), drawn over a copy of that picture (`backdrop`) without hardware
+ * blending. Premultiplied in and out. Modes 1–13 use the W3C / Photoshop formulas on the picture as
+ * displayed (sRGB-encoded, clamped to 0–1), as After Effects does by default; 14–16 repeat the
+ * hardware Add, Screen and Multiply (on linear light) for adjustment layers.
+ *
+ * `adjust` = 1: an adjustment layer. `src` is the adjusted picture (the whole composition), the matte
+ * texture is where it applies (alpha), and the result is the picture below moved toward the adjusted
+ * (blended) one by that coverage times the opacity.
+ */
+export const LAYER_BLEND = /* wgsl */ `
+${COMMON}
+struct U {
+  mvp: mat4x4f,
+  rect: vec4f,
+  opacity: f32,
+  matteMode: u32,
+  compSize: vec2f,
+  mode: u32,
+  adjust: u32,
+};
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<uniform> u: U;
+@group(0) @binding(3) var matte: texture_2d<f32>;
+@group(0) @binding(4) var backdrop: texture_2d<f32>;
+struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> V {
+  var c = array<vec2f, 6>(vec2f(0.0,0.0), vec2f(1.0,0.0), vec2f(0.0,1.0), vec2f(0.0,1.0), vec2f(1.0,0.0), vec2f(1.0,1.0));
+  let t = c[vi];
+  let p = vec2f(u.rect.x + t.x * u.rect.z, u.rect.y + t.y * u.rect.w);
+  var o: V;
+  o.pos = u.mvp * vec4f(p, 0.0, 1.0);
+  o.uv = t;
+  return o;
+}
+fn lum(c: vec3f) -> f32 { return dot(c, vec3f(0.3, 0.59, 0.11)); }
+fn clipColor(c: vec3f) -> vec3f {
+  let l = lum(c);
+  let n = min(c.r, min(c.g, c.b));
+  let x = max(c.r, max(c.g, c.b));
+  var o = c;
+  if (n < 0.0) { o = vec3f(l) + (o - vec3f(l)) * l / max(l - n, 1e-6); }
+  if (x > 1.0) { o = vec3f(l) + (o - vec3f(l)) * (1.0 - l) / max(x - l, 1e-6); }
+  return o;
+}
+fn setLum(c: vec3f, l: f32) -> vec3f { return clipColor(c + vec3f(l - lum(c))); }
+fn sat(c: vec3f) -> f32 { return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)); }
+fn setSat(c: vec3f, s: f32) -> vec3f {
+  let mn = min(c.r, min(c.g, c.b));
+  let mx = max(c.r, max(c.g, c.b));
+  if (mx <= mn) { return vec3f(0.0); }
+  return (c - vec3f(mn)) * s / (mx - mn);
+}
+fn screen3(b: vec3f, s: vec3f) -> vec3f { return b + s - b * s; }
+fn hardLight(b: vec3f, s: vec3f) -> vec3f {
+  return select(screen3(b, 2.0 * s - vec3f(1.0)), b * (2.0 * s), s <= vec3f(0.5));
+}
+fn softLight(b: vec3f, s: vec3f) -> vec3f {
+  let d = select(sqrt(b), ((16.0 * b - vec3f(12.0)) * b + vec3f(4.0)) * b, b <= vec3f(0.25));
+  return select(b + (2.0 * s - vec3f(1.0)) * (d - b), b - (vec3f(1.0) - 2.0 * s) * b * (vec3f(1.0) - b), s <= vec3f(0.5));
+}
+fn dodge(b: f32, s: f32) -> f32 {
+  if (b <= 0.0) { return 0.0; }
+  if (s >= 1.0) { return 1.0; }
+  return min(1.0, b / (1.0 - s));
+}
+fn burn(b: f32, s: f32) -> f32 {
+  if (b >= 1.0) { return 1.0; }
+  if (s <= 0.0) { return 0.0; }
+  return 1.0 - min(1.0, (1.0 - b) / s);
+}
+// B(Cb, Cs) on display-encoded colour in 0–1.
+fn mixColor(b: vec3f, s: vec3f, mode: u32) -> vec3f {
+  switch (mode) {
+    case 1u: { return hardLight(s, b); }                                         // overlay
+    case 2u: { return softLight(b, s); }
+    case 3u: { return hardLight(b, s); }
+    case 4u: { return vec3f(dodge(b.r, s.r), dodge(b.g, s.g), dodge(b.b, s.b)); }
+    case 5u: { return vec3f(burn(b.r, s.r), burn(b.g, s.g), burn(b.b, s.b)); }
+    case 6u: { return min(b, s); }                                               // darken
+    case 7u: { return max(b, s); }                                               // lighten
+    case 8u: { return abs(b - s); }                                              // difference
+    case 9u: { return b + s - 2.0 * b * s; }                                     // exclusion
+    case 10u: { return setLum(setSat(s, sat(b)), lum(b)); }                      // hue
+    case 11u: { return setLum(setSat(b, sat(s)), lum(b)); }                      // saturation
+    case 12u: { return setLum(s, lum(b)); }                                      // color
+    case 13u: { return setLum(b, lum(s)); }                                      // luminosity
+    default: { return s; }
+  }
+}
+// Source s over backdrop b (both premultiplied, linear) with blend mode \`mode\`.
+fn blended(s: vec4f, b: vec4f, mode: u32) -> vec4f {
+  let a = s.a + b.a * (1.0 - s.a);
+  if (mode == 14u) { return vec4f(s.rgb + b.rgb, a); }                          // add (as hardware)
+  if (mode == 15u) { return vec4f(s.rgb + b.rgb * (vec3f(1.0) - s.rgb), a); }   // screen (as hardware)
+  if (mode == 16u) { return vec4f(s.rgb * b.rgb + b.rgb * (1.0 - s.a), a); }    // multiply (as hardware)
+  if (s.a <= 0.0) { return b; }
+  let cs = s.rgb / s.a;
+  if (mode == 0u || b.a <= 0.0) { return vec4f(s.rgb + b.rgb * (1.0 - s.a), a); }
+  let cb = b.rgb / b.a;
+  let m = srgb_to_linear(clamp(mixColor(clamp(linear_to_srgb(cb), vec3f(0.0), vec3f(1.0)), clamp(linear_to_srgb(cs), vec3f(0.0), vec3f(1.0)), mode), vec3f(0.0), vec3f(1.0)));
+  let csp = (1.0 - b.a) * cs + b.a * m;
+  return vec4f(s.a * csp + (1.0 - s.a) * b.rgb, a);
+}
+@fragment fn fs(i: V) -> @location(0) vec4f {
+  let b = textureLoad(backdrop, vec2i(i.pos.xy), 0);
+  var s = textureSampleLevel(src, samp, i.uv, 0.0);
+  var k = 1.0;
+  if (u.matteMode != 0u) {
+    let m = textureLoad(matte, vec2i(i.pos.xy), 0);
+    k = m.a;
+    if (u.matteMode == 3u || u.matteMode == 4u) { k = luma(m.rgb); }
+    if (u.matteMode == 2u || u.matteMode == 4u) { k = 1.0 - k; }
+    k = clamp(k, 0.0, 1.0);
+  }
+  if (u.adjust == 1u) {
+    let full = blended(s, b, u.mode);
+    return mix(b, select(full, s, u.mode == 0u), k * u.opacity);
+  }
+  return blended(s * (u.opacity * k), b, u.mode);
+}
+`;
+
+/**
  * Projector output: for each output pixel, find the content point through the inverse calibration
  * homography, sample the content, then apply output masks and this projector's output colour
  * correction. Mapping and output correction happen here and only here, so they are never applied twice.
