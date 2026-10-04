@@ -269,7 +269,7 @@ export const LayerPanel = ({ layer }: { layer: Layer }) => {
       {madeInBlender && <BlenderLinkSection link={madeInBlender} />}
       <LayerIdentity layer={layer} />
       <p className="muted small">
-        {layer.source.kind === "audio" ? "Sound" : layer.source.kind === "text" ? "Text" : asset?.kind === "video" ? "Video" : asset?.kind === "image" ? "Picture" : "Layer"} · {formatSecondsFriendly(layer.inPoint)}–{formatSecondsFriendly(layer.outPoint)}
+        {layer.source.kind === "audio" ? "Sound" : layer.source.kind === "text" ? "Text" : layer.source.kind === "adjustment" ? "Adjusts what's below (add effects to it)" : asset?.kind === "video" ? "Video" : asset?.kind === "image" ? "Picture" : "Layer"} · {formatSecondsFriendly(layer.inPoint)}–{formatSecondsFriendly(layer.outPoint)}
         {asset ? ` · ${asset.name}` : ""}
       </p>
 
