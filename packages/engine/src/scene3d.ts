@@ -528,6 +528,16 @@ export class SceneHost implements ExternalSourceRenderer {
     const r = src.resolved;
     if (!r) return null;
     const b = this.buildScene(r.scene.id);
+    // Its pictures (the building photo, pictures on surfaces) load before anything is made: a surface
+    // first drawn without its picture and given it later kept drawing slightly differently for the
+    // rest of the session from one made with it, so the first scene drawn in a session (its pictures
+    // still loading) didn't match the same frame drawn any other time.
+    let loading = r.photoAssetId ? this.photo(r.photoAssetId) === undefined : false;
+    for (const ro of r.objects) {
+      const m = ro.object.material;
+      if (m?.style === "image" && m.assetId && this.photo(m.assetId) === undefined) loading = true;
+    }
+    if (loading) return { b, pending: true };
     const seen = new Set<string>();
     for (const ro of r.objects) {
       seen.add(ro.object.id);
@@ -797,6 +807,11 @@ export class SceneHost implements ExternalSourceRenderer {
   private draw(key: string, scene: THREE.Scene, camera: THREE.Camera, width: number, height: number): GPUTexture | null {
     const rt = this.target(key, width, height);
     this.renderer.setRenderTarget(rt);
+    // Every render is a frame of its own for three.js. It redraws shadow maps (and anything else it
+    // updates once a frame) only when its frame count has moved on, and that count moves with the
+    // screen's refresh: frames drawn within one refresh (preparing runs several) reused the first's
+    // shadows — a light coming through an opening, or slats' edges, then depended on timing.
+    (this.renderer as unknown as { _nodes: { nodeFrame: { update(): void } } })._nodes.nodeFrame.update();
     this.renderer.render(scene, camera);
     this.renderer.setRenderTarget(null);
     const src = (this.renderer.backend as unknown as { get(o: object): { texture?: GPUTexture } }).get(rt.texture).texture;
