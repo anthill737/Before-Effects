@@ -841,7 +841,7 @@ method({
     const t0 = performance.now();
     let shot = await loop.sample();
     // Wait for video frames, the photo and prepared physics, so the capture is the real frame.
-    while ((r.lastFrameIncomplete || !shot.pixels) && performance.now() - t0 < (p.timeoutMs ?? 20_000)) {
+    while ((shot.incomplete || !shot.pixels) && performance.now() - t0 < (p.timeoutMs ?? 20_000)) {
       await sleep(150);
       shot = await loop.sample();
     }
@@ -859,7 +859,7 @@ method({
       view: usePreview.getState().view,
       resolution: usePreview.getState().resolution,
       renderedSize: stats.size,
-      complete: !r.lastFrameIncomplete,
+      complete: !shot.incomplete,
       ...(p.inline ? { pngBase64: btoa(Array.from(png, (b) => String.fromCharCode(b)).join("")) } : {}),
     };
   },

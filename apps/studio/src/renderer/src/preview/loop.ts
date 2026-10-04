@@ -553,7 +553,7 @@ export class PreviewLoop {
    * Render the current view offscreen at the canvas size and measure it (tests and diagnostics).
    * Returns mean brightness and contrast (0–255).
    */
-  async sample(): Promise<{ mean: number; spread: number; width: number; height: number; pixels?: Uint8Array }> {
+  async sample(): Promise<{ mean: number; spread: number; width: number; height: number; pixels?: Uint8Array; incomplete?: boolean }> {
     const s = usePreview.getState();
     const project = this.source.project();
     const compId = this.source.compId();
@@ -562,6 +562,9 @@ export class PreviewLoop {
     const view: PreviewView = this.fixed?.view ?? s.view;
     const fraction = this.fixed?.fraction ?? (s.resolution === "auto" && !this.source.playing() ? 1 : effectiveFraction(s));
     const content = this.renderer.renderContent(project, compId, this.source.time(), fraction, s.effectQuality);
+    // Whether this render was final, read now: while its pixels are read back, other renders (this
+    // window's own preview) change what the renderer reports.
+    const incomplete = this.renderer.lastFrameIncomplete;
     if (!content) return { mean: 0, spread: 0, width: 0, height: 0 };
     const target = this.renderer.gpu.device.createTexture({
       size: [this.canvas.width, this.canvas.height],
@@ -582,6 +585,6 @@ export class PreviewLoop {
       sq += l * l;
     }
     const mean = sum / n;
-    return { mean: Math.round(mean), spread: Math.round(Math.sqrt(Math.max(0, sq / n - mean * mean))), width: this.canvas.width, height: this.canvas.height, pixels: px };
+    return { mean: Math.round(mean), spread: Math.round(Math.sqrt(Math.max(0, sq / n - mean * mean))), width: this.canvas.width, height: this.canvas.height, pixels: px, incomplete };
   }
 }
