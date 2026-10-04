@@ -35,6 +35,8 @@ export interface PreviewSource {
   cacheable?(): boolean;
   /** Master clock while sound is playing (picture follows sound); null when silent. */
   clock?(): Flicks | null;
+  /** Sound is being got ready to play: the picture waits for it (so the two start together). */
+  soundStarting?(): boolean;
 }
 
 export interface PreviewStats {
@@ -225,9 +227,11 @@ export class PreviewLoop {
       const missing: number[] = [];
       const count = Math.min(n, fit);
       // Frames on disk play from graphics memory, like a video player: before playing, and whenever
-      // playback catches up with the reading, picture and sound wait while the next second is read
-      // in — rather than skipping frames, or rendering ones that are already prepared.
-      const second = !fits && useDisk ? Math.min(count, Math.max(2, Math.round(fps))) : 0;
+      // playback catches up with the reading, picture and sound wait while the frames read ahead
+      // (three seconds) are read in — rather than skipping frames, or rendering ones already
+      // prepared. Filling them while paused also keeps reading to one frame per frame shown once
+      // playing (reading many at once then holds up the picture).
+      const second = !fits && useDisk ? Math.min(count, Math.max(2, Math.round(fps * 3))) : 0;
       let ready = 0;
       while (ready < second && this.cache.has(compId, f0 + ((from - f0 + ready) % n), fraction, quality)) ready++;
       if (ready < Math.min(second, 2)) this.buffering = true;
@@ -270,20 +274,27 @@ export class PreviewLoop {
       const before = timeToFrame(t, comp.frameRate);
       const audioT = this.source.clock?.() ?? null;
       if (audioT !== null) t = audioT;
-      else {
+      else if (this.source.soundStarting?.()) {
+        // The picture waits for its sound to start.
+      } else {
         const step = this.fixed || s.frameSkipping ? Math.round((dt / 1000) * 705_600_000) : frameDur;
         t += Math.min(step, frameDur * 10);
       }
+      let wrapped = false;
       if (t >= range.end) {
-        if (this.source.loop()) t = range.start + ((t - range.start) % Math.max(1, range.end - range.start));
-        else {
+        if (this.source.loop()) {
+          t = range.start + ((t - range.start) % Math.max(1, range.end - range.start));
+          wrapped = true;
+        } else {
           t = range.end - 1;
           this.source.setPlaying(false);
         }
       }
       this.source.setTime(t);
       const after = timeToFrame(t, comp.frameRate);
-      const advanced = after >= before ? after - before : after - timeToFrame(range.start, comp.frameRate) + 1;
+      // Frames passed over since the last tick (round the loop when it wrapped; none when the sound
+      // clock holds or nudges the picture back).
+      const advanced = wrapped ? timeToFrame(range.end - 1, comp.frameRate) - before + 1 + after - timeToFrame(range.start, comp.frameRate) : after - before;
       if (advanced > 1) this.dropped += advanced - 1;
     }
 

@@ -190,10 +190,14 @@ class PreviewPlayer {
   private token = 0;
   private signature = "";
 
-  /** Current show time according to the sound card clock, or null when no sound is playing. */
+  /**
+   * Current show time according to the sound card clock, or null when no sound is playing. Sound is
+   * scheduled a moment ahead; until it begins the time stays where it starts (the picture waits for
+   * it rather than stepping back).
+   */
   now(): Flicks | null {
     if (!this.running || !this.ctx) return null;
-    return this.startT + Math.round((this.ctx.currentTime - this.startCtx) * F);
+    return this.startT + Math.round(Math.max(0, this.ctx.currentTime - this.startCtx) * F);
   }
 
   async start(project: Project, compId: Id, t: Flicks, end: Flicks): Promise<void> {

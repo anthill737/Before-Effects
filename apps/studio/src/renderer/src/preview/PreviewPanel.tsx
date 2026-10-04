@@ -858,4 +858,5 @@ export const editorSource: PreviewSource = {
   setPlaying: (p) => useStudio.getState().setPlaying(p),
   cacheable: () => !useStudio.getState().hoverPreview,
   clock: () => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? previewAudio.now() : null),
+  soundStarting: () => (window.be.app.kind === "editor" || window.be.app.kind === "uitest") && previewAudio.starting,
 };

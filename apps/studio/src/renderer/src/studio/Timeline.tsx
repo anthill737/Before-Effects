@@ -24,17 +24,26 @@ const runsOf = (frames: Iterable<number>): Array<[number, number]> => {
   return runs;
 };
 
-/** Green strip on the ruler: frames ready in graphics memory at the current preview size, and (paler) frames prepared on disk. */
+/**
+ * Green strip on the ruler: frames ready in graphics memory at the current preview size, and (paler)
+ * frames prepared on disk. Redrawn at most twice a second: while playing from disk the frames in
+ * memory change every frame, and redrawing the page that often takes the editor's time from playback.
+ */
 const CacheStrip = ({ compId, duration, rate }: { compId: string; duration: number; rate: { num: number; den: number } }) => {
   const [, bump] = useState(0);
   const fraction = usePreviewStats((s) => s.fraction);
   const quality = usePreview((s) => s.effectQuality);
   const project = useStudio((s) => s.project);
   useEffect(() => {
-    let raf = 0;
+    let timer = 0;
+    let last = 0;
     const again = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => bump((n) => n + 1));
+      if (timer) return;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        last = performance.now();
+        bump((n) => n + 1);
+      }, Math.max(0, 500 - (performance.now() - last)));
     };
     const loop = currentPreviewLoop();
     const off = loop?.cache.subscribe(again);
@@ -42,7 +51,7 @@ const CacheStrip = ({ compId, duration, rate }: { compId: string; duration: numb
     return () => {
       off?.();
       offDisk?.();
-      cancelAnimationFrame(raf);
+      clearTimeout(timer);
     };
   });
   const loop = currentPreviewLoop();
@@ -111,14 +120,36 @@ interface Row {
   readonly layer?: Layer;
 }
 
+/**
+ * The playhead, moved straight on the page as time changes (a shift the compositor applies on its
+ * own), so the timeline's rows aren't drawn again on every frame of playback. Also keeps the ruler's
+ * slider value current.
+ */
+const Playhead = ({ duration, ruler }: { duration: number; ruler: React.RefObject<HTMLDivElement | null> }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const place = (t: Flicks) => {
+      if (ref.current) ref.current.style.transform = `translateX(${(t / Math.max(1, duration)) * 100}%)`;
+      ruler.current?.setAttribute("aria-valuenow", String(t));
+    };
+    place(useStudio.getState().time);
+    return useStudio.subscribe((s, prev) => s.time !== prev.time && place(s.time));
+  }, [duration, ruler]);
+  return (
+    <div className="playhead-track" ref={ref}>
+      <div className="playhead" />
+    </div>
+  );
+};
+
 export const Timeline = () => {
   const project = useStudio((s) => s.project);
   const compId = useStudio((s) => s.compId);
-  const time = useStudio((s) => s.time);
   const range = useStudio((s) => s.range);
   const selected = useStudio((s) => s.selection.recipeId);
   const selectedLayer = useStudio((s) => s.selection.layerId);
   const trackRef = useRef<HTMLDivElement>(null);
+  const rulerRef = useRef<HTMLDivElement>(null);
   const comp = project && compId ? project.compositions[compId] : undefined;
   if (!project || !comp) return null;
   if (comp.show) return <ShowArranger comp={comp} />;
@@ -205,7 +236,7 @@ export const Timeline = () => {
           ))}
         </div>
         <div className="tracks" ref={trackRef}>
-          <div className="ruler" onPointerDown={scrub} onPointerMove={(e) => e.buttons && scrub(e)} role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={comp.duration} aria-valuenow={time}>
+          <div className="ruler" ref={rulerRef} onPointerDown={scrub} onPointerMove={(e) => e.buttons && scrub(e)} role="slider" aria-label="Playhead" aria-valuemin={0} aria-valuemax={comp.duration}>
             {range && <div className="range-band" style={{ left: pct(range.start), width: pct(range.end - range.start) }} />}
             <CacheStrip compId={comp.id} duration={comp.duration} rate={comp.frameRate} />
             {Array.from({ length: ticks + 1 }, (_, i) => (
@@ -232,7 +263,7 @@ export const Timeline = () => {
               {r.layer && r.layer.source.kind !== "scene3d" && <LayerKeyMarks comp={comp} layer={r.layer} pct={pct} timeAt={timeAt} />}
             </div>
           ))}
-          <div className="playhead" style={{ left: pct(time) }} />
+          <Playhead duration={comp.duration} ruler={rulerRef} />
         </div>
       </div>
     </section>
