@@ -1,7 +1,7 @@
 /** Preview frames on disk: keys, safe file layout, size accounting and least-recently-used eviction. */
 import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DiskIndex, fingerprint, formatSize, frameFile, frameKey, frameOfKey, keyOfFile, parseRegQuery, pickGraphicsCard, safeName, scopeDir } from "../src/shared/diskFrames.ts";
+import { buildTag, diskKey, DiskIndex, fingerprint, formatSize, frameFile, frameKey, frameOfKey, isLegacyKey, keyOfFile, parseDiskKey, parseRegQuery, pickGraphicsCard, safeName, scopeDir } from "../src/shared/diskFrames.ts";
 
 const MB = 1024 ** 2;
 const GB = 1024 ** 3;
@@ -16,10 +16,35 @@ describe("frame keys and file layout", () => {
     expect(keyOfFile(parts[2]!, parts[3]!)).toBe(key);
   });
 
+  it("names a frame by what it's made from and the build that drew it, and back", () => {
+    const tag = buildTag("render 31e6845873c4b4e0");
+    expect(tag).toMatch(/^[0-9a-z]{4,16}$/);
+    expect(buildTag("render 31e6845873c4b4e0")).toBe(tag);
+    expect(buildTag("dev 1791145848738")).not.toBe(tag);
+    const key = diskKey(42, 1, "full", "k3f9x2m1q8z7a0b4c6d5", tag);
+    expect(isLegacyKey(key)).toBe(false);
+    expect(parseDiskKey(key)).toEqual({ frame: 42, fraction: 1, quality: "full", signature: "k3f9x2m1q8z7a0b4c6d5", tag });
+    expect(frameOfKey(key)).toBe(42);
+    const parts = frameFile(scopeDir("proj_abc", "comp_def"), key)!;
+    expect(parts).toEqual(["proj_abc", "comp_def", "1.00000_full", `42-k3f9x2m1q8z7a0b4c6d5-${tag}.jpg`]);
+    expect(keyOfFile(parts[2]!, parts[3]!)).toBe(key);
+    // Frames saved before signatures keep their old names and keys.
+    const old = frameKey(42, 1, "full");
+    expect(isLegacyKey(old)).toBe(true);
+    expect(parseDiskKey(old)).toEqual({ frame: 42, fraction: 1, quality: "full" });
+    expect(keyOfFile("1.00000_full", "42.jpg")).toBe(old);
+    // Two versions of a frame are two files.
+    const other = diskKey(42, 1, "full", "zzzz9x2m1q8z7a0b4c6d", tag);
+    expect(frameFile("a/b", other)).not.toEqual(frameFile("a/b", key));
+  });
+
   it("ignores anything that isn't a frame file", () => {
     expect(keyOfFile("0.50000_full", "42.jpg.7.saving")).toBeNull();
     expect(keyOfFile("0.50000_full", "notes.txt")).toBeNull();
     expect(keyOfFile("whatever", "42.jpg")).toBeNull();
+    expect(keyOfFile("0.50000_full", "42-ab-cd.jpg")).toBeNull();
+    expect(keyOfFile("0.50000_full", "42-../x-tag1.jpg")).toBeNull();
+    expect(frameFile("a/b", "42|1.00000|full|../../x|tag1")).toBeNull();
     expect(frameFile("a/b", "not a key")).toBeNull();
     expect(frameOfKey("x|y|z")).toBeNaN();
   });

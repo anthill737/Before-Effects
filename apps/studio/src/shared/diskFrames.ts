@@ -2,10 +2,15 @@
  * Preview frames on disk — the parts with no file access, shared by the desktop process (which owns
  * the files) and the preview (which asks for frames). Unit-tested in apps/studio/test.
  *
- *   Keys      the same as the graphics-memory FrameCache: frame, render fraction and effect quality,
- *             within a show (project id) and composition.
- *   Layout    <cache root>/<show>/<composition>/<fraction>_<quality>/<frame>.jpg, plus stamp.json per
- *             composition. Names are made safe, so nothing can land outside the cache root.
+ *   Keys      the graphics-memory FrameCache's (frame, render fraction, effect quality), within a show
+ *             (project id) and composition, plus the frame's signature — what it's made from
+ *             (frameSignatures in core) — and the tag of the app build that drew it. Any version of
+ *             the show (unsaved edits, an earlier save, a recovered or copied show) finds the frames
+ *             made from the same inputs; versions that differ keep frames of their own.
+ *   Layout    <cache root>/<show>/<composition>/<fraction>_<quality>/<frame>-<signature>-<build>.jpg.
+ *             Frames saved before signatures are <frame>.jpg, with a stamp.json per composition
+ *             naming the version of the show and the build they were made from. Names are made
+ *             safe, so nothing can land outside the cache root.
  *   Size      DiskIndex keeps sizes and use order. Past the limit it hands back the least recently
  *             used frames to delete, down to 90 % of the limit so deleting happens in batches.
  */
@@ -13,7 +18,20 @@
 /** The frame part of a FrameCache key (the cache puts the composition id in front). */
 export const frameKey = (frame: number, fraction: number, quality: string): string => `${frame}|${fraction.toFixed(5)}|${quality}`;
 
-const KEY = /^(\d{1,9})\|(\d{1,3}\.\d{5})\|([a-z]{1,16})$/;
+const KEY = /^(\d{1,9})\|(\d{1,3}\.\d{5})\|([a-z]{1,16})(?:\|([0-9a-z]{6,32})\|([0-9a-z]{4,16}))?$/;
+
+/** A frame's key on disk: its frame key, the signature of what it's made from, and the drawing build's tag. */
+export const diskKey = (frame: number, fraction: number, quality: string, signature: string, tag: string): string => `${frameKey(frame, fraction, quality)}|${signature}|${tag}`;
+
+/** The parts of a key on disk (signature and tag missing for frames saved before signatures), or null. */
+export const parseDiskKey = (key: string): { frame: number; fraction: number; quality: string; signature?: string; tag?: string } | null => {
+  const m = KEY.exec(key);
+  if (!m) return null;
+  return { frame: Number(m[1]), fraction: Number(m[2]), quality: m[3]!, ...(m[4] ? { signature: m[4], tag: m[5]! } : {}) };
+};
+
+/** Saved before frames carried a signature (they're tied to their composition's stamp instead). */
+export const isLegacyKey = (key: string): boolean => KEY.exec(key)?.[4] === undefined;
 
 /** The frame number in a frame key (NaN for anything that isn't one). */
 export const frameOfKey = (key: string): number => {
@@ -34,6 +52,9 @@ const hash53 = (text: string, seed = 0): string => {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 };
+
+/** The tag an app build's frames carry (its name hashed: "render 31e68…", "dev 1791…", …). */
+export const buildTag = (build: string): string => hash53(build, 0x5bd1e995);
 
 /** Fingerprint of a show's contents (its JSON): two independent hashes and the length. */
 export const fingerprint = (text: string): string => `${text.length.toString(36)}-${hash53(text)}-${hash53(text, 0x9e3779b9)}`;
@@ -57,14 +78,14 @@ export const frameFile = (scope: string, key: string): string[] | null => {
   const m = KEY.exec(key);
   const dirs = scope.split("/");
   if (!m || dirs.length !== 2 || dirs.some((d) => d === "" || d === "." || d === "..")) return null;
-  return [...dirs, `${m[2]}_${m[3]}`, `${Number(m[1])}.jpg`];
+  return [...dirs, `${m[2]}_${m[3]}`, m[4] ? `${Number(m[1])}-${m[4]}-${m[5]}.jpg` : `${Number(m[1])}.jpg`];
 };
 
-/** Back from a file found on disk to its frame key (null for anything that isn't a frame file). */
+/** Back from a file found on disk to its key (null for anything that isn't a frame file). */
 export const keyOfFile = (variantDir: string, file: string): string | null => {
   const v = /^(\d{1,3}\.\d{5})_([a-z]{1,16})$/.exec(variantDir);
-  const f = /^(\d{1,9})\.jpg$/.exec(file);
-  return v && f ? `${Number(f[1])}|${v[1]}|${v[2]}` : null;
+  const f = /^(\d{1,9})(?:-([0-9a-z]{6,32})-([0-9a-z]{4,16}))?\.jpg$/.exec(file);
+  return v && f ? `${Number(f[1])}|${v[1]}|${v[2]}${f[2] ? `|${f[2]}|${f[3]}` : ""}` : null;
 };
 
 export interface DiskEntry {

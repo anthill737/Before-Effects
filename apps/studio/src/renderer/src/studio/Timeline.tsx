@@ -57,7 +57,7 @@ const CacheStrip = ({ compId, duration, rate }: { compId: string; duration: numb
   const loop = currentPreviewLoop();
   if (!loop) return null;
   const memory = loop.cache.cachedFrames(compId, fraction, quality, 0, duration, rate);
-  const disk = project ? loop.disk.framesOnDisk(project, compId, fraction, quality) : new Set<number>();
+  const disk = new Set(project ? loop.disk.framesOnDisk(project, compId, fraction, quality) : []);
   for (const f of memory) disk.delete(f);
   const total = Math.max(1, Math.round((duration * rate.num) / (705_600_000 * rate.den)));
   const bar = (cls: string) => ([a, b]: [number, number]) => <span key={`${cls}${a}`} className={cls} style={{ left: `${(a / total) * 100}%`, width: `${((b - a + 1) / total) * 100}%` }} />;

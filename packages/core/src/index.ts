@@ -28,6 +28,7 @@ export * from "./scenes.ts";
 export * from "./world3d.ts";
 export * from "./keyframes.ts";
 export * from "./contentKinds.ts";
+export * from "./frameSignature.ts";
 export * from "./houseDetect.ts";
 export * from "./houseRefine.ts";
 export * from "./areaShapes.ts";

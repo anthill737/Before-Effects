@@ -10,9 +10,12 @@
  *             background (createImageBitmap), turned back into a working-space texture and put in
  *             the FrameCache. While playing, frames ahead are read early.
  *   Keys      the FrameCache key (frame, render fraction, effect quality) within the show and
- *             composition. Edits delete exactly the frames the FrameCache drops. Before a
- *             composition's frames are first used, a fingerprint of the show is checked, so frames
- *             made from a different version of it (another session, unsaved edits) are deleted.
+ *             composition, plus the frame's signature (what it's made from: frameSignatures in
+ *             core) and the tag of the build that drew it. A frame is looked up under the signature
+ *             it has in the show as it is now, so after an edit, reopening the saved show, undoing,
+ *             or opening a recovered or copied show, the frames whose inputs are unchanged are found
+ *             and only the others are made again; frames of other versions stay on disk (until the
+ *             size limit retires them) and are never shown in their place. Edits delete nothing.
  *
  * Format: JPEG at high quality. Frames are working-space half floats (8 bytes a pixel: 66 MB for a
  * 4K frame), far too much to move through the desktop process and disk 30 times a second, and
@@ -22,11 +25,11 @@
  * (glows) compressed into the rest, and alpha as a grey band below, so the "On the house", 3D and
  * projector views stay close to a fresh render. It's a preview: exports always render afresh.
  */
-import { type Affected, type ContentKind, frameToTime, framesUsing, type Project, type Rational, timeToFrame } from "@be/core";
+import { type Affected, contentAt, type ContentKind, frameSignatures, frameToTime, type Project, type Rational } from "@be/core";
 import { COMMON, type FrameRenderer } from "@be/engine";
 import { create } from "zustand";
 import type { DiskCacheStatus, DiskCacheUsage } from "../../../shared/api.ts";
-import { fingerprint, frameKey, frameOfKey } from "../../../shared/diskFrames.ts";
+import { buildTag, diskKey, fingerprint, frameKey, isLegacyKey, parseDiskKey } from "../../../shared/diskFrames.ts";
 import { useStudio } from "../studio/store.ts";
 import type { FrameCache } from "./cache.ts";
 import { usePreview } from "./settings.ts";
@@ -34,10 +37,11 @@ import { usePreview } from "./settings.ts";
 const GB = 1024 ** 3;
 
 /**
- * Builds of the app whose prepared frames a newer build keeps where it draws them the same: the
- * build a composition's frames were stamped with → the kinds of content drawn differently since.
- * Frames using any of those kinds are made again; the rest are kept. An entry is added only after
- * checking that frames of the other kinds come out identical (byte for byte on disk).
+ * Builds of the app whose prepared frames this build keeps where it draws them the same: a build
+ * (its name: "render <hash>", or an older build time) → the kinds of content this build draws
+ * differently. Frames of the show as it is now that use any of those kinds are made again; the rest
+ * are given this build's tag. A build not listed keeps its frames to itself. An entry is added only
+ * after checking that frames of the other kinds come out identical (byte for byte on disk).
  */
 const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
   // a3cc304 as installed on 2026-10-04 (its build time is its stamp). Since then 3D scenes, track
@@ -50,6 +54,26 @@ const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
   // next (turning blocks, falling bricks, the frame a light comes on): in a 2,100-frame stretch, two
   // preparations by 4b61055 and two by this build each matched an earlier one in 1,200–1,320 frames.
   "render 35efe0e6e524ff03": [],
+  // d2f1de1 (render 31e6845873c4b4e0), installed 2026-10-04. This build draws each 3D frame the same
+  // whatever was drawn before it (shadows redrawn for every frame; scenes made once their pictures
+  // are in), so some 3D frames it makes differ from that build's. Those prepared frames were
+  // approved, so they're kept (given this build's tag). Replacements, once made in another folder
+  // and checked, take their place under the same names.
+  "render 31e6845873c4b4e0": [],
+};
+
+/** This build: its name and the tag its frames carry on disk (asked once). */
+let thisBuild: Promise<{ build: string; tag: string }> | null = null;
+const currentBuild = () => (thisBuild ??= window.be.cache.build());
+
+/** Signatures of a show version's frames, per composition (worked out once per version of the show). */
+const signatures = new WeakMap<Project, Map<string, (frame: number) => string>>();
+const signaturesOf = (project: Project, compId: string): ((frame: number) => string) => {
+  let m = signatures.get(project);
+  if (!m) signatures.set(project, (m = new Map()));
+  let f = m.get(compId);
+  if (!f) m.set(compId, (f = frameSignatures(project, compId)));
+  return f;
 };
 const JPEG_QUALITY = 0.92;
 /** Saves at once (enough to keep the graphics card and every compression worker busy), and the pixel memory they may hold while waiting for compression. */
@@ -150,25 +174,24 @@ export const clearDiskCache = async (): Promise<void> => {
 };
 
 /** Frames whose time is in half-open time ranges, as half-open frame ranges (the FrameCache's test). */
-const frameRanges = (ranges: Affected["ranges"], rate: Rational): Array<[number, number]> =>
-  ranges.map(([s, e]) => {
-    const first = (t: number) => {
-      if (!Number.isFinite(t)) return t > 0 ? Number.MAX_SAFE_INTEGER : 0;
-      const f = Math.max(0, timeToFrame(t, rate));
-      return frameToTime(f, rate) < t ? f + 1 : f;
-    };
-    return [first(s), first(e)];
-  });
-
 interface Scope {
   readonly id: string;
   readonly project: string;
   readonly comp: string;
   ready: boolean;
-  /** Frame keys this window knows are on disk. */
+  /** Keys on disk this window knows of (every version of the show, every build). */
   readonly onDisk: Set<string>;
-  /** Bumped by every change to the composition: reads and saves started before it are dropped. */
+  /** Bumped by every change to the show: reads started before it are dropped (they may be for the old version). */
   epoch: number;
+  /** This build's tag (what its frames on disk carry). */
+  tag: string;
+  /** Bumped whenever onDisk changes. */
+  version: number;
+  /** Frames of each show version on disk, at the version they were counted (this list's own: a new list counts afresh). */
+  readonly counted: WeakMap<Project, Map<string, Set<number>>>;
+  /** When the keys were last read from disk (read-only windows read them again now and then). */
+  loadedAt: number;
+  refreshing: boolean;
 }
 
 interface Remembered {
@@ -187,7 +210,6 @@ export class DiskFrames {
   private saves = new Set<string>();
   private staging = 0;
   private backlog = new Map<string, Remembered>();
-  private restamps = new Map<string, number>();
   private workers: Worker[] = [];
   private nextWorker = 0;
   private jobs = new Map<number, (r: { bytes?: ArrayBuffer; error?: string }) => void>();
@@ -228,8 +250,9 @@ export class DiskFrames {
 
   /**
    * Projector outputs and the pop-out preview read prepared frames but never change what's on disk:
-   * they use a scene's frames only when its stamp is exactly this show and this build, and never
-   * check (and so never delete), save or stamp frames. The editor owns the frames on disk.
+   * they look frames up the same way (signature and build) and read the keys again every few
+   * seconds for what the editor saved meanwhile; they never save or rename frames. The editor owns
+   * the frames on disk.
    */
   readonly readOnly = !!window.be?.app && window.be.app.kind !== "editor" && window.be.app.kind !== "uitest";
 
@@ -256,16 +279,32 @@ export class DiskFrames {
   /** Is this frame on disk (as far as this window knows; false until the composition has been checked)? */
   has(project: Project, compId: string, frame: number, fraction: number, quality: string): boolean {
     const s = this.enabled ? this.scope(project, compId) : null;
-    return !!s && s.onDisk.has(frameKey(frame, fraction, quality));
+    return !!s && s.onDisk.has(this.keyOf(s, project, frame, fraction, quality));
   }
 
-  /** The frames of a composition on disk at a size and quality. */
-  framesOnDisk(project: Project, compId: string, fraction: number, quality: string): Set<number> {
-    const out = new Set<number>();
+  /** A frame's key on disk for this version of the show and this build. */
+  private keyOf(s: Scope, project: Project, frame: number, fraction: number, quality: string): string {
+    return diskKey(frame, fraction, quality, signaturesOf(project, s.comp)(frame), s.tag);
+  }
+
+  /** The frames of a composition on disk at a size and quality (shared: copy it to change it). */
+  framesOnDisk(project: Project, compId: string, fraction: number, quality: string): ReadonlySet<number> {
     const s = this.enabled ? this.scope(project, compId) : null;
-    if (!s) return out;
-    const tail = frameKey(0, fraction, quality).slice(1);
-    for (const k of s.onDisk) if (k.endsWith(tail)) out.add(frameOfKey(k));
+    if (!s) return new Set();
+    const memo = `${s.version}|${fraction}|${quality}`;
+    const hit = s.counted.get(project)?.get(memo);
+    if (hit) return hit;
+    const out = new Set<number>();
+    const sig = signaturesOf(project, compId);
+    const want = frameKey(0, fraction, quality).slice(1);
+    for (const k of s.onDisk) {
+      const d = parseDiskKey(k);
+      if (!d?.signature || d.tag !== s.tag || frameKey(0, d.fraction, d.quality).slice(1) !== want) continue;
+      if (d.signature === sig(d.frame)) out.add(d.frame);
+    }
+    let m = s.counted.get(project);
+    if (!m) s.counted.set(project, (m = new Map()));
+    m.set(memo, out);
     return out;
   }
 
@@ -278,11 +317,11 @@ export class DiskFrames {
   async saveNow(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): Promise<number | null> {
     const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
     if (!s) return null;
-    const key = frameKey(frame, fraction, quality);
+    const key = this.keyOf(s, project, frame, fraction, quality);
     if (s.onDisk.has(key)) return 0;
     await this.slot(tex.width, tex.height);
     if (!this.enabled) return null;
-    return (await this.save(s, frame, fraction, quality, tex, true)) ?? null;
+    return (await this.save(s, key, frame, fraction, quality, tex, true)) ?? null;
   }
 
   /** Wait until a frame of this size can start saving (call before rendering it, to keep pace with saving). */
@@ -291,55 +330,84 @@ export class DiskFrames {
     while (this.enabled && (this.saves.size >= MAX_SAVES || this.staging + size > MAX_STAGING)) await new Promise<void>((r) => this.slotWaiters.push(r));
   }
 
-  /** A composition's frames on disk, once checked against this version of the show (null until then). */
+  /** A composition's frames on disk, once read (and, in the editor, the ones it can adopt renamed). Null until then. */
   private scope(project: Project, compId: string): Scope | null {
     const id = `${project.id}/${compId}`;
     let s = this.scopes.get(id);
     if (!s) {
-      const sc: Scope = { id, project: project.id, comp: compId, ready: false, onDisk: new Set(), epoch: 0 };
+      const sc: Scope = { id, project: project.id, comp: compId, ready: false, onDisk: new Set(), epoch: 0, tag: "", version: 0, counted: new WeakMap(), loadedAt: 0, refreshing: false };
       this.scopes.set(id, sc);
-      const fp = fingerprint(JSON.stringify(project));
-      if (this.readOnly) {
-        const scope = { project: project.id, comp: compId };
-        const retry = () => setTimeout(() => this.scopes.get(id) === sc && this.scopes.delete(id), 3000);
-        void window.be.cache
-          .previous(scope)
-          .then(async (prev) => {
-            // Only frames made from exactly this show by this build; otherwise render (and ask again later).
-            if (!prev || prev.fingerprint !== fp || prev.build !== prev.current) return retry();
-            const keys = await window.be.cache.keys(scope);
-            if (this.scopes.get(id) !== sc) return;
-            for (const k of keys) sc.onDisk.add(k);
-            sc.ready = true;
-          })
-          .catch(retry);
-        return null;
-      }
-      this.carryOver(project, compId, fp)
-        .then(() => window.be.cache.validate({ project: project.id, comp: compId }, fp))
-        .then(
-          (keys) => {
-            if (this.scopes.get(id) !== sc) return;
-            for (const k of keys) sc.onDisk.add(k);
-            sc.ready = true;
-          },
-          // Try again a little later (e.g. the folder was briefly unavailable).
-          () => setTimeout(() => this.scopes.get(id) === sc && this.scopes.delete(id), 5000),
-        );
+      const scope = { project: project.id, comp: compId };
+      void (async () => {
+        const { tag } = await currentBuild();
+        let keys = await window.be.cache.keys(scope);
+        if (!this.readOnly) keys = await this.adopt(project, compId, keys, tag);
+        if (this.scopes.get(id) !== sc) return;
+        sc.tag = tag;
+        for (const k of keys) sc.onDisk.add(k);
+        sc.version++;
+        sc.loadedAt = performance.now();
+        sc.ready = true;
+        this.emit();
+      })().catch(() => setTimeout(() => this.scopes.get(id) === sc && this.scopes.delete(id), 5000));
       s = sc;
+    }
+    // Read-only windows: what the editor has saved since, every few seconds.
+    if (this.readOnly && s.ready && !s.refreshing && performance.now() - s.loadedAt > 4000) {
+      const sc = s;
+      sc.refreshing = true;
+      void window.be.cache
+        .keys({ project: sc.project, comp: sc.comp })
+        .then((keys) => {
+          sc.onDisk.clear();
+          for (const k of keys) sc.onDisk.add(k);
+          sc.version++;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          sc.loadedAt = performance.now();
+          sc.refreshing = false;
+        });
     }
     return s.ready ? s : null;
   }
 
-  /** Frames an older build made from this same show: keep those it draws the same way (see CARRY_OVER). */
-  private async carryOver(project: Project, compId: string, fp: string): Promise<void> {
+  /**
+   * Frames on disk this build can use for the show as it is now, given the names it looks for:
+   *   - saved before signatures: when the composition's stamp is exactly this version of the show,
+   *     made by this build or by one this build draws the same (CARRY_OVER);
+   *   - drawn by an earlier build this one draws the same, for this version of the show.
+   * Frames of other versions keep their names (they're those versions' frames). Returns the keys.
+   */
+  private async adopt(project: Project, compId: string, keys: string[], tag: string): Promise<string[]> {
+    const comp = project.compositions[compId];
+    if (!comp) return keys;
+    const sig = signaturesOf(project, compId);
+    const drawsSame = (frame: number, changed: readonly ContentKind[]) => {
+      if (!changed.length) return true;
+      const kinds = contentAt(project, compId, frameToTime(frame, comp.frameRate));
+      return !changed.some((k) => kinds.has(k));
+    };
+    const renames: Array<[string, string]> = [];
     const scope = { project: project.id, comp: compId };
-    const prev = await window.be.cache.previous(scope).catch(() => null);
-    if (!prev || prev.fingerprint !== fp || prev.build === prev.current) return;
-    const changed = CARRY_OVER[prev.build];
-    if (!changed) return;
-    const drop = framesUsing(project, compId, new Set(changed));
-    await window.be.cache.carryOver(scope, fp, prev.build, drop).catch(() => 0);
+    const legacy = keys.filter(isLegacyKey);
+    if (legacy.length) {
+      const prev = await window.be.cache.previous(scope).catch(() => null);
+      const changed = !prev ? undefined : prev.build === prev.current ? [] : CARRY_OVER[prev.build];
+      if (prev && changed && prev.fingerprint === fingerprint(JSON.stringify(project)))
+        for (const k of legacy) {
+          const d = parseDiskKey(k)!;
+          if (drawsSame(d.frame, changed)) renames.push([k, diskKey(d.frame, d.fraction, d.quality, sig(d.frame), tag)]);
+        }
+    }
+    const older = new Map(Object.entries(CARRY_OVER).map(([b, changed]) => [buildTag(b), changed]));
+    for (const k of keys) {
+      const d = parseDiskKey(k);
+      if (!d?.signature || d.tag === tag || d.signature !== sig(d.frame)) continue;
+      const changed = older.get(d.tag!);
+      if (changed && drawsSame(d.frame, changed)) renames.push([k, diskKey(d.frame, d.fraction, d.quality, d.signature, tag)]);
+    }
+    return renames.length ? await window.be.cache.adopt(scope, renames) : keys;
   }
 
   /**
@@ -351,7 +419,7 @@ export class DiskFrames {
     const comp = project.compositions[compId];
     const s = this.enabled && comp ? this.scope(project, compId) : null;
     if (!s || !comp) return "absent";
-    const key = frameKey(frame, fraction, quality);
+    const key = this.keyOf(s, project, frame, fraction, quality);
     const id = `${s.id}|${key}`;
     if (this.reads.has(id)) return "reading";
     if (!s.onDisk.has(key)) return "absent";
@@ -363,7 +431,8 @@ export class DiskFrames {
 
   /** How long this frame has been reading (ms), or -1 when it isn't. */
   readingFor(project: Project, compId: string, frame: number, fraction: number, quality: string): number {
-    const started = this.reads.get(`${project.id}/${compId}|${frameKey(frame, fraction, quality)}`);
+    const s = this.scopes.get(`${project.id}/${compId}`);
+    const started = s?.ready ? this.reads.get(`${s.id}|${this.keyOf(s, project, frame, fraction, quality)}`) : undefined;
     return started === undefined ? -1 : performance.now() - started;
   }
 
@@ -374,6 +443,7 @@ export class DiskFrames {
       const bytes = await window.be.cache.get({ project: s.project, comp: s.comp }, key);
       if (!bytes) {
         s.onDisk.delete(key);
+        s.version++;
         return;
       }
       if (!current()) return;
@@ -400,6 +470,7 @@ export class DiskFrames {
       }
     } catch (e) {
       s.onDisk.delete(key);
+      s.version++;
       this.warn(`couldn't read a frame: ${String(e)}`);
     }
   }
@@ -407,12 +478,15 @@ export class DiskFrames {
   /** A frame was just rendered and cached: save it too (in the background). */
   offer(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): void {
     const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
-    if (s) this.save(s, frame, fraction, quality, tex);
+    if (s) this.save(s, this.keyOf(s, project, frame, fraction, quality), frame, fraction, quality, tex);
   }
 
-  /** Start saving a frame; resolves with its size on disk (null when it wasn't kept). `direct`: not from graphics memory, so never set aside for later. */
-  private save(s: Scope, frame: number, fraction: number, quality: string, tex: GPUTexture, direct = false): Promise<number | null> | null {
-    const key = frameKey(frame, fraction, quality);
+  /**
+   * Start saving a frame under its key (made from the version of the show it was rendered from, so
+   * it's right whatever happens to the show meanwhile); resolves with its size on disk (null when
+   * it wasn't kept). `direct`: not from graphics memory, so never set aside for later.
+   */
+  private save(s: Scope, key: string, frame: number, fraction: number, quality: string, tex: GPUTexture, direct = false): Promise<number | null> | null {
     const id = `${s.id}|${key}`;
     if (s.onDisk.has(key) || this.saves.has(id)) return null;
     const w = tex.width;
@@ -435,7 +509,6 @@ export class DiskFrames {
     enc.copyTextureToBuffer({ texture: target }, { buffer: buf, bytesPerRow: stride }, [w, h]);
     gpu.submit(enc);
     gpu.release(target);
-    const epoch = s.epoch;
     this.saves.add(id);
     this.staging += size;
     return (async (): Promise<number | null> => {
@@ -450,16 +523,13 @@ export class DiskFrames {
         const t2 = performance.now();
         ema("gpuMs", t1 - t0);
         ema("compressMs", t2 - t1);
-        if (s.epoch !== epoch || this.scopes.get(s.id) !== s || !this.enabled) {
-          // The show changed meanwhile; if the frame survived the edit, save it again later.
-          if (this.scopes.get(s.id) === s && !direct) this.backlog.set(id, { scope: s, key, frame, fraction, quality });
-          return null;
-        }
+        if (this.scopes.get(s.id) !== s || !this.enabled) return null;
         const t3 = performance.now();
         const u = await window.be.cache.put({ project: s.project, comp: s.comp }, key, new Uint8Array(jpeg));
         ema("writeMs", performance.now() - t3);
         if (!u) return null;
         s.onDisk.add(key);
+        s.version++;
         setUsage(u);
         this.emit();
         return jpeg.byteLength;
@@ -479,12 +549,15 @@ export class DiskFrames {
   pump(cache: FrameCache): void {
     if (this.readOnly) return;
     if (!this.enabled || this.backlog.size === 0 || this.saves.size >= MAX_SAVES) return;
+    const project = this.project();
     for (const [id, r] of this.backlog) {
       this.backlog.delete(id);
       if (this.scopes.get(r.scope.id) !== r.scope || r.scope.onDisk.has(r.key)) continue;
+      // What's in graphics memory now is the show as it is now: only if that's still this frame's version.
+      if (!project || project.id !== r.scope.project || this.keyOf(r.scope, project, r.frame, r.fraction, r.quality) !== r.key) continue;
       const tex = cache.peek(r.scope.comp, r.frame, r.fraction, r.quality);
       if (!tex) continue;
-      this.save(r.scope, r.frame, r.fraction, r.quality, tex);
+      this.save(r.scope, r.key, r.frame, r.fraction, r.quality, tex);
       return;
     }
   }
@@ -517,36 +590,11 @@ export class DiskFrames {
    * scene changes the show around it only where the show plays that part). Compositions with no
    * such information are checked again before use.
    */
-  changed(project: Project | null, compId: string, affected: Affected, rate: Rational | null, others?: Readonly<Record<string, Affected>>): void {
-    if (this.readOnly) {
-      // The editor deletes and restamps frames an edit changes; look again once it has.
-      for (const sc of [...this.scopes.values()]) this.drop(sc);
-      this.emit();
-      return;
-    }
-    for (const sc of [...this.scopes.values()]) {
-      // Another show (or none): its frames are checked against it again before use.
-      if (!project || sc.project !== project.id) {
-        this.drop(sc);
-        continue;
-      }
-      const a = sc.comp === compId ? affected : others?.[sc.comp];
-      const r = sc.comp === compId ? rate : (project.compositions[sc.comp]?.frameRate ?? null);
-      if (!a || a.all || !r) {
-        this.drop(sc);
-        continue;
-      }
-      if (a.ranges.length) {
-        sc.epoch++;
-        const frames = frameRanges(a.ranges, r);
-        for (const k of [...sc.onDisk]) {
-          const f = frameOfKey(k);
-          if (frames.some(([x, y]) => f >= x && f < y)) sc.onDisk.delete(k);
-        }
-        void window.be.cache.invalidate({ project: sc.project, comp: sc.comp }, frames).then(setUsage, () => undefined);
-      }
-      this.restampLater(sc);
-    }
+  changed(_project: Project | null, _compId: string, _affected: Affected, _rate: Rational | null, _others?: Readonly<Record<string, Affected>>): void {
+    // Frames on disk are found by what they're made from, so an edit leaves them alone: the frames
+    // it changes are looked for under their new signatures, and the old ones stay for undo or for
+    // opening that version again. Reads under way may be for the old version: they're dropped.
+    for (const sc of this.scopes.values()) sc.epoch++;
     this.emit();
   }
 
@@ -554,27 +602,6 @@ export class DiskFrames {
   private drop(s: Scope): void {
     s.epoch++;
     this.scopes.delete(s.id);
-    clearTimeout(this.restamps.get(s.id));
-    this.restamps.delete(s.id);
-  }
-
-  /** Record that the frames on disk now belong to the edited show (once edits pause). */
-  private restampLater(s: Scope): void {
-    clearTimeout(this.restamps.get(s.id));
-    this.restamps.set(
-      s.id,
-      window.setTimeout(() => this.restamp(s), 400),
-    );
-  }
-
-  private restamp(s: Scope): void {
-    this.restamps.delete(s.id);
-    if (this.scopes.get(s.id) !== s) return;
-    const p = this.project();
-    // A hover preview is showing: wait until it's gone.
-    if (!p) return this.restampLater(s);
-    if (p.id !== s.project) return;
-    void window.be.cache.stamp({ project: s.project, comp: s.comp }, fingerprint(JSON.stringify(p))).catch(() => undefined);
   }
 
   /** What's on disk changed underneath (cleared, or another folder): check again before use. */
@@ -585,11 +612,6 @@ export class DiskFrames {
   }
 
   dispose(): void {
-    // Stamps waiting for edits to pause are written now, so the frames stay usable next time.
-    for (const sid of [...this.restamps.keys()]) {
-      const s = this.scopes.get(sid);
-      if (s) this.restamp(s);
-    }
     this.forget();
     this.disposed = true;
     for (const w of this.workers) w.terminate();
@@ -619,7 +641,6 @@ export const diskFramesFor = (renderer: FrameRenderer): DiskFrames => {
       const s = useStudio.getState();
       return s.hoverPreview ? null : s.project;
     });
-    // Closing the window: stamps waiting for edits to pause are written now, so the frames stay usable next time.
     window.addEventListener("beforeunload", () => windowDisk?.dispose());
   }
   return windowDisk;

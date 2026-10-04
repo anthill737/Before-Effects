@@ -421,21 +421,14 @@ export interface BeApi {
     status(): Promise<DiskCacheStatus>;
     /** The drive the frames go on: free and total space, and what frames use there now. */
     space(): Promise<CacheSpace | null>;
-    /** Before first using a composition's frames: they're kept only if made from this exact show (fingerprint). Returns the frame keys on disk. */
-    validate(scope: DiskCacheScope, fingerprint: string): Promise<string[]>;
-    /** After edits were applied: the frames on disk now belong to this version of the show. */
-    stamp(scope: DiskCacheScope, fingerprint: string): Promise<void>;
-    /** Frame keys of a composition on disk, without checking or changing anything (projector outputs read prepared frames). */
+    /** This app's build and the tag its frames carry on disk. */
+    build(): Promise<{ build: string; tag: string }>;
+    /** Keys of a composition's frames on disk (every version of the show, every build), changing nothing. */
     keys(scope: DiskCacheScope): Promise<string[]>;
-    /** What a composition's frames on disk were made from (show fingerprint and app build), and this app's build; null when unknown. */
+    /** A composition's frames saved before signatures: the show fingerprint and app build they were made from, and this app's build; null when none. */
     previous(scope: DiskCacheScope): Promise<{ fingerprint: string; build: string; current: string } | null>;
-    /**
-     * Frames made by an older build of the app (`fromBuild`) from this same show: keep them, except
-     * these frames (half-open ranges), drawn differently now. Returns how many frames were kept.
-     */
-    carryOver(scope: DiskCacheScope, fingerprint: string, fromBuild: string, drop: Array<[number, number]>): Promise<number>;
-    /** An edit changed these frames (half-open frame ranges): delete them. */
-    invalidate(scope: DiskCacheScope, ranges: Array<[number, number]>): Promise<DiskCacheUsage>;
+    /** Rename frames on disk in place ([from key, to key]): frames saved before signatures, or another build's this one draws the same. Returns the keys. */
+    adopt(scope: DiskCacheScope, renames: Array<[string, string]>): Promise<string[]>;
     /** Save a frame (a compact image). Null when it wasn't kept (drive nearly full, or the show changed meanwhile). */
     put(scope: DiskCacheScope, key: string, data: Uint8Array): Promise<DiskCacheUsage | null>;
     get(scope: DiskCacheScope, key: string): Promise<Uint8Array | null>;

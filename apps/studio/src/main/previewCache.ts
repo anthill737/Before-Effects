@@ -7,11 +7,14 @@
  *     preview frames" folder inside a folder the person picked. Names are made safe and every path
  *     is checked to be inside the root before anything is written or deleted; files that aren't
  *     ours are never touched,
- *   - beyond the size limit the least recently used frames are deleted,
- *   - edits delete exactly the frames they change. Each composition's folder also carries a stamp
- *     (a fingerprint of the show and of this build), checked before a window first uses its
- *     frames, so frames from another session, another version of the show or an older build of
- *     the app are deleted instead of shown,
+ *   - each frame's name carries the signature of what it's made from and the tag of the build that
+ *     drew it (shared/diskFrames.ts): a window looks frames up by those, so frames of other versions
+ *     of a show (before an edit, unsaved, another copy) and of other builds are kept, never shown in
+ *     their place, and found again when that version is opened again,
+ *   - only the size limit deletes frames (the least recently used first), besides clearing,
+ *   - frames saved before signatures (<frame>.jpg) keep their composition's stamp — the version of
+ *     the show and the build they were made from — until a window opening that version renames
+ *     them (cache:adopt),
  *   - nothing is written while the drive is nearly full.
  *
  * All file work is asynchronous. What's on disk (sizes, use order) is kept in memory and rebuilt
@@ -27,7 +30,7 @@ import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, ipcMain } from "electron";
 import type { CacheSpace, DiskCacheConfig, DiskCacheScope, DiskCacheStatus, DiskCacheUsage, MachineMemory } from "../shared/api.ts";
-import { type DiskEntry, DiskIndex, frameFile, frameOfKey, keyOfFile, parseRegQuery, pickGraphicsCard, scopeDir } from "../shared/diskFrames.ts";
+import { buildTag, type DiskEntry, DiskIndex, frameFile, keyOfFile, parseRegQuery, pickGraphicsCard, scopeDir } from "../shared/diskFrames.ts";
 import { paths } from "./files.ts";
 import { log } from "./log.ts";
 
@@ -65,9 +68,9 @@ let ready: Promise<void> | null = null;
 /** The index reflects the folder (it has been read). */
 let scanned = false;
 let problem = "";
-/** Per composition: its stamp, or null while edits since the last stamp haven't been confirmed. */
+/** Per composition: the stamp of its frames saved before signatures (the show version and build they're from). */
 const stamps = new Map<string, Stamp | null>();
-/** Writes in progress (frame id → token); an edit or clearing removes them so a late write is dropped. */
+/** Writes in progress (frame id → token); clearing removes them so a late write is dropped. */
 const pending = new Map<string, number>();
 let token = 0;
 /** Bumped when the folder changes or everything is cleared. */
@@ -103,24 +106,6 @@ const deleteFiles = (entries: readonly DiskEntry[]) => {
 };
 
 const id = (scope: string, key: string) => `${scope}/${key}`;
-
-/** Stamp files are written in order per composition (an edit's "unconfirmed" must not overtake a later stamp). */
-const stampWrites = new Map<string, Promise<void>>();
-const writeStamp = (scope: string, s: Stamp | null) => {
-  const base = root;
-  const file = base ? inside(base, [...scope.split("/"), STAMP]) : null;
-  if (!file) return;
-  const prev = stampWrites.get(scope) ?? Promise.resolve();
-  const next = prev
-    .then(async () => {
-      if (s) {
-        await mkdir(dirname(file), { recursive: true });
-        await writeFile(file, JSON.stringify(s));
-      } else await unlink(file);
-    })
-    .catch(() => undefined);
-  stampWrites.set(scope, next);
-};
 
 /** Read what's already in the folder (frames, oldest-used first, and stamps). */
 const scan = async (base: string, gen: number) => {
@@ -313,24 +298,11 @@ export const registerPreviewCacheIpc = () => {
   ipcMain.handle("cache:status", () => status(true));
   ipcMain.handle("cache:space", () => space());
 
-  // Before a window uses a composition's frames: keep them only if they were made from this exact
-  // show by this build. Returns the frames on disk.
-  ipcMain.handle("cache:validate", async (_e, scope: DiskCacheScope, fp: string): Promise<string[]> => {
-    await whenReady();
-    const s = scopeDir(scope.project, scope.comp);
-    const stamp = stamps.get(s);
-    if (!stamp || stamp.fingerprint !== fp || stamp.build !== BUILD) {
-      deleteFiles(index.removeScope(s));
-      for (const k of [...pending.keys()]) if (k.startsWith(`${s}/`)) pending.delete(k);
-      const next = { fingerprint: fp, build: BUILD };
-      stamps.set(s, next);
-      writeStamp(s, next);
-    }
-    return index.keys(s);
-  });
+  // This build, and the tag its frames carry.
+  ipcMain.handle("cache:build", () => ({ build: BUILD, tag: buildTag(BUILD) }));
 
-  // A newer build: what a composition's frames were made from, so the window can keep the ones it
-  // still draws the same (renderer/src/preview/diskCache.ts, carry-over).
+  // Frames saved before signatures: the version of the show and the build they were made from (the
+  // window renames those it can tell are the show it has open; renderer/src/preview/diskCache.ts).
   ipcMain.handle("cache:previous", async (_e, scope: DiskCacheScope): Promise<{ fingerprint: string; build: string; current: string } | null> => {
     await whenReady();
     const stamp = stamps.get(scopeDir(scope.project, scope.comp));
@@ -343,52 +315,33 @@ export const registerPreviewCacheIpc = () => {
     return index.keys(scopeDir(scope.project, scope.comp));
   });
 
-  // Keep frames an older build made from this same show, except the ones drawn differently now.
-  ipcMain.handle("cache:carryOver", async (_e, scope: DiskCacheScope, fp: string, fromBuild: string, drop: Array<[number, number]>): Promise<number> => {
+  // Frames already on disk given the names this build looks for (frames saved before signatures,
+  // and frames an earlier build drew that this one draws the same), renamed in place. Returns the keys.
+  ipcMain.handle("cache:adopt", async (_e, scope: DiskCacheScope, renames: Array<[string, string]>): Promise<string[]> => {
     await whenReady();
     const s = scopeDir(scope.project, scope.comp);
-    const stamp = stamps.get(s);
-    if (!stamp || stamp.fingerprint !== fp || stamp.build !== fromBuild || fromBuild === BUILD) return 0;
-    const r = drop.map(([a, b]) => [Number(a), Number(b)] as const);
-    const before = index.keys(s).length;
-    deleteFiles(index.removeFrames(s, r));
-    for (const k of [...pending.keys()]) {
-      if (!k.startsWith(`${s}/`)) continue;
-      const f = frameOfKey(k.slice(s.length + 1));
-      if (r.some(([a, b]) => f >= a && f < b)) pending.delete(k);
+    const gen = generation;
+    let done = 0;
+    for (let i = 0; i < renames.length; i += 64) {
+      await Promise.all(
+        renames.slice(i, i + 64).map(async ([from, to]) => {
+          const a = index.has(s, from) && !index.has(s, to) ? fileOf({ scope: s, key: from }) : null;
+          const b = fileOf({ scope: s, key: to });
+          if (!a || !b) return;
+          try {
+            await rename(a, b);
+          } catch {
+            return;
+          }
+          if (gen !== generation) return;
+          const e = index.remove(s, from);
+          if (e) index.add(s, to, e.bytes);
+          done++;
+        }),
+      );
     }
-    const next = { fingerprint: fp, build: BUILD };
-    stamps.set(s, next);
-    writeStamp(s, next);
-    const kept = index.keys(s).length;
-    log(`preview frames: ${s}: kept ${kept} of ${before} frames made by build ${fromBuild} (drawn the same by ${BUILD}); ${before - kept} to make again`);
-    return kept;
-  });
-
-  // After edits: the frames on disk now match this version of the show.
-  ipcMain.handle("cache:stamp", async (_e, scope: DiskCacheScope, fp: string) => {
-    await whenReady();
-    const s = scopeDir(scope.project, scope.comp);
-    const next = { fingerprint: fp, build: BUILD };
-    stamps.set(s, next);
-    writeStamp(s, next);
-  });
-
-  // An edit changed these frames (half-open frame ranges): delete them, and mark the composition
-  // unconfirmed until the window stamps the new version.
-  ipcMain.handle("cache:invalidate", async (_e, scope: DiskCacheScope, ranges: Array<[number, number]>): Promise<DiskCacheUsage> => {
-    await whenReady();
-    const s = scopeDir(scope.project, scope.comp);
-    const r = ranges.map(([a, b]) => [Number(a), Number(b)] as const);
-    deleteFiles(index.removeFrames(s, r));
-    for (const k of [...pending.keys()]) {
-      if (!k.startsWith(`${s}/`)) continue;
-      const f = frameOfKey(k.slice(s.length + 1));
-      if (r.some(([a, b]) => f >= a && f < b)) pending.delete(k);
-    }
-    stamps.set(s, null);
-    writeStamp(s, null);
-    return usage();
+    log(`preview frames: ${s}: ${done} of ${renames.length} frames named by what they're made from (build ${BUILD})`);
+    return index.keys(s);
   });
 
   ipcMain.handle("cache:put", async (_e, scope: DiskCacheScope, key: string, data: Uint8Array): Promise<DiskCacheUsage | null> => {

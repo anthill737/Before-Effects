@@ -138,7 +138,8 @@ const resolvePath = (
     ? { paths: resolveRegionPaths(project, src.ref, o.venueId, !!src.outline), space: "comp" }
     : { paths: [unpackPath(ev(src.path, t, o))], space: "layer" };
 
-const layerLocalTime = (l: Layer, t: Flicks): Flicks => Math.round((t - l.startTime) * l.stretch);
+/** A layer's own time at composition time t (its start and speed applied). */
+export const layerLocalTime = (l: Layer, t: Flicks): Flicks => Math.round((t - l.startTime) * l.stretch);
 
 export const isLayerActiveAt = (l: Layer, t: Flicks): boolean => l.inPoint <= t && t < l.outPoint;
 

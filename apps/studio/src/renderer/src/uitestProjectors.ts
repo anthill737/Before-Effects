@@ -138,7 +138,7 @@ const playOutputs = async (projectors: Projector[]) => {
   const call = async (method: string, params: Record<string, unknown>) => {
     const r = await dispatch({ callId: `proj-${method}`, requestId: `proj-${method}`, method, params });
     if (!r.ok) throw new Error(`${method}: ${r.error?.message}`);
-    return r.result as { frames?: { state?: string; done?: number; total?: number } };
+    return r.result as { frames?: { state?: string; done?: number; total?: number; reason?: string } };
   };
   await call("prepare.frames", { target: "scene", scene: st().compId!, resolution: "full", fromSeconds: 0, toSeconds: 8 });
   const prep = await call("prepare.wait", { timeoutMs: 180_000 });
@@ -172,7 +172,7 @@ const playOutputs = async (projectors: Projector[]) => {
   await sleep(300);
   for (const pr of projectors) await window.be.windows.closeOutput(pr.id);
   const each = (f: (o: (typeof shown)[number]) => unknown) => shown.map(f).join(" and ");
-  const note = `${prep.frames?.done ?? 0}/${prep.frames?.total ?? 0} frames prepared; different frames a second ${each((o) => o.unique ?? 0)}, never shown ${each((o) => o.skipped ?? 0)} (so far at 1.4/1.8/2.2/2.6 s of playing: ${samples.map((x) => x.unshown.join("+")).join(", ")}), went back ${each((o) => o.stepsBack ?? 0)} times, clock off the editor's by at most ${each((o) => o.clockErrMaxMs ?? 0)} ms (unshown: ${each((o) => `${o.causes?.lateReads ?? 0} late reads, ${o.causes?.lateTurns ?? 0} late turns`)}); editor reads a frame in ${usePreviewStats.getState().diskReadMs} ms, holds up to ${usePreviewStats.getState().cacheBudgetMB} MB of frames: ${changes.join(", ")}`;
+  const note = `${prep.frames?.done ?? 0}/${prep.frames?.total ?? 0} frames prepared (${prep.frames?.state}${prep.frames?.reason ? `: ${prep.frames.reason}` : ""}); different frames a second ${each((o) => o.unique ?? 0)}, never shown ${each((o) => o.skipped ?? 0)} (so far at 1.4/1.8/2.2/2.6 s of playing: ${samples.map((x) => x.unshown.join("+")).join(", ")}), went back ${each((o) => o.stepsBack ?? 0)} times, clock off the editor's by at most ${each((o) => o.clockErrMaxMs ?? 0)} ms (unshown: ${each((o) => `${o.causes?.lateReads ?? 0} late reads, ${o.causes?.lateTurns ?? 0} late turns`)}); editor reads a frame in ${usePreviewStats.getState().diskReadMs} ms, holds up to ${usePreviewStats.getState().cacheBudgetMB} MB of frames: ${changes.join(", ")}`;
   return { prepared: prep.frames?.state === "done", ready, fps, samples, shown, note };
 };
 
