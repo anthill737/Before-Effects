@@ -45,8 +45,10 @@ const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
   // video, text, shapes, effects, masks, the basic blend modes) and simulations don't.
   "2026-10-04T01:38:20.094Z": ["3d", "track-matte", "adjustment", "blend-mode"],
   // 4b61055 (render 35efe0e6e524ff03). Since then only how graphics memory is reused and reported
-  // changed, not what's drawn: of 1,951 frames (2D, 3D and physics) made again, the ones that differ
-  // differ only as much as that build's own frames do when it makes them twice (breaking 3D pieces).
+  // changed, not what's drawn. A whole 35,340-frame show made again came out byte-identical in 32,823
+  // frames; the rest are 3D frames that 4b61055 itself draws differently from one preparation to the
+  // next (turning blocks, falling bricks, the frame a light comes on): in a 2,100-frame stretch, two
+  // preparations by 4b61055 and two by this build each matched an earlier one in 1,200–1,320 frames.
   "render 35efe0e6e524ff03": [],
 };
 const JPEG_QUALITY = 0.92;
