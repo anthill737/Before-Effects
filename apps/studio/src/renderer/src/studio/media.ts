@@ -3,7 +3,7 @@
  * Files are copied into the project's media folder, inspected, and, for music, analysed for
  * beats in the background. Every change is an ordinary undoable operation.
  */
-import { type Asset, type AudioAnalysis, defaultAudio, newId, newLayer, type Op, type OpSource, secondsToTime, type Flicks } from "@be/core";
+import { type Asset, type AudioAnalysis, defaultAudio, newId, newLayer, type Op, type OpSource, secondsToTime, type Flicks, type ModelInfo } from "@be/core";
 import { currentComp, useStudio } from "./store.ts";
 
 let worker: Worker | null = null;
@@ -55,6 +55,17 @@ export const analyseBeats = async (asset: Asset): Promise<AudioAnalysis | null> 
   return r.analysis;
 };
 
+/** A 3D model file's size and collision hull (throws, saying why, when it can't be read). */
+export const measureModel = async (path: string): Promise<ModelInfo> => {
+  const { analyzeModel } = await import("@be/engine");
+  try {
+    return await analyzeModel(await window.be.files.readFile(path));
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    throw new Error(/draco|meshopt|ktx2|basis/i.test(msg) ? "It uses compression this app can't read yet (Draco, Meshopt or KTX2). Export it again without compression." : `It couldn't be read as a 3D model: ${msg}`);
+  }
+};
+
 /** Import files and return the new assets (already in the project). */
 export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean } = {}): Promise<Asset[]> => {
   const s = useStudio.getState();
@@ -66,6 +77,8 @@ export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean
     try {
       const m = await window.be.media.import(file, project.id);
       if (m.kind === "unknown") continue;
+      // A 3D model: measured now (its size and a collision hull), so it can be placed and collide.
+      const model = m.kind === "model" ? await measureModel(m.path) : undefined;
       const asset: Asset = {
         id: newId("asset"),
         kind: m.kind,
@@ -85,6 +98,7 @@ export const importMediaFiles = async (paths?: string[], opts: { quiet?: boolean
           ...(m.sampleRate ? { sampleRate: m.sampleRate } : {}),
           ...(m.audioChannels ? { audioChannels: m.audioChannels } : {}),
           ...(m.codec ? { codec: m.codec } : {}),
+          ...(model ? { model } : {}),
         },
       };
       if (useStudio.getState().apply({ type: "asset.add", args: { asset } }, { label: `Import ${m.name}` })) out.push(asset);
@@ -113,6 +127,8 @@ export const addAssetLayer = (asset: Asset, at?: Flicks, opts: { source?: OpSour
 
 /** The operation that adds an asset as its own layer in the current scene (not applied). */
 export const assetLayerOps = (asset: Asset, at?: Flicks): { id: string; ops: Op[] } | null => {
+  // A 3D model goes into a 3D scene (the 3D panel's "Add object"), not onto a flat layer.
+  if (asset.kind === "model") return null;
   const s = useStudio.getState();
   const comp = currentComp(s);
   if (!comp) return null;

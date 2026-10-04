@@ -4,9 +4,10 @@
  * animated: click ◆ to add a keyframe at the playhead; once animated, changing the value sets a
  * keyframe at the playhead.
  */
-import { type AnimProp, type Blocks3D, DEFAULT_BLOCKS, DEFAULT_FRACTURE, evalProp, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, type RGBA, type Scene3D, timeToSeconds, type Vec3 } from "@be/core";
-import { type ReactNode, useState } from "react";
-import { addAreaObject, addObject, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
+import { type AnimProp, balancesPicture, type Blocks3D, DEFAULT_BLOCKS, DEFAULT_FRACTURE, evalProp, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, type RGBA, type Scene3D, timeToSeconds, type Vec3 } from "@be/core";
+import { type ReactNode, useEffect, useState } from "react";
+import { addAreaObject, addModelFromFile, addModelObject, addPictureFromFile, addObject, ensureModelInfo, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
+import { getRenderer } from "./engineHost.ts";
 import { Choice, ColorField, Field, Slider, Toggle } from "./controls.tsx";
 import { PartEditor } from "./PartEditor.tsx";
 import { EditableSection, JobProgressFor } from "./BlenderPanel.tsx";
@@ -58,6 +59,59 @@ const PhysicsStatus = ({ layerId }: { layerId: string }) => {
   );
 };
 
+/**
+ * Where the audience stands (the show camera), in building widths in front of the building. Scenes
+ * following the building's viewpoint share one, so depth illusions line up across the show.
+ */
+const ViewpointField = ({ scene, onScene }: { scene: Scene3D; onScene: (v: number | null, label: string) => void }) => {
+  const venue = useStudio((st) => activeVenue(st));
+  const shared = venue?.cameraDistance ?? 1.6;
+  const follows = scene.cameraDistance === undefined;
+  const setShared = (v: number) => venue && useStudio.getState().apply({ type: "venue.update", args: { venueId: venue.id, changes: { cameraDistance: v } } }, { label: "Change the audience viewpoint", coalesceKey: "venue:viewpoint" });
+  return (
+    <Field label="Audience viewpoint" help="How far in front of the building the audience (the show camera) stands, in building widths. It sets the perspective of everything that stands out of, or moves away from, the wall. Scenes that use the building's viewpoint all share one, so their depth lines up.">
+      <Toggle label="Same as the building's (every scene)" value={follows} onChange={(v) => onScene(v ? null : shared, v ? "Use the building's viewpoint" : "Give this scene its own viewpoint")} />
+      <Slider label="Audience distance" value={scene.cameraDistance ?? shared} min={0.2} max={20} step={0.05} onChange={(v) => (follows ? setShared(v) : onScene(v, "Change this scene's viewpoint"))} />
+      {follows && <p className="muted small">Changing it changes every scene that uses the building's viewpoint.</p>}
+    </Field>
+  );
+};
+
+/** A model's size as measured, and why it isn't showing when its file couldn't be read. */
+const ModelStatus = ({ assetId }: { assetId: string }) => {
+  const asset = useStudio((st) => st.project?.assets[assetId]);
+  const [problem, setProblem] = useState<string | null>(null);
+  // Measured when it arrived; older ones (e.g. from Blender before measuring existed) are measured now.
+  useEffect(() => {
+    if (asset?.kind === "model" && !asset.meta.model) void ensureModelInfo(assetId);
+  }, [assetId, !!asset?.meta.model]);
+  useEffect(() => {
+    let live = true;
+    const look = () => void getRenderer().then((r) => live && setProblem(r.scenes.modelErrors.get(assetId) ?? null));
+    look();
+    const t = setInterval(look, 1500);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [assetId]);
+  const b = asset?.meta.model?.bounds;
+  return (
+    <>
+      {problem && (
+        <p className="warn small" role="alert">
+          “{asset?.name}” can't be shown: {problem}.
+        </p>
+      )}
+      {b && (
+        <p className="muted small">
+          As made: {(b[3] - b[0]).toFixed(2)} × {(b[4] - b[1]).toFixed(2)} × {(b[5] - b[2]).toFixed(2)} m (wide × tall × deep){asset?.meta.model?.animations ? ` · ${asset.meta.model.animations} animation${asset.meta.model.animations > 1 ? "s" : ""}` : ""}
+        </p>
+      )}
+    </>
+  );
+};
+
 export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
   const project = useStudio((s) => s.project)!;
   useStudio((s) => s.version);
@@ -75,7 +129,7 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
     const a = (angle * Math.PI) / 180;
     useStudio.getState().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes: { gravity: [Math.sin(a) * strength, -Math.cos(a) * strength, toward] } } }, { label: "Change gravity", coalesceKey: `${scene.id}:gravity` });
   };
-  const updateScene = (changes: { name?: string; cameraDistance?: number }, label: string, key: string) =>
+  const updateScene = (changes: { name?: string; cameraDistance?: number | null }, label: string, key: string) =>
     useStudio.getState().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes } }, { label, coalesceKey: `${scene.id}:${key}` });
   const contained = layer.masks.some((m) => m.id === "contain");
   const area = sceneArea(scene);
@@ -94,9 +148,7 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
         <LayerIdentity layer={layer} />
         <LayerTiming layer={layer} />
         <LayerMasks layer={layer} />
-        <Field label="Show camera distance" help="How far in front of the building the show camera stands, in building widths. Changes the perspective of everything that moves out of the wall.">
-          <Slider label="Show camera distance" value={scene.cameraDistance} min={0.2} max={20} step={0.05} onChange={(v) => updateScene({ cameraDistance: v }, "Change camera distance", "camera")} />
-        </Field>
+        <ViewpointField scene={scene} onScene={(v, label) => updateScene({ cameraDistance: v }, label, "camera")} />
       </Section>
       {area && (
         <Field
@@ -153,6 +205,42 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
                 {label}
               </button>
             ))}
+            <div className="hint">A 3D model (characters, props): it shares this scene's depth, lights and shadows.</div>
+            <button
+              role="menuitem"
+              className="list-item"
+              onClick={() => {
+                setAdding(false);
+                void addModelFromFile(layer).catch((e) => useStudio.getState().toast({ kind: "error", text: String((e as Error)?.message ?? e) }));
+              }}
+            >
+              From a file (.glb, .gltf)…
+            </button>
+            <button
+              role="menuitem"
+              className="list-item"
+              onClick={() => {
+                setAdding(false);
+                void addPictureFromFile(layer);
+              }}
+            >
+              A standing picture (a cut-out character, .png)…
+            </button>
+            {Object.values(project?.assets ?? {})
+              .filter((a) => a.kind === "model")
+              .map((a) => (
+                <button
+                  key={a.id}
+                  role="menuitem"
+                  className="list-item"
+                  onClick={() => {
+                    setAdding(false);
+                    void addModelObject(layer, a.id);
+                  }}
+                >
+                  {a.name}
+                </button>
+              ))}
             <div className="hint">A traced area as its own piece:</div>
             {Object.values(activeVenue(useStudio.getState())?.regions ?? {})
               .filter((r) => r.path.closed)
@@ -289,6 +377,32 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
         <>
 
       <Section title={L ? "Position" : "Position, turn and size"} open={!o.part}>
+        <Field label="Rides on" help="Moves with another object (a pumpkin in a character's hands, a lantern carried along): its position, turn and size are then measured from that object.">
+          <select
+            value={o.attach?.to ?? ""}
+            aria-label="Rides on"
+            onChange={(e) => up({ attach: e.target.value ? { to: e.target.value, ...(o.attach?.until !== undefined && o.attach?.until !== null ? { until: o.attach.until } : {}) } : null }, e.target.value ? "Ride on another object" : "Stand on its own", "attach")}
+          >
+            <option value="">Nothing (stands on its own)</option>
+            {scene.objectOrder
+              .filter((id) => id !== o.id && scene.objects[id]?.attach?.to !== o.id)
+              .map((id) => (
+                <option key={id} value={id}>
+                  {scene.objects[id]!.name}
+                </option>
+              ))}
+          </select>
+        </Field>
+        {o.attach && (
+          <Field label="Lets go at" help="Seconds into this layer when it stops riding: it stays where it was left, or (with physics) flies on with the speed it had.">
+            <div className="row gap">
+              <Toggle label="Lets go" value={o.attach.until !== undefined && o.attach.until !== null} onChange={(v) => up({ attach: { to: o.attach!.to, ...(v ? { until: Math.min(lenS, 1) } : {}) } }, v ? "Let go" : "Ride throughout", "attach-until-on")} />
+              {o.attach.until !== undefined && o.attach.until !== null && (
+                <Slider label="Lets go at (seconds)" value={o.attach.until} min={0} max={Math.max(1, lenS)} step={1 / 30} unit="s" onChange={(v) => up({ attach: { to: o.attach!.to, until: v }, ...(ph?.body === "dynamic" && ph.releaseAt !== undefined ? { physics: { ...ph, releaseAt: v } } : {}) }, "Change when it lets go", "attach-until")} />
+              )}
+            </div>
+          </Field>
+        )}
         <div className="row gap key-row">
           <span className="small muted grow">{(o.position.keyframes?.length ?? 0) > 0 ? `Animated (${o.position.keyframes!.length} keyframes)` : "Position"}</span>
           <KeyButton layer={layer} prop={o.position} label="position" onChange={(p) => up({ position: p }, "Animate position", "position-key")} />
@@ -316,7 +430,14 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
         )}
         {o.geometry?.kind === "model" && (
           <>
-            <p className="muted small">Its shapes, materials and animation come from Blender: edit them there, then “Update the 3D from Blender” on its video layer. Placement, timing and lights here are kept.</p>
+            <ModelStatus assetId={o.geometry.assetId} />
+            <p className="muted small">
+              Its shapes, materials and animation come from its file
+              {Object.values(project?.blenderLinks ?? {}).some((l) => l.editable?.assetId === (o.geometry?.kind === "model" ? o.geometry.assetId : ""))
+                ? ": it came from Blender, so edit it there, then “Update the 3D from Blender” on its video layer"
+                : ""}
+              . Placement, timing, physics and lights here are kept.
+            </p>
             <Field label="Animation speed" help="1 = as made in Blender; 0 holds it still.">
               <Slider label="Animation speed" value={o.clip?.speed ?? 1} min={0} max={4} step={0.05} onChange={(v) => up({ clip: { ...(o.clip ?? { speed: 1, offset: 0 }), speed: v } }, "Change animation speed", "clip-speed")} />
             </Field>
@@ -485,6 +606,14 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
               <Field label="Bounce" help="0 lands dead; 1 bounces back fully.">
                 <Slider label="Bounce" value={ph.bounce} min={0} max={1} step={0.05} onChange={(v) => setPhys({ bounce: v }, "Change bounce", "bounce")} />
               </Field>
+              {ph.body === "dynamic" && (
+                <Field label="Physics takes over" help="From the start, or later: until then it follows its animation (and what it rides on), then flies on with the speed and spin it had — a thrown pumpkin keeps going.">
+                  <div className="row gap">
+                    <Toggle label="Later" value={ph.releaseAt !== undefined} onChange={(v) => up({ physics: v ? { ...ph, releaseAt: o.attach?.until ?? Math.min(lenS, 1) } : (({ releaseAt: _r, ...rest }) => rest)(ph) }, v ? "Let go later" : "Physics from the start", "release-on")} />
+                    {ph.releaseAt !== undefined && <Slider label="Physics takes over at (seconds)" value={ph.releaseAt} min={0} max={Math.max(1, lenS)} step={1 / 30} unit="s" onChange={(v) => setPhys({ releaseAt: v }, "Change when physics takes over", "release")} />}
+                  </div>
+                </Field>
+              )}
             </>
           )}
         </Section>
@@ -508,6 +637,25 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
                   ))}
                 </div>
               </Field>
+              <Field label="Breaks" help="At a set time, or where something hits it: it stays whole until something moving hits it fast enough, then only the pieces around the hit break out, the way the hit was going (a pumpkin through a wall breaks it inward).">
+                <div className="segmented" role="radiogroup" aria-label="Breaks">
+                  {(["time", "impact"] as const).map((k) => (
+                    <button key={k} role="radio" aria-checked={(fr.trigger ?? "time") === k} className={(fr.trigger ?? "time") === k ? "on" : ""} onClick={() => setFr(k === "impact" ? { trigger: k, rebuildAt: null } : { trigger: k }, k === "impact" ? "Break where hit" : "Break at a set time", "trigger")}>
+                      {k === "impact" ? "Where something hits it" : "At a set time"}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              {fr.trigger === "impact" && (
+                <>
+                  <Field label="Breaks out around the hit" help="How far around the hit the pieces let go.">
+                    <Slider label="Impact radius" value={fr.impactRadius ?? 0.8} min={0.1} max={5} step={0.05} unit="m" onChange={(v) => setFr({ impactRadius: v }, "Change impact size", "impact-radius")} />
+                  </Field>
+                  <Field label="Hardest it takes" help="Hits slower than this (metres a second) don't break it.">
+                    <Slider label="Impact speed" value={fr.impactSpeed ?? 3} min={0} max={30} step={0.5} unit="m/s" onChange={(v) => setFr({ impactSpeed: v }, "Change impact strength", "impact-speed")} />
+                  </Field>
+                </>
+              )}
               <Field label="Piece size" help="Smaller pieces: more of them (up to 600).">
                 <Slider label="Piece size" value={fr.pieceSize} min={15} max={300} step={1} unit="cm" onChange={(v) => setFr({ pieceSize: v }, "Change piece size", "size")} />
               </Field>
@@ -659,6 +807,9 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
           {L.type !== "ambient" && (
             <>
               <Toggle label="Casts shadows" value={L.castShadow} onChange={(v) => setLight({ castShadow: v }, v ? "Cast shadows" : "No shadows", "shadow")} />
+              <Field label="Part of the picture's own lighting" help="On: the building's picture is evened out by this light, so at rest it shows exactly (a sun, a soft fill). Off: it adds light and shadows on top of the picture (a lantern, a glow, a passing beam).">
+                <Toggle label="Part of the picture's own lighting" value={balancesPicture(L)} onChange={(v) => setLight({ balance: v }, v ? "Light is part of the picture's lighting" : "Light adds to the picture", "balance")} />
+              </Field>
               <Field label="Shadow softness">
                 <Slider label="Shadow softness" value={L.softness} min={0} max={1} step={0.05} onChange={(v) => setLight({ softness: v }, "Change softness", "soft")} />
               </Field>

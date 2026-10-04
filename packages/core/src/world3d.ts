@@ -95,6 +95,12 @@ export interface Physics3D {
   readonly friction: number;
   /** 0 = no bounce, 1 = bounces back fully. */
   readonly bounce: number;
+  /**
+   * Dynamic bodies: seconds into the layer when it lets go. Until then it follows its animation (and
+   * whatever it rides on); then physics takes over with the speed and spin it had — a thrown pumpkin
+   * keeps flying. Absent: physics from the start.
+   */
+  readonly releaseAt?: number;
 }
 
 export interface Fracture3D {
@@ -114,6 +120,16 @@ export interface Fracture3D {
   readonly stagger?: number;
   /** How it breaks: irregular pieces (absent), glass — shards radiating from an impact point — or bricks: courses of heavy blocks laid like masonry. */
   readonly pattern?: "pieces" | "glass" | "bricks";
+  /**
+   * What makes it break: "time" (at collapseAt) or "impact" — it stays whole until something moving
+   * hits it at least `impactSpeed` m/s fast, then only the pieces within `impactRadius` metres of the
+   * hit let go, carried the way the hit was going (a pumpkin through a wall breaks it inward).
+   */
+  readonly trigger?: "time" | "impact";
+  /** Impact: metres around the hit that break out (default 0.8). */
+  readonly impactRadius?: number;
+  /** Impact: slowest hit that breaks it, m/s (default 3). */
+  readonly impactSpeed?: number;
 }
 
 /**
@@ -169,7 +185,17 @@ export interface Light3D {
   readonly angle: number;
   /** Soft shadow edge / spot edge, 0..1. */
   readonly softness: number;
+  /**
+   * Part of the picture's own lighting: picture surfaces are evened out by these lights so that, at
+   * rest, they show their picture exactly. Lights that aren't add light (and cast shadows) on top of
+   * the picture — a lantern, a ghost's glow, a passing beam. Default: sun (directional) and fill
+   * (ambient) lights are; spot and point lights aren't.
+   */
+  readonly balance?: boolean;
 }
+
+/** Does this light even out picture surfaces (see Light3D.balance)? */
+export const balancesPicture = (L: Pick<Light3D, "type" | "balance">): boolean => L.balance ?? (L.type === "directional" || L.type === "ambient");
 
 /** A light as it is at one moment, for working out what lands on a surface (colours linear RGB). */
 export interface LightNow {
@@ -182,6 +208,8 @@ export interface LightNow {
   readonly target: Vec3;
   readonly angle: number;
   readonly softness: number;
+  /** Part of the picture's own lighting (see Light3D.balance). */
+  readonly balance?: boolean;
 }
 
 /**
@@ -237,6 +265,13 @@ export interface Object3D {
   readonly scale: AnimProp<Vec3>;
   /** The point it turns and scales about (metres, in the scene's frame at rest) — a door's hinge. Default: its origin. */
   readonly pivot?: Vec3;
+  /**
+   * Rides on another object of the scene (a pumpkin in a character's hands, a lantern on a ghost):
+   * its own position, turn and size are then measured in that object's frame, so it moves with it.
+   * `until`: seconds into the layer when it lets go (it stays where it was left, or physics takes
+   * over: see Physics3D.releaseAt). It follows the other object's animation, not its physics.
+   */
+  readonly attach?: { readonly to: Id; readonly until?: number | null };
   readonly geometry?: Geometry3D;
   readonly material?: Material3D;
   readonly castShadow?: boolean;
@@ -264,9 +299,16 @@ export interface Scene3D {
   readonly objects: Readonly<Record<Id, Object3D>>;
   /** m/s² — strength and direction. */
   readonly gravity: Vec3;
-  /** The show camera stands this many building-widths in front of the building. */
-  readonly cameraDistance: number;
+  /**
+   * The show camera stands this many building-widths in front of the building. Absent: the
+   * building's own viewpoint (Venue.cameraDistance), shared by every scene that follows it.
+   */
+  readonly cameraDistance?: number;
 }
+
+/** A scene's camera distance: its own, or the building's viewpoint, or 1.6. */
+export const sceneCameraDistance = (project: Project, scene: Pick<Scene3D, "cameraDistance">, venueId: Id | undefined): number =>
+  Math.max(0.2, scene.cameraDistance ?? (venueId ? project.venues[venueId]?.cameraDistance : undefined) ?? 1.6);
 
 // ---------------------------------------------------------------------------------------------
 // Small maths
@@ -289,6 +331,51 @@ export const placePoint = (c: Vec3, pos: Vec3, q: Quat, scale: Vec3, pivot: Vec3
   const r = rotateByQuat([(c[0] - pivot[0]) * scale[0], (c[1] - pivot[1]) * scale[1], (c[2] - pivot[2]) * scale[2]], q);
   return [pos[0] + pivot[0] + r[0], pos[1] + pivot[1] + r[1], pos[2] + pivot[2] + r[2]];
 };
+
+export const quatMul = (a: Quat, b: Quat): Quat => [
+  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+];
+
+/** Angular velocity (radians a second, world axes) turning q0 into q1 over `dt` seconds. */
+export const angularVelocity = (q0: Quat, q1: Quat, dt: number): Vec3 => {
+  let d = quatMul(q1, [-q0[0], -q0[1], -q0[2], q0[3]]);
+  if (d[3] < 0) d = [-d[0], -d[1], -d[2], -d[3]];
+  const s = Math.hypot(d[0], d[1], d[2]);
+  if (s < 1e-9 || dt <= 0) return [0, 0, 0];
+  const angle = 2 * Math.atan2(s, d[3]);
+  return [(d[0] / s) * (angle / dt), (d[1] / s) * (angle / dt), (d[2] / s) * (angle / dt)];
+};
+
+/** Where an object is at a moment: how its points are placed, its turn and its size (attachments included). */
+export interface Pose3D {
+  readonly place: (c: Vec3) => Vec3;
+  readonly q: Quat;
+  readonly scale: Vec3;
+}
+
+/**
+ * An object's pose at layer time `t`: its own position, turn and size about its pivot, carried by
+ * whatever it rides on (see Object3D.attach). After it lets go it stays where its carrier left it,
+ * still moving by its own animation.
+ */
+export const objectPose = (scene: Pick<Scene3D, "objects">, o: Object3D, t: Flicks, depth = 0): Pose3D => {
+  const pos = evalProp(o.position, t);
+  const q = eulerDegToQuat(evalProp(o.rotation, t));
+  const sc = evalProp(o.scale, t).map((v) => v / 100) as unknown as Vec3;
+  const own = (c: Vec3) => placePoint(c, pos, q, sc, o.pivot);
+  const a = o.attach;
+  const carrier = a && depth < 8 && a.to !== o.id ? scene.objects[a.to] : undefined;
+  if (!carrier) return { place: own, q, scale: sc };
+  const tc = a!.until !== undefined && a!.until !== null ? Math.min(t, Math.round(a!.until * FLICKS_PER_SECOND)) : t;
+  const P = objectPose(scene, carrier, tc, depth + 1);
+  return { place: (c) => P.place(own(c)), q: quatMul(P.q, q), scale: [sc[0] * P.scale[0], sc[1] * P.scale[1], sc[2] * P.scale[2]] };
+};
+
+/** Does the object move in the scene by animation (its own keyframes, or riding on something)? */
+export const animatedIn3D = (o: Object3D): boolean => (o.position.keyframes?.length ?? 0) > 0 || (o.rotation.keyframes?.length ?? 0) > 0 || !!o.attach;
 
 export const rotateByQuat = (v: Vec3, q: Quat): Vec3 => {
   const [x, y, z] = v;
@@ -754,6 +841,8 @@ export interface ResolvedObject {
   readonly pieces: readonly ResolvedPiece[];
   /** Index of the object's first moving body in the prepared motion (−1 = not moving by physics). */
   readonly poseIndex: number;
+  /** First frame its pose comes from the prepared motion (until then it follows its own animation). */
+  readonly motionFrom?: number;
   /** Particles: where they're born. */
   readonly emitter?: import("./particles3d.ts").ParticleEmitter;
 }
@@ -765,8 +854,12 @@ export type PhysicsShape =
   | { readonly kind: "mesh"; readonly points: readonly number[]; readonly indices: readonly number[] };
 
 export interface PhysicsBody {
-  /** "fixed" never moves · "kinematic" follows `path` · "dynamic" simulated · "fragment" fixed until released. */
-  readonly kind: "fixed" | "kinematic" | "dynamic" | "fragment";
+  /**
+   * "fixed" never moves · "kinematic" follows `path` · "dynamic" simulated · "fragment" fixed until
+   * released (at `release`, or by an impact) · "released" follows `path` until `release`, then is
+   * simulated from the speed and spin it had.
+   */
+  readonly kind: "fixed" | "kinematic" | "dynamic" | "fragment" | "released";
   readonly shape: PhysicsShape;
   readonly mass: number;
   readonly friction: number;
@@ -780,6 +873,8 @@ export interface PhysicsBody {
   readonly velocity?: Vec3;
   readonly spin?: Vec3;
   readonly rebuild?: { readonly start: number; readonly frames: number; readonly delay: number };
+  /** Fragment of a surface that breaks where it's hit (no `release`): which surface, and how. */
+  readonly impact?: { readonly group: number; readonly radius: number; readonly speed: number };
   /** Where its pose is recorded in the prepared motion (−1 = not recorded). */
   readonly poseIndex: number;
 }
@@ -798,6 +893,8 @@ export interface ResolvedPhysics {
 export interface ResolvedScene3D {
   readonly scene: Scene3D;
   readonly canvas: Canvas;
+  /** The camera distance it's drawn with (its own, or the building's viewpoint). */
+  readonly cameraDistance: number;
   readonly photoAssetId?: Id;
   readonly objects: readonly ResolvedObject[];
   readonly physics: ResolvedPhysics | null;
@@ -871,10 +968,12 @@ const scaleOf = (o: Object3D, t: Flicks): Vec3 => evalProp(o.scale, t).map((s) =
 
 const chunk = <T>(a: readonly T[], n: number): T[][] => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
-const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: boolean): PhysicsShape | null => {
+const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: boolean, modelHull?: readonly number[]): PhysicsShape | null => {
   const g = o.geometry;
   if (!g) return null;
   const [sx, sy, sz] = scale;
+  // A model: its measured hull (none until it has been measured, so it can't collide yet).
+  if (g.kind === "model") return modelHull && modelHull.length >= 12 ? { kind: "hull", points: modelHull.map((v, i) => v * Math.abs(i % 3 === 0 ? sx : i % 3 === 1 ? sy : sz)) } : null;
   if (g.kind === "box") return { kind: "box", half: [(g.size[0] * Math.abs(sx)) / 2, (g.size[1] * Math.abs(sy)) / 2, (g.size[2] * Math.abs(sz)) / 2] };
   if (g.kind === "sphere") return { kind: "ball", radius: g.radius * Math.max(Math.abs(sx), Math.abs(sy), Math.abs(sz)) };
   if (g.kind === "plane") return { kind: "box", half: [(g.size[0] * Math.abs(sx)) / 2, (g.size[1] * Math.abs(sy)) / 2, 0.01] };
@@ -919,12 +1018,13 @@ const resolveCache = new WeakMap<Scene3D, Array<{ sig: string; venue: unknown; r
  */
 export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId?: Id; canvas: Canvas; fps: number; frames: number }): ResolvedScene3D => {
   const venue = opts.venueId ? project.venues[opts.venueId] : undefined;
-  const sig = `${opts.venueId}|${opts.canvas.width}x${opts.canvas.height}|${opts.fps}|${opts.frames}|${venue?.referenceAssetId}`;
+  const sig = `${opts.venueId}|${opts.canvas.width}x${opts.canvas.height}|${opts.fps}|${opts.frames}|${venue?.referenceAssetId}|${venue?.cameraDistance}`;
   const list = resolveCache.get(scene) ?? [];
   const hit = list.find((e) => e.sig === sig && e.venue === venue);
   if (hit) return hit.result;
 
   const { canvas, fps, frames } = opts;
+  const camDist = sceneCameraDistance(project, scene, opts.venueId);
   const objects: ResolvedObject[] = [];
   const bodies: PhysicsBody[] = [];
   let movers = 0;
@@ -932,21 +1032,27 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
   for (const id of scene.objectOrder) {
     const o = scene.objects[id];
     if (!o) continue;
-    const pieces = piecesFor(project, o, canvas, opts.venueId, Math.max(0.2, scene.cameraDistance ?? 1.6) * canvas.width * METERS_PER_PIXEL);
+    const pieces = piecesFor(project, o, canvas, opts.venueId, camDist * canvas.width * METERS_PER_PIXEL);
     const ph = o.kind === "mesh" ? o.physics : undefined;
+    const modelHull = o.geometry?.kind === "model" ? project.assets[o.geometry.assetId]?.meta.model?.hull : undefined;
     let poseIndex = -1;
+    let motionFrom: number | undefined;
     if (ph && o.geometry) {
       const fr = o.geometry.kind === "area" ? o.fracture : undefined;
-      // Pose of the object when it starts moving under physics.
-      const t0 = fr ? flicks(fr.collapseAt) : 0;
-      const pos = evalProp(o.position, t0);
-      const q = eulerDegToQuat(evalProp(o.rotation, t0));
-      const sc = scaleOf(o, t0);
-      const animated = (o.position.keyframes?.length ?? 0) > 0 || (o.rotation.keyframes?.length ?? 0) > 0;
-      const placed = (c: Vec3): Vec3 => placePoint(c, pos, q, sc, o.pivot);
+      const impact = fr?.trigger === "impact";
+      // Pose of the object when it starts moving under physics (a surface broken by an impact: as it
+      // stands at the start; it's fixed until hit).
+      const t0 = fr && !impact ? flicks(fr.collapseAt) : 0;
+      const pose0 = objectPose(scene, o, t0);
+      const q = pose0.q;
+      const sc = pose0.scale;
+      const animated = animatedIn3D(o);
+      const placed = pose0.place;
       const common = { friction: Math.max(0, ph.friction), restitution: Math.min(1, Math.max(0, ph.bounce)) };
       if (fr && ph.body === "dynamic" && pieces.length) {
         poseIndex = movers;
+        motionFrom = impact ? 0 : Math.max(0, Math.round(fr.collapseAt * fps));
+        const group = bodies.length;
         const total = pieces.reduce((s, p) => s + p.area, 0) || 1;
         const release0 = Math.max(0, Math.round(fr.collapseAt * fps));
         const rebuildStart = fr.rebuildAt !== null && fr.rebuildAt > fr.collapseAt ? Math.round(fr.rebuildAt * fps) : null;
@@ -970,7 +1076,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
             ...common,
             p: placed(piece.center),
             q,
-            release,
+            ...(impact ? { impact: { group, radius: Math.max(0.05, fr.impactRadius ?? 0.8), speed: Math.max(0, fr.impactSpeed ?? 3) } } : { release }),
             velocity: [(r1 - 0.5) * fr.push * 0.5, (r2 - 0.3) * fr.push * 0.3, fr.push * (0.2 + 1.6 * h) * (0.7 + 0.6 * r3)],
             spin: [(r2 - 0.5) * spin, (r3 - 0.5) * spin, (r1 - 0.5) * spin],
             ...(rebuildStart !== null ? { rebuild: { start: rebuildStart, frames: rebuildFrames, delay: Math.round(((rank.get(i) ?? 0) / Math.max(1, pieces.length)) * rebuildFrames * 0.6) } } : {}),
@@ -981,49 +1087,69 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
         const fixed = ph.body === "static";
         const list = pieces.length ? pieces : [null];
         const moving = !fixed || animated;
-        if (moving) poseIndex = movers;
+        const list2 = list.filter((piece) => shapeFor(o, piece, sc, fixed, modelHull));
+        if (moving && list2.length) {
+          poseIndex = movers;
+          motionFrom = 0;
+        }
         const total = pieces.reduce((s, p) => s + p.area, 0) || 1;
-        for (const piece of list) {
-          const shape = shapeFor(o, piece, sc, fixed);
-          if (!shape) continue;
+        for (const piece of list2) {
+          const shape = shapeFor(o, piece, sc, fixed, modelHull)!;
           const center: Vec3 = piece ? piece.center : [0, 0, 0];
+          // A dynamic body that lets go later follows its animation until then.
+          const releaseFrame = !fixed && ph.releaseAt !== undefined ? Math.min(frames - 1, Math.max(0, Math.round(ph.releaseAt * fps))) : -1;
           let path: number[] | undefined;
-          if (fixed && animated) {
+          let velocity: Vec3 | undefined;
+          let spin: Vec3 | undefined;
+          if ((fixed && animated) || releaseFrame >= 0) {
             path = [];
-            for (let f = 0; f < frames; f++) {
-              const t = frameTime(f);
-              const pp = evalProp(o.position, t);
-              const qq = eulerDegToQuat(evalProp(o.rotation, t));
-              path.push(...placePoint(center, pp, qq, sc, o.pivot), ...qq);
+            const last = fixed ? frames - 1 : releaseFrame;
+            for (let f = 0; f <= last; f++) {
+              const pose = objectPose(scene, o, frameTime(f));
+              path.push(...pose.place(center), ...pose.q);
+            }
+            if (releaseFrame >= 0) {
+              // The speed and spin it has as it lets go.
+              const a = objectPose(scene, o, frameTime(Math.max(0, releaseFrame - 1)));
+              const b = objectPose(scene, o, frameTime(releaseFrame));
+              const pa = a.place(center);
+              const pb = b.place(center);
+              const dt = releaseFrame > 0 ? 1 / fps : 1;
+              velocity = releaseFrame > 0 ? [(pb[0] - pa[0]) / dt, (pb[1] - pa[1]) / dt, (pb[2] - pa[2]) / dt] : [0, 0, 0];
+              spin = releaseFrame > 0 ? angularVelocity(a.q, b.q, dt) : [0, 0, 0];
             }
           }
+          const p0: Vec3 = path ? [path[0]!, path[1]!, path[2]!] : placed(center);
+          const q0: Quat = path ? [path[3]!, path[4]!, path[5]!, path[6]!] : q;
           bodies.push({
-            kind: fixed ? (path ? "kinematic" : "fixed") : "dynamic",
+            kind: releaseFrame >= 0 ? "released" : fixed ? (path ? "kinematic" : "fixed") : "dynamic",
             shape,
             mass: Math.max(0.01, piece ? (ph.mass * piece.area) / total : ph.mass),
             ...common,
-            p: placed(center),
-            q,
+            p: p0,
+            q: q0,
             ...(path ? { path } : {}),
+            ...(releaseFrame >= 0 ? { release: releaseFrame, velocity: velocity!, spin: spin! } : {}),
             poseIndex: moving ? movers++ : -1,
           });
         }
       }
     }
+    const m = motionFrom !== undefined && poseIndex >= 0 ? { motionFrom } : {};
     if (o.kind === "particles" && o.particles) {
-      objects.push({ object: o, pieces, poseIndex, emitter: particleEmitter(project, o.particles, opts.venueId, canvas) });
+      objects.push({ object: o, pieces, poseIndex, ...m, emitter: particleEmitter(project, o.particles, opts.venueId, canvas) });
       continue;
     }
-    objects.push({ object: o, pieces, poseIndex });
+    objects.push({ object: o, pieces, poseIndex, ...m });
   }
-  const anyMoving = bodies.some((b) => b.kind === "dynamic" || b.kind === "fragment");
+  const anyMoving = bodies.some((b) => b.kind === "dynamic" || b.kind === "fragment" || b.kind === "released");
   const physics: ResolvedPhysics | null = anyMoving
     ? (() => {
         const body = { v: PHYSICS_ENGINE_VERSION, fps, substeps: PHYSICS_SUBSTEPS, frames, gravity: scene.gravity, bodies };
         return { key: `phys-${simHash(stableJson(body))}`, fps, substeps: PHYSICS_SUBSTEPS, frames, gravity: scene.gravity, bodies, movers };
       })()
     : null;
-  const result: ResolvedScene3D = { scene, canvas, ...(venue?.referenceAssetId ? { photoAssetId: venue.referenceAssetId } : {}), objects, physics, fps };
+  const result: ResolvedScene3D = { scene, canvas, cameraDistance: camDist, ...(venue?.referenceAssetId ? { photoAssetId: venue.referenceAssetId } : {}), objects, physics, fps };
   list.push({ sig, venue, result });
   if (list.length > 4) list.shift();
   resolveCache.set(scene, list);
@@ -1082,6 +1208,37 @@ export const boxObject = (id: Id, name: string, size: Vec3, position: Vec3, phys
  *  the audience and with other areas cut out of it. Fixed in place until given physics. */
 export const areaObject = (id: Id, name: string, ref: RegionRef, opts: { depth?: number; standOut?: number; cut?: RegionRef } = {}): Object3D =>
   mesh(id, name, { kind: "area", ref, depth: Math.max(0.01, opts.depth ?? 0.25), ...(opts.standOut ? { standOut: opts.standOut } : {}), ...(opts.cut ? { cut: opts.cut } : {}) }, [0, 0, 0], { style: "photo", color: staticProp<RGBA>([1, 1, 1, 1]), roughness: 0.9 });
+
+/**
+ * A 3D model from a file. With `heightM` (and the model's measurements) it's scaled to that height;
+ * it stands with its lowest point at `position`'s height.
+ */
+export const modelObject = (id: Id, name: string, assetId: Id, info: import("./model.ts").ModelInfo | undefined, position: Vec3, heightM?: number): Object3D => {
+  const h = info ? info.bounds[4] - info.bounds[1] : 0;
+  const k = heightM && h > 1e-6 ? heightM / h : 1;
+  const lift = info ? -info.bounds[1] * k : 0;
+  return {
+    id,
+    name,
+    kind: "mesh",
+    visible: true,
+    position: staticProp<Vec3>([position[0], position[1] + lift, position[2]], true),
+    rotation: staticProp<Vec3>([0, 0, 0]),
+    scale: staticProp<Vec3>([k * 100, k * 100, k * 100]),
+    geometry: { kind: "model", assetId },
+    castShadow: true,
+    receiveShadow: true,
+    clip: { speed: 1, offset: 0 },
+  };
+};
+
+/**
+ * A picture standing in the scene (a cut-out character or prop: a PNG's transparent parts are cut
+ * out, from the picture and its shadow), `heightM` tall, `aspect` (width ÷ height) wide, standing
+ * on `base` (the middle of its bottom edge). It casts shadows and shares the scene's depth.
+ */
+export const pictureObject = (id: Id, name: string, assetId: Id, aspect: number, heightM: number, base: Vec3): Object3D =>
+  mesh(id, name, { kind: "plane", size: [heightM * Math.max(0.01, aspect), heightM] }, [base[0], base[1] + heightM / 2, base[2]], { style: "image", assetId, color: staticProp<RGBA>([1, 1, 1, 1]), roughness: 0.9 }, { receiveShadow: false });
 
 export const ballObject = (id: Id, name: string, radius: number, position: Vec3, physics?: Physics3D): Object3D =>
   mesh(id, name, { kind: "sphere", radius }, position, { color: staticProp<RGBA>([0.9, 0.5, 0.2, 1]), roughness: 0.4 }, physics ? { physics } : {});
@@ -1193,7 +1350,166 @@ export const areaScene = (
       : lightObject(`${p}-key`, "Key light", { target: [cx, (top + ly) / 2, 0] }, [cx - width * 0.6, top + 3, 6]),
     lightObject(`${p}-fill`, "Soft fill", { type: "ambient", intensity: staticProp(blocks ? 0.3 : 0.35), castShadow: false, color: [0.8, 0.86, 1, 1] }, [0, 0, 0]),
   ];
-  return { id: o.sceneId, name: o.name, objectOrder: objects.map((x) => x.id), objects: Object.fromEntries(objects.map((x) => [x.id, x])), gravity: [0, -9.81, 0], cameraDistance: 1.6 };
+  return { id: o.sceneId, name: o.name, objectOrder: objects.map((x) => x.id), objects: Object.fromEntries(objects.map((x) => [x.id, x])), gravity: [0, -9.81, 0] };
+};
+
+// ---- the whole house in 3D ----------------------------------------------------------------------------
+
+/** Usual depth of an area kind in 3D (metres): stands out (+) or is set back (−), and thickness. */
+export const KIND_DEPTH: Partial<Record<import("./model.ts").RegionKind, { readonly standOut: number; readonly thickness: number }>> = {
+  wall: { standOut: 0, thickness: 0.3 },
+  roof: { standOut: 0, thickness: 0.3 },
+  column: { standOut: 0.35, thickness: 0.35 },
+  light: { standOut: 0.06, thickness: 0.12 },
+  window: { standOut: -0.12, thickness: 0.05 },
+  door: { standOut: -0.1, thickness: 0.06 },
+  garage: { standOut: -0.08, thickness: 0.06 },
+  vent: { standOut: -0.04, thickness: 0.05 },
+};
+/** Kinds that aren't solids (lines and keep-dark areas). */
+const NOT_SOLID = new Set<string>(["roofline", "edge", "exclusion"]);
+
+/** An area's depth in 3D, from the surface it's on: its own (Region.depth), else its kind's usual depth. */
+export const regionDepth = (r: Pick<import("./model.ts").Region, "kind" | "depth">): { standOut: number; thickness: number } => ({
+  standOut: r.depth?.standOut ?? KIND_DEPTH[r.kind]?.standOut ?? 0,
+  thickness: Math.max(0.005, r.depth?.thickness ?? KIND_DEPTH[r.kind]?.thickness ?? 0.25),
+});
+
+const centroidOf = (pts: readonly (readonly [number, number])[]): [number, number] => {
+  let x = 0, y = 0;
+  for (const p of pts) (x += p[0]), (y += p[1]);
+  return [x / Math.max(1, pts.length), y / Math.max(1, pts.length)];
+};
+
+/**
+ * The house's physical parts and where each sits: walls, roof, columns, windows, doors, the garage,
+ * vents and lights (custom areas only when given a depth), each's front measured from the building
+ * front: its own depth added to that of the part it's on (the smallest part containing its middle).
+ */
+export const houseParts = (project: Project, venueId: Id): Array<{ region: import("./model.ts").Region; standOut: number; thickness: number; on?: Id }> => {
+  const venue = project.venues[venueId];
+  const regions = (venue?.regionOrder ?? []).map((id) => venue!.regions[id]!).filter((r) => r && r.path.closed && !NOT_SOLID.has(r.kind) && !r.proposal && (r.kind in KIND_DEPTH || r.depth));
+  const pts = (r: (typeof regions)[number]): Vec2[] => r.path.vertices.map((v) => [v.p[0], v.p[1]] as Vec2);
+  const area = (r: (typeof regions)[number]) => Math.abs(polyArea(pts(r)));
+  // What each part is on: the smallest other part containing its middle (walls are on nothing).
+  const on = new Map<string, (typeof regions)[number] | undefined>();
+  for (const r of regions) {
+    const c = centroidOf(pts(r));
+    const holders = regions.filter((q) => q.id !== r.id && area(q) > area(r) && insidePoly(pts(q), c)).sort((a, b) => area(a) - area(b));
+    on.set(r.id, holders[0]);
+  }
+  const front = new Map<string, number>();
+  const frontOf = (r: (typeof regions)[number], depth = 0): number => {
+    const known = front.get(r.id);
+    if (known !== undefined) return known;
+    const base = on.get(r.id);
+    const v = regionDepth(r).standOut + (base && depth < 10 ? frontOf(base, depth + 1) : 0);
+    front.set(r.id, v);
+    return v;
+  };
+  return regions.map((r) => ({ region: r, standOut: frontOf(r), thickness: regionDepth(r).thickness, ...(on.get(r.id) ? { on: on.get(r.id)!.id } : {}) }));
+};
+
+/** How far the house's dark inside reaches behind its front (m). */
+const INSIDE_DEPTH = 4;
+
+/**
+ * The canvas y where a house's outline meets the ground along most of its width: for each 5 cm of
+ * width, the lowest point of the outline there; the most common of those (to 5 px). Steps that come
+ * forward and roof overhangs at the sides are a small share of the width, so they don't decide it.
+ */
+export const houseFloorLine = (outlines: ReadonlyArray<ReadonlyArray<Vec2>>): number | null => {
+  const xs = outlines.flat().map((q) => q[0]);
+  if (!xs.length) return null;
+  const lo = Math.min(...xs);
+  const hi = Math.max(...xs);
+  const counts = new Map<number, number>();
+  for (let x = lo + 2.5; x < hi; x += 5) {
+    let bottom = -Infinity;
+    for (const poly of outlines)
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i]!;
+        const b = poly[(i + 1) % poly.length]!;
+        if ((a[0] <= x) === (b[0] <= x)) continue;
+        bottom = Math.max(bottom, a[1] + ((x - a[0]) / (b[0] - a[0])) * (b[1] - a[1]));
+      }
+    if (bottom === -Infinity) continue;
+    const bin = Math.round(bottom / 5) * 5;
+    counts.set(bin, (counts.get(bin) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  for (const [bin, n] of counts) if (best === null || n > counts.get(best)! || (n === counts.get(best)! && bin > best)) best = bin;
+  return best;
+};
+
+/**
+ * The whole house as solids sharing one 3D space: every traced area at its depth (Region.depth, or
+ * its kind's usual depth), each its own object (to light, animate, give physics or break on its own).
+ * Areas set into or standing out of another (windows in a wall, a column on the porch) are cut out of
+ * it, so each sits at its own depth. Each part is solid (fixed in place until given physics of its own). With a key light (the picture's own lighting), a soft fill, a
+ * shadow-only ground for characters' shadows, and the dark inside behind it all (with a floor where
+ * the house meets the ground).
+ */
+export const houseScene = (project: Project, o: { sceneId: Id; idPrefix: string; name: string; venueId: Id; canvas: Canvas }): Scene3D => {
+  const p = o.idPrefix;
+  const parts = houseParts(project, o.venueId);
+  const regions = parts.map((x) => x.region);
+  const pts = (r: (typeof regions)[number]): Vec2[] => r.path.vertices.map((v) => [v.p[0], v.p[1]] as Vec2);
+  const objects: Object3D[] = [];
+  const byId = new Map(parts.map((x) => [x.region.id, x]));
+  for (const { region: r, standOut, thickness } of parts) {
+    // Cut out of it: what's declared, plus every part that sits on it (directly or on something on
+    // it) at another depth, so each sits at its own.
+    const cut = new Set<string>((r.cutouts ?? []).filter((id) => regions.some((q) => q.id === id)));
+    for (const q of parts) {
+      if (q.region.id === r.id || Math.abs(q.standOut - standOut) < 1e-6) continue;
+      for (let a = q.on, n = 0; a && n < 10; a = byId.get(a)?.on, n++)
+        if (a === r.id) {
+          cut.add(q.region.id);
+          break;
+        }
+    }
+    // Solid where it is: what's thrown or knocked loose hits it instead of passing through.
+    const solid = areaObject(`${p}-${r.id}`, r.name, { role: "areas", regionIds: [r.id] }, { depth: thickness, ...(standOut ? { standOut } : {}), ...(cut.size ? { cut: { role: "areas", regionIds: [...cut] } } : {}) });
+    objects.push({ ...solid, physics: { body: "static", mass: 1000, friction: 0.8, bounce: 0.05 } });
+  }
+  const all = regions.flatMap(pts);
+  const xs = all.map((q) => q[0]);
+  const ys = all.map((q) => q[1]);
+  const [x0, groundY] = canvasToWorld([xs.length ? Math.min(...xs) : 0, ys.length ? Math.max(...ys) : o.canvas.height], o.canvas);
+  const [x1, top] = canvasToWorld([xs.length ? Math.max(...xs) : o.canvas.width, ys.length ? Math.min(...ys) : 0], o.canvas);
+  const cx = (x0 + x1) / 2;
+  const width = Math.max(1, x1 - x0);
+  // The dark inside, seen only through openings: black, the house's own outline just behind its
+  // deepest back face, enlarged along the show camera's lines of sight so it covers exactly what the
+  // house covers (nothing past its edges, where layers beneath show).
+  const back = Math.max(0, ...parts.map((x) => x.thickness - x.standOut)) + 0.03;
+  const camZ = sceneCameraDistance(project, {}, o.venueId) * o.canvas.width * METERS_PER_PIXEL;
+  const k = (camZ + back) / camZ;
+  const inside: Object3D = {
+    ...areaObject(`${p}-inside`, "Inside (behind the house)", { role: "areas", regionIds: regions.map((r) => r.id) }, { depth: 0.02 }),
+    material: { style: "color", color: staticProp<RGBA>([0, 0, 0, 1]), roughness: 1, metalness: 1, glow: staticProp(0), opacity: 1 },
+    position: staticProp<Vec3>([0, 0, -back], true),
+    scale: staticProp<Vec3>([k * 100, k * 100, 100]),
+    pivot: [0, (o.canvas.height * METERS_PER_PIXEL) / 2, 0],
+    castShadow: false,
+    receiveShadow: false,
+  };
+  // Solid but unseen, a room's depth behind the front, so what's knocked in falls and lies there
+  // instead of wedging: a floor where the house front meets the ground along most of its width
+  // (steps that come forward and roof overhangs aside), reaching the front so nothing rolls out
+  // under a door, and a back wall.
+  const floorY = canvasToWorld([0, houseFloorLine(regions.map(pts)) ?? (ys.length ? Math.max(...ys) : o.canvas.height)], o.canvas)[1];
+  const unseen = { castShadow: false, receiveShadow: false, visible: false, physics: { body: "static" as const, mass: 1000, friction: 0.8, bounce: 0.05 } };
+  objects.push(
+    inside,
+    mesh(`${p}-floor`, "Inside floor (solid, unseen)", { kind: "box", size: [width + 4, 0.2, INSIDE_DEPTH] }, [cx, floorY - 0.1, -INSIDE_DEPTH / 2], {}, unseen),
+    mesh(`${p}-back`, "Inside back wall (solid, unseen)", { kind: "box", size: [width + 4, Math.max(1, top - groundY) + 4, 0.2] }, [cx, (top + groundY) / 2, -INSIDE_DEPTH - 0.1], {}, unseen),
+    mesh(`${p}-ground`, "Ground (shows shadows only)", { kind: "box", size: [80, 0.2, 40] }, [0, groundY - 0.1, 10], { style: "shadow", opacity: 0.55 }, { castShadow: false, physics: { body: "static", mass: 1000, friction: 0.9, bounce: 0.05 } }),
+    lightObject(`${p}-key`, "Key light", { target: [cx, (top + groundY) / 2, 0], balance: true }, [cx - width * 0.6, top + 3, 8]),
+    lightObject(`${p}-fill`, "Soft fill", { type: "ambient", intensity: staticProp(0.35), castShadow: false, color: [0.82, 0.88, 1, 1] }, [0, 0, 0]),
+  );
+  return { id: o.sceneId, name: o.name, objectOrder: objects.map((x) => x.id), objects: Object.fromEntries(objects.map((x) => [x.id, x])), gravity: [0, -9.81, 0] };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1232,13 +1548,14 @@ export const scene3dAdd = defineOp({
 export const scene3dUpdate = defineOp({
   type: "scene3d.update",
   title: "Change 3D scene",
-  description: "Rename a 3D scene or change its gravity (m/s², x right, y up, z toward the audience) or show-camera distance.",
-  args: z.object({ sceneId: z.string(), changes: z.object({ name: z.string().min(1).optional(), gravity: z.tuple([z.number(), z.number(), z.number()]).optional(), cameraDistance: z.number().min(0.2).max(20).optional() }) }),
+  description: "Rename a 3D scene or change its gravity (m/s², x right, y up, z toward the audience) or show-camera distance (null: follow the building's viewpoint).",
+  args: z.object({ sceneId: z.string(), changes: z.object({ name: z.string().min(1).optional(), gravity: z.tuple([z.number(), z.number(), z.number()]).optional(), cameraDistance: z.number().min(0.2).max(20).nullable().optional() }) }),
   apply: (d, a) => {
     const s = sceneOf(d as never, a.sceneId) as unknown as { -readonly [K in keyof Scene3D]: Scene3D[K] };
     if (a.changes.name !== undefined) s.name = a.changes.name;
     if (a.changes.gravity) s.gravity = a.changes.gravity;
-    if (a.changes.cameraDistance !== undefined) s.cameraDistance = a.changes.cameraDistance;
+    if (a.changes.cameraDistance === null) delete s.cameraDistance;
+    else if (a.changes.cameraDistance !== undefined) s.cameraDistance = a.changes.cameraDistance;
   },
 });
 

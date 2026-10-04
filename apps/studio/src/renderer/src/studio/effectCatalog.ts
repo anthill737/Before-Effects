@@ -3,7 +3,7 @@
  * particles and picture effects. The Effects tab shows them beside the recipes; the Content step's
  * cards use the same list. Each one applies to the chosen areas the same way wherever it's picked.
  */
-import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, makeArea3D, PARTICLE_EFFECTS } from "./actions3d.ts";
+import { addParticles, BLOCK_EFFECTS, BREAK_EFFECTS, makeArea3D, makeHouse3D, PARTICLE_EFFECTS } from "./actions3d.ts";
 import { MELT_EFFECT, meltAreas } from "./melt.ts";
 import { animatePart } from "./parts.ts";
 import { PICTURE_EFFECTS } from "./pictureEffects.ts";
@@ -26,6 +26,16 @@ export interface CatalogEffect {
 export const EFFECT_GROUPS = ["Blocks (3D)", "Breaking apart (3D)", "Moving parts (3D)", "Particles (3D)", "Picture effects"] as const;
 
 export const CATALOG: readonly CatalogEffect[] = [
+  {
+    id: "house-3d",
+    title: "The whole house in 3D",
+    description: "Every traced area becomes a solid at its depth — windows and doors set back, columns standing out — in one 3D space. Characters, props and lights you add to it pass behind columns, cast shadows on the walls and collide with them.",
+    group: "Moving parts (3D)",
+    keywords: ["house", "building", "3d", "depth", "geometry", "model", "solid", "space", "characters", "shadows", "column", "behind"],
+    kind: "the house as solids for lighting, shadows and physics (Rapier); nothing moves until you animate it",
+    needsAreas: false,
+    apply: () => makeHouse3D(),
+  },
   ...BLOCK_EFFECTS.map((e) => ({
     id: e.id,
     title: e.title,

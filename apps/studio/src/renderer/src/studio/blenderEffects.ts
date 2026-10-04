@@ -104,7 +104,7 @@ const runLink = async (link: BlenderLink, mode: "build" | "render"): Promise<{ o
     const ref = venue.referenceAssetId ? project.assets[venue.referenceAssetId] : undefined;
     useBlenderJobs.setState((j) => ({ ...j, [link.id]: { stage: "prepare", done: 0, total: 1, running: true } }));
     const prepared = await preparedFor(project, comp, venue.id, link, fps);
-    const x = buildExchange(project, link, { venueId: venue.id, canvas: venue.canvas, fps, ...(ref ? { photo: ref.path } : {}), output, ...(prepared ? { prepared } : {}) });
+    const x = buildExchange(project, link, { venueId: venue.id, canvas: venue.canvas, fps, cameraDistance: venue.cameraDistance ?? 1.6, ...(ref ? { photo: ref.path } : {}), output, ...(prepared ? { prepared } : {}) });
     const problems = checkOwners(x);
     if (problems.length) return { ok: false, message: problems.join(" ") };
     exchange = x as unknown as typeof exchange;
@@ -284,7 +284,7 @@ export const importEditable = async (linkId: Id): Promise<{ ok: true; layerId: I
     const lights: Object3D[] = r.report.file.lights
       ? []
       : [lightObject(`${sceneId}-key`, "Key light", { target: [0, 1, 0] }, [-3, 6, 8]), lightObject(`${sceneId}-fill`, "Soft fill", { type: "ambient", intensity: staticProp(0.5), castShadow: false, color: [0.85, 0.9, 1, 1] }, [0, 0, 0])];
-    const scene: Scene3D = { id: sceneId, name: `${link.name} (3D)`, objectOrder: [objectId, ...lights.map((l) => l.id)], objects: Object.fromEntries([model, ...lights].map((o) => [o.id, o])), gravity: [0, -9.81, 0], cameraDistance: 1.6 };
+    const scene: Scene3D = { id: sceneId, name: `${link.name} (3D)`, objectOrder: [objectId, ...lights.map((l) => l.id)], objects: Object.fromEntries([model, ...lights].map((o) => [o.id, o])), gravity: [0, -9.81, 0] };
     const layer = { ...newLayer({ id: newId("layer"), name: `${link.name} (3D)`, source: { kind: "scene3d", sceneId }, start: secondsToTime(link.startSeconds), duration: secondsToTime(link.seconds) }), audioEnabled: false };
     ops.push({ type: "scene3d.add", args: { scene } }, { type: "layer.add", args: { compId: comp.id, layer, index: 0 } });
     editable = { assetId: asset.id, sceneId, layerId: layer.id, objectId, at: new Date().toISOString(), report };

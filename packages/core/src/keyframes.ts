@@ -39,10 +39,33 @@ const newKey = <V extends PropValue>(t: Flicks, v: V): Keyframe<V> => {
   return { id: keyId(t), t, v, in: "bezier", out: "bezier", easeIn: e, easeOut: e };
 };
 
+/**
+ * Add a keyframe among others, keeping the timing already chosen around it: it arrives the way the
+ * key before it leaves (steady after a steady key) and leaves the way the key after it arrives. So a
+ * path built key by key with "Steady" stays steady, rather than each new key slowing into place.
+ */
+const withKey = <V extends PropValue>(kfs: readonly Keyframe<V>[], k: Keyframe<V>): Keyframe<V>[] => {
+  const all = sorted([...kfs, k]);
+  const i = all.indexOf(k);
+  const prev = all[i - 1];
+  const next = all[i + 1];
+  let key = k;
+  if (prev?.out === "linear") {
+    const { easeIn: _i, ...rest } = key;
+    key = { ...rest, in: "linear" };
+  }
+  if (next?.in === "linear") {
+    const { easeOut: _o, ...rest } = key;
+    key = { ...rest, out: "linear" };
+  }
+  all[i] = key;
+  return all;
+};
+
 export const setPropAt = <V extends PropValue>(p: AnimProp<V>, t: Flicks, v: V): AnimProp<V> => {
   if (!p.keyframes?.length) return { ...p, value: v };
   const hit = keyAt(p, t);
-  const kfs = hit ? p.keyframes.map((k) => (k === hit ? { ...k, v } : k)) : sorted([...p.keyframes, newKey(t, v)]);
+  const kfs = hit ? p.keyframes.map((k) => (k === hit ? { ...k, v } : k)) : withKey(p.keyframes, newKey(t, v));
   return { ...p, keyframes: kfs };
 };
 
@@ -55,7 +78,7 @@ export const toggleKeyAt = <V extends PropValue>(p: AnimProp<V>, t: Flicks): Ani
     return { ...plain, value: hit.v };
   }
   const v = evalProp(p, t) as V;
-  return { ...p, keyframes: sorted([...(p.keyframes ?? []), newKey(t, v)]) };
+  return { ...p, keyframes: withKey(p.keyframes ?? [], newKey(t, v)) };
 };
 
 export const moveKey = <V extends PropValue>(p: AnimProp<V>, id: string, t: Flicks): AnimProp<V> =>

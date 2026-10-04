@@ -78,6 +78,20 @@ export interface AssetMeta {
   readonly codec?: string;
   readonly audioChannels?: number;
   readonly sampleRate?: number;
+  /** 3D models: measured when imported (metres, in the model's own frame). */
+  readonly model?: ModelInfo;
+}
+
+/** A 3D model's extent and collision hull, measured from its file when it's imported. */
+export interface ModelInfo {
+  /** min x, y, z, max x, y, z. */
+  readonly bounds: readonly [number, number, number, number, number, number];
+  /** Points of its convex hull (x, y, z, …): its collider when it's given physics. */
+  readonly hull: readonly number[];
+  readonly meshes: number;
+  readonly triangles: number;
+  readonly animations: number;
+  readonly lights: number;
 }
 
 /** Results of analysing an audio asset, saved with the project so preview and export use identical beats. */
@@ -341,6 +355,13 @@ export interface Region {
   readonly expansion?: number;
   /** Areas cut out of this one (a facade's windows and doors); the cut follows them when they're reshaped. */
   readonly cutouts?: readonly Id[];
+  /**
+   * How the area sits in 3D, in metres: how far its front stands out from the surface it's on (+, a
+   * column from the wall, a lantern from its column) or is set back into it (−, a window in its wall),
+   * and how thick it is. Every 3D scene that makes it a solid uses this, so they agree. Absent: the
+   * usual depth for its kind (custom areas aren't solids until given a depth).
+   */
+  readonly depth?: { readonly standOut?: number; readonly thickness?: number };
   /** Set while the area is an automatic proposal nobody has reviewed yet. */
   readonly proposal?: RegionProposal;
 }
@@ -411,6 +432,11 @@ export interface Venue {
   readonly referenceAssetId?: Id;
   /** The original photo of the building (kept as imported) and how it sits in the canvas. */
   readonly photo?: { readonly assetId: Id; readonly placement: PhotoPlacement };
+  /**
+   * Where the audience stands: the show camera is this many building-widths in front of the building
+   * (default 1.6). Every 3D scene uses it unless it has its own, so depth illusions line up.
+   */
+  readonly cameraDistance?: number;
   readonly regionOrder: readonly Id[];
   readonly regions: Readonly<Record<Id, Region>>;
   readonly groups: Readonly<Record<Id, RegionGroup>>;

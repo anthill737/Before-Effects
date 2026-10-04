@@ -255,5 +255,5 @@ export const partsScene = (project: Project, o: { sceneId: Id; name: string; fac
   const cx = fb ? (fb.x0 + fb.x1) / 2 : 0, top = fb ? fb.y1 : H;
   objects.push(lightObject(`${p}-key`, "Key light", { target: [cx, (top + foot) / 2, 0], intensity: staticProp(2.2), softness: 0.6 }, [cx - W * 0.25, top + 4, 9]));
   objects.push(lightObject(`${p}-fill`, "Soft fill", { type: "ambient", intensity: staticProp(0.9), castShadow: false, color: [0.95, 0.96, 1, 1] }, [0, 0, 0]));
-  return { id: o.sceneId, name: o.name, purpose: "parts", objectOrder: objects.map((x) => x.id), objects: Object.fromEntries(objects.map((x) => [x.id, x])), gravity: [0, -9.81, 0], cameraDistance: 1.6 };
+  return { id: o.sceneId, name: o.name, purpose: "parts", objectOrder: objects.map((x) => x.id), objects: Object.fromEntries(objects.map((x) => [x.id, x])), gravity: [0, -9.81, 0] };
 };

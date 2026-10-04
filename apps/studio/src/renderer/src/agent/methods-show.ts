@@ -331,8 +331,21 @@ method({
 
 method({
   name: "areas.update",
-  summary: "Rename, re-classify, reshape (rect or points), cut holes, or set the soft edge / grow-shrink of a shared building area. Every scene follows.",
-  params: z.object({ area: z.string(), name: z.string().optional(), kind: kinds.optional(), rect: rect.optional(), points: points.optional(), holes: z.array(points).optional(), feather: z.number().min(0).max(500).optional(), expansion: z.number().min(-500).max(500).optional() }),
+  summary:
+    "Rename, re-classify, reshape (rect or points), cut holes, set the soft edge / grow-shrink, or set the depth in 3D (standOutCm: + stands out from the building front like a column, − set back like a window in its frame; thicknessCm; depth null: its kind's usual) of a shared building area. Every scene follows.",
+  params: z.object({
+    area: z.string(),
+    name: z.string().optional(),
+    kind: kinds.optional(),
+    rect: rect.optional(),
+    points: points.optional(),
+    holes: z.array(points).optional(),
+    feather: z.number().min(0).max(500).optional(),
+    expansion: z.number().min(-500).max(500).optional(),
+    standOutCm: z.number().min(-2000).max(5000).optional(),
+    thicknessCm: z.number().min(0.5).max(2000).optional(),
+    depth: z.null().optional().describe("null: back to its kind's usual depth"),
+  }),
   mutates: true,
   run: (p, ctx) => {
     const v = venue();
@@ -345,6 +358,8 @@ method({
     if (p.holes) changes.holes = p.holes.map((h) => polygonPath(h));
     if (p.feather !== undefined) changes.feather = p.feather;
     if (p.expansion !== undefined) changes.expansion = p.expansion;
+    if (p.depth === null) changes.depth = null;
+    else if (p.standOutCm !== undefined || p.thicknessCm !== undefined) changes.depth = { ...(p.standOutCm !== undefined ? { standOut: p.standOutCm / 100 } : {}), ...(p.thicknessCm !== undefined ? { thickness: p.thicknessCm / 100 } : {}) };
     if (!Object.keys(changes).length) throw new AgentError("invalid_params", "Nothing to change.");
     ctx.edit(() => st().apply({ type: "region.update", args: { venueId: v.id, regionId: id!, changes } }, { label: "Change area" }));
     return { area: areaInfo(venue().regions[id!]!, false), revision: currentRevision() };

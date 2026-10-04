@@ -59,3 +59,24 @@ describe("how a picture surface is made from its picture", () => {
     expect(pictureMix({ shading: 7 }, -1, gain)).toEqual({ lit: [2, 2.5, 3], self: 0 });
   });
 });
+
+describe("which lights even out the picture", () => {
+  it("counts sun and fill lights as the picture's own lighting, and adds spot and point lights on top", async () => {
+    const { balancesPicture, frontIrradiance, pictureGain } = await import("../src/world3d.ts");
+    expect(balancesPicture({ type: "directional" })).toBe(true);
+    expect(balancesPicture({ type: "ambient" })).toBe(true);
+    expect(balancesPicture({ type: "spot" })).toBe(false);
+    expect(balancesPicture({ type: "point" })).toBe(false);
+    expect(balancesPicture({ type: "point", balance: true })).toBe(true);
+    expect(balancesPicture({ type: "directional", balance: false })).toBe(false);
+    // A wall lit by a sun and a passing lantern: evened out by the sun only, so the lantern brightens it.
+    const sun = { type: "directional" as const, color: [1, 1, 1] as const, intensity: 3, position: [0, 5, 10] as [number, number, number], target: [0, 0, 0] as [number, number, number], angle: 30, softness: 0, balance: true };
+    const lantern = { type: "point" as const, color: [1, 0.8, 0.5] as const, intensity: 2, position: [1, 2, 1.5] as [number, number, number], target: [0, 0, 0] as [number, number, number], angle: 30, softness: 0, balance: false };
+    const at: [number, number, number] = [1, 2, 0];
+    const gain = pictureGain(frontIrradiance([sun, lantern].filter((l) => l.balance), at));
+    const shown = frontIrradiance([sun, lantern], at).map((e, i) => (e * gain[i]!) / Math.PI);
+    expect(shown[0]).toBeGreaterThan(1.5); // brighter than the picture where the lantern shines
+    const away = frontIrradiance([sun, lantern], [-14, 2, 0]).map((e, i) => (e * gain[i]!) / Math.PI);
+    expect(away[0]).toBeLessThan(1.1); // and close to exact where it doesn't
+  });
+});

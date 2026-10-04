@@ -3,8 +3,12 @@
  * preview and frame capture; exports and job monitoring.
  */
 import {
+  sceneCameraDistance,
+  balancesPicture,
   type AnimProp,
   areaObject,
+  modelObject,
+  pictureObject,
   evalProp,
   framesIn,
   keyAt,
@@ -32,7 +36,8 @@ import { z } from "zod";
 import { currentPreviewLoop } from "../preview/PreviewPanel.tsx";
 import { usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
-import { addObject, addParticles, layerTime, makeArea3D, removeObject, setContain } from "../studio/actions3d.ts";
+import { addObject, addParticles, ensureModelInfo, layerTime, makeArea3D, makeHouse3D, removeObject, setContain } from "../studio/actions3d.ts";
+import { importMediaFiles } from "../studio/media.ts";
 import { hasAudio } from "../studio/audioEngine.ts";
 import { pausePreparing, startPreparing, stopPreparing, usePrepare } from "../preview/prepare.ts";
 import { applyPlan, computePlan } from "../preview/recommend.ts";
@@ -99,8 +104,20 @@ const objectInfo = (o: Object3D, t: number) => ({
   ...(o.physics ? { physics: o.physics } : {}),
   ...(o.fracture ? { fracture: o.fracture } : {}),
   ...(o.blocks ? { blocks: o.blocks } : {}),
-  ...(o.light ? { light: { ...o.light, intensity: evalProp(o.light.intensity, t) } } : {}),
+  ...(o.light ? { light: { ...o.light, intensity: evalProp(o.light.intensity, t), balance: balancesPicture(o.light) } } : {}),
+  ...(o.attach ? { attach: o.attach } : {}),
+  ...(o.geometry?.kind === "model" ? { model: modelReport(o.geometry.assetId) } : {}),
 });
+
+/** A model's measurements and whether it could be read (the renderer remembers failures). */
+let modelErrors: ReadonlyMap<string, string> = new Map();
+void getRenderer().then((r) => (modelErrors = r.scenes.modelErrors));
+const modelReport = (assetId: string) => {
+  const a = project().assets[assetId];
+  const m = a?.meta.model;
+  const problem = modelErrors.get(assetId);
+  return { asset: assetId, name: a?.name, ...(m ? { sizeM: [m.bounds[3] - m.bounds[0], m.bounds[4] - m.bounds[1], m.bounds[5] - m.bounds[2]], collider: m.hull.length >= 12 ? `hull of ${m.hull.length / 3} points` : "none", animations: m.animations } : { measured: false }), ...(problem ? { problem } : {}) };
+};
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -130,7 +147,8 @@ method({
       id: scene.id,
       name: scene.name,
       gravity: scene.gravity,
-      cameraDistance: scene.cameraDistance,
+      cameraDistance: sceneCameraDistance(project(), scene, activeVenue(st())?.id),
+      viewpoint: scene.cameraDistance === undefined ? "building" : "own",
       layer: layer ? { id: layer.id, startSeconds: r2(timeToSeconds(layer.startTime)), seconds: r2(timeToSeconds(layer.outPoint - layer.startTime)), contained: layer.masks.some((m) => m.id === "contain") } : null,
       objects: scene.objectOrder.map((id) => objectInfo(scene.objects[id]!, t)),
     };
@@ -161,6 +179,23 @@ method({
 });
 
 method({
+  name: "scene3d.createHouse",
+  summary:
+    "Make the whole house one 3D space, as a 3D layer from the playhead: every traced area a solid at its depth (areas.update standOutCm/thicknessCm, or its kind's usual depth: windows, doors and the garage set back, columns standing out), each its own object, with the set-in and standing-out areas cut out of the walls; a key light that is the picture's own lighting, a soft fill, and a ground that shows only shadows. Add characters, props and lights to it with scene3d.objectAdd (kind model / picture / light); they share its depth, shadows and collisions.",
+  params: z.object({ name: z.string().optional(), seconds: z.number().min(0.1).optional().describe("layer length (default: to the end of the scene)") }),
+  mutates: true,
+  run: (p, ctx) => {
+    const layerId = ctx.edit(() => makeHouse3D({ ...(p.name ? { name: p.name } : {}), ...(p.seconds ? { seconds: p.seconds } : {}) }));
+    if (!layerId) throw new AgentError("rejected", "There are no traced areas to make 3D (trace the building first).");
+    const comp = currentComp(st())!;
+    const l = comp.layers[layerId]!;
+    const sid = l.source.kind === "scene3d" ? l.source.sceneId : "";
+    const sc = project().scenes3d![sid]!;
+    return { layer: layerId, scene: sid, objects: sc.objectOrder.map((id) => ({ id, name: sc.objects[id]!.name, kind: sc.objects[id]!.kind, ...(sc.objects[id]!.geometry?.kind === "area" ? { standOutCm: Math.round(((sc.objects[id]!.geometry as { standOut?: number }).standOut ?? 0) * 100) } : {}) })), revision: currentRevision() };
+  },
+});
+
+method({
   name: "particles.add",
   summary:
     "Particles in 3D in front of the house, as a layer on top at the playhead: sparks (spray out and arc down), embers (drift up, flickering), snow (falls over the areas, or the whole picture without areas), confetti (a burst that flutters down). Procedural: placed by rule, not simulated; they don't hit the house. Adjust with scene3d.objectUpdate (particles: rate, life, speed, size, colors, wind, start, stop, seed).",
@@ -179,8 +214,16 @@ method({
 
 method({
   name: "scene3d.update",
-  summary: "Change a 3D scene's gravity (strength m/s² and direction in degrees, 0 = down, 90 = right; or a vector) or show-camera distance.",
-  params: z.object({ scene: z.string(), gravity: z.object({ strength: z.number().min(0).max(100), angle: z.number().optional() }).optional(), gravityVector: vec3.optional(), cameraDistance: z.number().min(0.2).max(20).optional(), name: z.string().optional() }),
+  summary:
+    "Change a 3D scene's gravity (strength m/s² and direction in degrees, 0 = down, 90 = right; or a vector) or the audience viewpoint: cameraDistance (building widths in front of the building) gives this scene its own, null makes it follow the building's; buildingCameraDistance changes the building's viewpoint, shared by every scene that follows it.",
+  params: z.object({
+    scene: z.string(),
+    gravity: z.object({ strength: z.number().min(0).max(100), angle: z.number().optional() }).optional(),
+    gravityVector: vec3.optional(),
+    cameraDistance: z.number().min(0.2).max(20).nullable().optional(),
+    buildingCameraDistance: z.number().min(0.2).max(20).optional(),
+    name: z.string().optional(),
+  }),
   mutates: true,
   run: (p, ctx) => {
     const { scene } = scene3d(p.scene);
@@ -192,7 +235,12 @@ method({
     if (p.gravityVector) changes.gravity = p.gravityVector;
     if (p.cameraDistance !== undefined) changes.cameraDistance = p.cameraDistance;
     if (p.name) changes.name = p.name;
-    ctx.edit(() => st().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes } }, { label: "Change 3D scene" }));
+    if (p.buildingCameraDistance !== undefined) {
+      const v = activeVenue(st());
+      if (!v) throw new AgentError("not_found", "There's no building (venue) yet.");
+      ctx.edit(() => st().apply({ type: "venue.update", args: { venueId: v.id, changes: { cameraDistance: p.buildingCameraDistance! } } }, { label: "Change the audience viewpoint" }));
+    }
+    if (Object.keys(changes).length) ctx.edit(() => st().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes } }, { label: "Change 3D scene" }));
     return { scene: scene.id, gravity: project().scenes3d![scene.id]!.gravity, revision: currentRevision() };
   },
 });
@@ -200,10 +248,16 @@ method({
 method({
   name: "scene3d.objectAdd",
   summary:
-    "Add an object: box (falls), ball (falls and bounces), ledge (fixed obstacle), spot light, or area — a traced area as its own solid in this scene (the building photo on it; give it a picture, physics or breaking with scene3d.objectUpdate). An area can stand out toward the audience (standOutCm: a column in front of a porch — it stays on its picture from the audience while lights and shadows see the real solid) and have other areas cut out of it (cutOut: room for parts that are their own pieces).",
+    "Add an object: box (falls), ball (falls and bounces), ledge (fixed obstacle), spot light, area — a traced area as its own solid in this scene (the building photo on it; give it a picture, physics or breaking with scene3d.objectUpdate) — or model: a 3D model (glTF/GLB: a character or prop) that shares this scene's depth, lights and shadows with the house (it can pass behind a column, cast shadows on the wall, and collide when given physics). An area can stand out toward the audience (standOutCm: a column in front of a porch — it stays on its picture from the audience while lights and shadows see the real solid) and have other areas cut out of it (cutOut: room for parts that are their own pieces).",
   params: z.object({
     scene: z.string(),
-    kind: z.enum(["box", "ball", "ledge", "light", "area"]),
+    kind: z.enum(["box", "ball", "ledge", "light", "area", "model", "picture"]),
+    model: z.string().optional().describe("kind model: a model in the show (asset id or name), or a .glb/.gltf file path to import"),
+    picture: z.string().optional().describe("kind picture: a picture in the show (asset id or name) or an image file path to import; stands in the scene (a cut-out PNG's transparent parts are cut out of it and its shadow)"),
+    heightM: z.number().min(0.01).max(200).optional().describe("kind model: scale it to this height (default: as made)"),
+    xM: z.number().optional().describe("kind model: left/right from the building's middle (m)"),
+    aheadM: z.number().optional().describe("kind model/picture: distance in front of the building front (m, default 1)"),
+    standsAtM: z.number().optional().describe("kind model/picture: height it stands at (m above the bottom of the canvas, default 0: e.g. a porch floor's height)"),
     area: z.union([z.string(), z.array(z.string()).min(1)]).optional().describe("kind area: the area(s) by name or id"),
     name: z.string().optional(),
     thicknessCm: z.number().min(1).max(500).optional(),
@@ -214,6 +268,36 @@ method({
   run: async (p, ctx) => {
     const { scene, layer } = scene3d(p.scene);
     const before = new Set(scene.objectOrder);
+    if (p.kind === "model") {
+      if (!p.model) throw new AgentError("invalid_params", "A model object needs model (a model in the show, or a .glb/.gltf file path).");
+      let asset = Object.values(project().assets).find((a) => a.kind === "model" && (a.id === p.model || a.name.toLowerCase() === p.model!.toLowerCase()));
+      if (!asset) {
+        if (!/\.(glb|gltf)$/i.test(p.model)) throw new AgentError("not_found", `No 3D model "${p.model}" in the show (give a .glb/.gltf path to import one).`);
+        let added: Awaited<ReturnType<typeof importMediaFiles>> = [];
+        try {
+          added = await importMediaFiles([p.model], { quiet: true });
+        } catch (e) {
+          throw new AgentError("rejected", String((e as Error)?.message ?? e));
+        }
+        asset = added[0];
+        if (!asset) throw new AgentError("rejected", `“${p.model}” couldn't be imported as a 3D model (see the app log for why).`);
+      }
+      const info = await ensureModelInfo(asset.id);
+      const object = modelObject(newId("obj"), p.name ?? asset.name.replace(/\.(glb|gltf)$/i, ""), asset.id, info ?? undefined, [p.xM ?? 0, p.standsAtM ?? 0, p.aheadM ?? 1], p.heightM);
+      ctx.edit(() => st().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name}` }));
+      const b = info?.bounds;
+      return { object: object.id, asset: asset.id, measured: b ? { widthM: b[3] - b[0], heightM: b[4] - b[1], depthM: b[5] - b[2], hullPoints: info!.hull.length / 3, animations: info!.animations } : null, revision: currentRevision() };
+    }
+    if (p.kind === "picture") {
+      if (!p.picture) throw new AgentError("invalid_params", "A picture object needs picture (a picture in the show, or an image file path).");
+      let asset = Object.values(project().assets).find((a) => a.kind === "image" && (a.id === p.picture || a.name.toLowerCase() === p.picture!.toLowerCase()));
+      if (!asset) asset = (await importMediaFiles([p.picture], { quiet: true }))[0];
+      if (!asset || asset.kind !== "image") throw new AgentError("not_found", `No picture "${p.picture}" (give an image in the show, or an image file path).`);
+      const aspect = (asset.meta.width ?? 1) / (asset.meta.height ?? 1);
+      const object = pictureObject(newId("obj"), p.name ?? asset.name.replace(/\.\w+$/, ""), asset.id, aspect, p.heightM ?? 1.7, [p.xM ?? 0, p.standsAtM ?? 0, p.aheadM ?? 1]);
+      ctx.edit(() => st().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name}` }));
+      return { object: object.id, asset: asset.id, revision: currentRevision() };
+    }
     if (p.kind === "area") {
       if (!p.area) throw new AgentError("invalid_params", "An area object needs area (an area's name or id).");
       const ids = areaIds([p.area].flat());
@@ -258,8 +342,37 @@ method({
     standOutCm: z.number().min(0).max(2000).optional().describe("area: how far its front stands out toward the audience (it stays on its picture from the audience)"),
     cutOut: z.array(z.string()).nullable().optional().describe("area: other areas cut out of it (null: none)"),
     material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1), shading: z.number().min(0).max(1).describe("picture surfaces: 0 = the picture itself whichever way it turns, 1 = lit like a real solid (default)"), matchPicture: z.boolean().describe("picture surfaces: facing the audience it shows the picture exactly whatever the lights (default true); false = as the lights really fall on it (a light's own pass)") }).partial().optional(),
-    physics: z.object({ body: z.enum(["dynamic", "static"]), mass: z.number().min(0.01).max(1e6), friction: z.number().min(0).max(2), bounce: z.number().min(0).max(1) }).partial().nullable().optional(),
-    fracture: z.object({ pieceSize: z.number().min(5).max(1000), seed: z.number().int(), collapseAt: z.number().min(0), rebuildAt: z.number().min(0).nullable(), rebuildSeconds: z.number().min(0.1).max(60), push: z.number().min(-20).max(20), spin: z.number().min(0).max(10), stagger: z.number().min(0).max(30), pattern: z.enum(["pieces", "glass", "bricks"]) }).partial().nullable().optional(),
+    physics: z
+      .object({
+        body: z.enum(["dynamic", "static"]),
+        mass: z.number().min(0.01).max(1e6),
+        friction: z.number().min(0).max(2),
+        bounce: z.number().min(0).max(1),
+        releaseAt: z.number().min(0).nullable().describe("dynamic: seconds into the layer when it lets go — until then it follows its animation (and what it rides on), then flies on with the speed and spin it had; null: physics from the start"),
+      })
+      .partial()
+      .nullable()
+      .optional(),
+    attachTo: z.string().nullable().optional().describe("ride on another object of the scene (its position, turn and size become relative to it); null: stand on its own"),
+    detachAt: z.number().min(0).nullable().optional().describe("seconds into the layer when it stops riding (stays where it was left, or physics takes over with physics.releaseAt); null: rides throughout"),
+    fracture: z
+      .object({
+        pieceSize: z.number().min(5).max(1000),
+        seed: z.number().int(),
+        collapseAt: z.number().min(0),
+        rebuildAt: z.number().min(0).nullable(),
+        rebuildSeconds: z.number().min(0.1).max(60),
+        push: z.number().min(-20).max(20),
+        spin: z.number().min(0).max(10),
+        stagger: z.number().min(0).max(30),
+        pattern: z.enum(["pieces", "glass", "bricks"]),
+        trigger: z.enum(["time", "impact"]).describe("time: breaks at collapseAt; impact: stays whole until something moving hits it, then breaks only around the hit, the way the hit was going"),
+        impactRadius: z.number().min(0.05).max(20).describe("impact: metres around the hit that break out (default 0.8)"),
+        impactSpeed: z.number().min(0).max(100).describe("impact: slowest hit that breaks it, m/s (default 3)"),
+      })
+      .partial()
+      .nullable()
+      .optional(),
     blocks: z
       .object({
         shape: z.enum(["cubes", "columns", "rows"]),
@@ -284,11 +397,23 @@ method({
       .partial()
       .nullable()
       .optional(),
-    light: z.object({ type: z.enum(["directional", "spot", "point", "ambient"]), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), intensity: z.number().min(0).max(100), castShadow: z.boolean(), target: vec3, angle: z.number().min(1).max(89), softness: z.number().min(0).max(1) }).partial().optional(),
+    light: z
+      .object({
+        type: z.enum(["directional", "spot", "point", "ambient"]),
+        color: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+        intensity: z.number().min(0).max(100),
+        castShadow: z.boolean(),
+        target: vec3,
+        angle: z.number().min(1).max(89),
+        softness: z.number().min(0).max(1),
+        balance: z.boolean().describe("part of the picture's own lighting (evens picture surfaces out so they show exactly); default true for directional/ambient, false for spot/point, which add light and shadows on top"),
+      })
+      .partial()
+      .optional(),
   }),
   mutates: true,
   example: { scene: "Wall 1 in 3D", object: "Key light", position: [8, 6, 6] },
-  run: (p, ctx) => {
+  run: async (p, ctx) => {
     const { scene, layer } = scene3d(p.scene);
     const o = object3d(scene, p.object);
     const t = layer ? layerTime(layer, st().time) : 0;
@@ -317,7 +442,26 @@ method({
       changes.material = { ...m, ...(p.material.color ? { color: at(o.material.color, p.material.color) } : {}), ...(p.material.glow !== undefined ? { glow: at(o.material.glow, p.material.glow) } : {}) };
     }
     if (p.physics === null) changes.physics = null;
-    else if (p.physics) changes.physics = { ...(o.physics ?? { body: "dynamic", mass: 50, friction: 0.7, bounce: 0.2 }), ...p.physics } satisfies Physics3D;
+    else if (p.physics) {
+      const { releaseAt, ...rest } = p.physics;
+      const base: Physics3D = { ...(o.physics ?? { body: "dynamic", mass: 50, friction: 0.7, bounce: 0.2 }), ...rest };
+      const { releaseAt: _old, ...noRelease } = base;
+      changes.physics = releaseAt === null ? noRelease : releaseAt !== undefined ? { ...base, releaseAt } : base;
+      // A model needs its measurements to collide.
+      if (o.geometry?.kind === "model") await ensureModelInfo(o.geometry.assetId);
+    }
+    if (p.attachTo !== undefined || p.detachAt !== undefined) {
+      const to = p.attachTo === undefined ? o.attach?.to : p.attachTo;
+      if (to === null || to === undefined) changes.attach = null;
+      else {
+        const target = scene.objects[to] ?? Object.values(scene.objects).find((x) => x.name.toLowerCase() === to.toLowerCase());
+        if (!target || target.id === o.id) throw new AgentError("not_found", `No other object "${to}" in this scene to ride on.`);
+        // Riding on something that rides on this would go round in circles.
+        for (let x: typeof target | undefined = target, n = 0; x?.attach && n < 10; x = scene.objects[x.attach.to], n++) if (x.attach.to === o.id) throw new AgentError("rejected", `“${target.name}” already rides on “${o.name}”.`);
+        const until = p.detachAt === undefined ? o.attach?.until : p.detachAt;
+        changes.attach = { to: target.id, ...(until !== null && until !== undefined ? { until } : {}) };
+      }
+    }
     if (p.fracture === null) changes.fracture = null;
     else if (p.fracture) {
       if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", "Only building areas given thickness can break apart.");

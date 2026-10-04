@@ -71,7 +71,8 @@ export type EvaluatedSource =
     }
   | { readonly kind: "comp"; readonly comp: EvaluatedComp }
   /** `frame` is the layer-local frame (comp rate) used to look up prepared physics motion. */
-  | { readonly kind: "scene3d"; readonly sceneId: Id; readonly localTime: Flicks; readonly resolved: ResolvedScene3D | null; readonly frame: number }
+  /** `view`: the composition's size in canvas pixels (the part of the building it frames). */
+  | { readonly kind: "scene3d"; readonly sceneId: Id; readonly localTime: Flicks; readonly resolved: ResolvedScene3D | null; readonly frame: number; readonly view?: { readonly width: number; readonly height: number } }
   /** `frame` counts from the start of the simulation (preroll included). */
   | { readonly kind: "simulation"; readonly sim: ResolvedSim; readonly frame: number }
   | { readonly kind: "adjustment" }
@@ -280,7 +281,7 @@ const evaluateSource = (
     case "scene3d": {
       const { resolved, frames, fps } = scene3dFor(project, comp, l, s.sceneId, o.venueId);
       const frame = Math.min(frames - 1, Math.max(0, Math.round((lt / 705_600_000) * fps)));
-      return { kind: "scene3d", sceneId: s.sceneId, localTime: lt, resolved, frame };
+      return { kind: "scene3d", sceneId: s.sceneId, localTime: lt, resolved, frame, view: { width: comp.width, height: comp.height } };
     }
     case "adjustment":
       return { kind: "adjustment" };

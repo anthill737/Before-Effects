@@ -242,10 +242,11 @@ export const registerFileIpc = () => {
     return found;
   });
 
-  ipcMain.handle("files:chooseFiles", async (e, kind: "media" | "image" | "audio" | "aep") => {
+  ipcMain.handle("files:chooseFiles", async (e, kind: "media" | "image" | "audio" | "aep" | "model") => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const filters = {
-      media: [{ name: "Images, videos and sound", extensions: ["jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "hif", "mp4", "mov", "m4v", "webm", "mkv", "avi", "mxf", "wav", "mp3", "m4a", "aac", "flac", "ogg"] }],
+      media: [{ name: "Images, videos, sound and 3D models", extensions: ["jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "hif", "mp4", "mov", "m4v", "webm", "mkv", "avi", "mxf", "wav", "mp3", "m4a", "aac", "flac", "ogg", "glb", "gltf"] }],
+      model: [{ name: "3D models (glTF)", extensions: ["glb", "gltf"] }],
       image: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif", "hif"] }],
       audio: [{ name: "Sound", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg"] }],
       aep: [{ name: "After Effects project or export", extensions: ["aep", "aepx", "json"] }],

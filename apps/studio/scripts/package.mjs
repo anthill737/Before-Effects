@@ -9,7 +9,8 @@
  */
 import { packager } from "@electron/packager";
 import { execSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
@@ -150,5 +151,21 @@ try {
 } catch {
   /* not a git checkout */
 }
-writeFileSync(join(appDir, "resources", "build-info.json"), JSON.stringify({ builtAt: new Date().toISOString(), version, electron: electronVersion, gitHead }, null, 2));
+// What decides how preview frames look: the project model and evaluation, the renderer, and how frames
+// are stored on disk. Prepared frames are kept across app updates that don't change any of these.
+const renderHash = (() => {
+  const h = createHash("sha256");
+  const walk = (dir) => {
+    for (const name of readdirSync(dir).sort()) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(ts|wgsl|js)$/.test(name)) h.update(relative(root, p).split(sep).join("/")).update(readFileSync(p));
+    }
+  };
+  walk(join(root, "packages", "core", "src"));
+  walk(join(root, "packages", "engine", "src"));
+  for (const f of ["apps/studio/src/renderer/src/preview/diskCache.ts", "apps/studio/src/renderer/src/preview/diskCodec.worker.ts", "apps/studio/src/shared/diskFrames.ts"]) h.update(f).update(readFileSync(join(root, f)));
+  return h.digest("hex").slice(0, 16);
+})();
+writeFileSync(join(appDir, "resources", "build-info.json"), JSON.stringify({ builtAt: new Date().toISOString(), version, electron: electronVersion, gitHead, renderHash }, null, 2));
 step(`done → ${join(appDir, "Before Effects.exe")}`);

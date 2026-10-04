@@ -7,7 +7,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { copyFile, stat } from "node:fs/promises";
+import { copyFile, readFile, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { ipcMain } from "electron";
@@ -40,9 +40,31 @@ const parseRate = (r: string | undefined): { num: number; den: number } | undefi
   return { num: n, den: d };
 };
 
+/** A .gltf that refers to other files (textures, .bin) can't be read once copied on its own. */
+const gltfOutsideFiles = async (file: string): Promise<string[]> => {
+  try {
+    const j = JSON.parse(await readFile(file, "utf8")) as { buffers?: Array<{ uri?: string }>; images?: Array<{ uri?: string }> };
+    return [...(j.buffers ?? []), ...(j.images ?? [])].map((x) => x.uri).filter((u): u is string => !!u && !u.startsWith("data:"));
+  } catch {
+    return [];
+  }
+};
+
 export const importMedia = async (src: string, projectId: string): Promise<ImportedMedia> => {
   const { ffmpeg, ffprobe } = await findFfmpeg();
   const dir = join(paths().media, projectId.replace(/[^\w.-]+/g, "_"));
+  const ext = extname(src).toLowerCase();
+  if (ext === ".glb" || ext === ".gltf") {
+    if (ext === ".gltf" && (await gltfOutsideFiles(src)).length)
+      throw new Error(`“${basename(src)}” refers to other files (textures or .bin). Export it as a single .glb file (in Blender: File → Export → glTF 2.0, format "glTF Binary").`);
+    mkdirSync(dir, { recursive: true });
+    const target = uniqueTarget(dir, basename(src));
+    await copyFile(src, target);
+    const root = myDrive();
+    const rel = root ? driveRelative(root, src) : null;
+    log(`imported 3D model ${src} → ${target}`);
+    return { kind: "model", path: target, originalPath: src, ...(rel ? { drive: rel } : {}), name: basename(src) };
+  }
   mkdirSync(dir, { recursive: true });
   const target = uniqueTarget(dir, basename(src));
   // Not blocking: a file streamed from Google Drive downloads while it's copied.

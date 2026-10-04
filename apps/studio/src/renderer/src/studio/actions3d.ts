@@ -17,6 +17,11 @@ import {
   type Layer,
   lightObject,
   type Mask,
+  houseScene,
+  newLayer,
+  modelObject,
+  type ModelInfo,
+  pictureObject,
   newId,
   type Object3D,
   PARTICLE_PRESETS,
@@ -32,6 +37,7 @@ import {
   type Vec3,
 } from "@be/core";
 import { create } from "zustand";
+import { importMediaFiles, measureModel } from "./media.ts";
 import { activeVenue, currentComp, useStudio } from "./store.ts";
 
 /** Which object of the selected 3D layer's scene is being edited. */
@@ -137,6 +143,43 @@ export const makeArea3D = (regionIds: readonly string[], collapse: boolean, pres
 };
 
 /**
+ * The whole house as one 3D space: every traced area its own solid at its depth (windows and doors
+ * set back, columns standing out…), lit by a key light that's the picture's own lighting, with a
+ * ground that shows shadows. Characters, props and lights added to it share its depth and shadows.
+ * As a 3D layer from the playhead (`seconds` long, default to the end of the scene).
+ */
+export const makeHouse3D = (opts: { name?: string; seconds?: number } = {}): string | null => {
+  const s = useStudio.getState();
+  const comp = currentComp(s);
+  const venue = activeVenue(s);
+  if (!s.project || !comp || !venue) return null;
+  const sceneId = newId("s3d");
+  const name = opts.name ?? "The house in 3D";
+  const scene = houseScene(s.project, { sceneId, idPrefix: sceneId, name, venueId: venue.id, canvas: venue.canvas });
+  if (!Object.values(scene.objects).some((o) => o.geometry?.kind === "area")) {
+    s.toast({ kind: "error", text: "There are no traced areas to make 3D yet. Trace the building in Areas first." });
+    return null;
+  }
+  const start = snapToFrame(Math.min(s.time, Math.max(0, comp.duration - secondsToTime(1))), comp.frameRate);
+  const end = opts.seconds ? Math.min(comp.duration, start + secondsToTime(opts.seconds)) : comp.duration;
+  const layerId = newId("layer");
+  const layer: Layer = { ...newLayer({ id: layerId, name, source: { kind: "scene3d", sceneId }, start, duration: end - start }), audioEnabled: false };
+  const tx = s.apply(
+    [
+      { type: "scene3d.add", args: { scene } },
+      { type: "layer.add", args: { compId: comp.id, layer } },
+    ],
+    { label: "Make the whole house 3D" },
+  );
+  if (!tx) return null;
+  if (s.step === "space") useStudio.setState({ step: "animate" });
+  s.selectLayer(layerId);
+  const n = Object.values(scene.objects).filter((o) => o.geometry?.kind === "area").length;
+  s.toast({ kind: "success", text: `“${name}”: ${n} areas as solids at their depth. Add characters, props and lights to it (3D panel → Add object); they share its depth and shadows. Look around it in “3D projection”.` });
+  return layerId;
+};
+
+/**
  * Particles (sparks, embers, snow, confetti) from the selected areas — snow can fall over the whole
  * picture — as a 3D layer on top of the scene at the playhead. Returns the layer id.
  */
@@ -162,7 +205,7 @@ export const addParticles = (kind: ParticleKind, regionIds: readonly string[]): 
     scale: staticProp<Vec3>([100, 100, 100]),
     particles: { ...preset.settings, from: regionIds.length ? refFor(regionIds) : null, seed: Math.floor(Math.random() * 1e6) },
   };
-  const scene: Scene3D = { id: sceneId, name, objectOrder: [objectId], objects: { [objectId]: object }, gravity: [0, -9.81, 0], cameraDistance: 1.6 };
+  const scene: Scene3D = { id: sceneId, name, objectOrder: [objectId], objects: { [objectId]: object }, gravity: [0, -9.81, 0] };
   const seconds = { sparks: 5, embers: 8, snow: 12, confetti: 6 }[kind];
   const start = snapToFrame(Math.min(s.time, Math.max(0, comp.duration - secondsToTime(2))), comp.frameRate);
   const layerId = newId("layer");
@@ -224,6 +267,69 @@ export const addObject = (layer: Layer, kind: "box" | "ball" | "light" | "ledge"
           ? boxObject(id, "Ledge", [W * 0.4, 0.25, 1], [0, H * 0.3, 0.5], { body: "static", mass: 1000, friction: 0.8, bounce: 0.1 })
           : lightObject(id, "Spot light", { type: "spot", target: [0, H / 2, 0], intensity: staticProp(4), angle: 30 }, [W * 0.4, H + 2, 7]);
   if (s.apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name.toLowerCase()}` })) use3D.setState({ objectId: id });
+};
+
+/**
+ * A model's measurements: from the asset, or measured now and stored with it (models brought in
+ * before measuring existed, e.g. from Blender). Null when the file can't be read.
+ */
+export const ensureModelInfo = async (assetId: string): Promise<ModelInfo | null> => {
+  const a = useStudio.getState().project?.assets[assetId];
+  if (!a || a.kind !== "model") return null;
+  if (a.meta.model) return a.meta.model;
+  try {
+    const model = await measureModel(a.path);
+    useStudio.getState().apply({ type: "asset.update", args: { assetId, changes: { meta: { model } } } }, { label: `Measure “${a.name}”`, source: "system" });
+    return model;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A 3D model in the layer's scene, sharing its depth, lights and shadows with the house and
+ * everything else there. `heightM`: scaled to that height (default: as authored); it stands with its
+ * lowest point on the ground (y = 0), `ahead` metres out from the building front.
+ */
+export const addModelObject = async (layer: Layer, assetId: string, opts: { heightM?: number; x?: number; ahead?: number; name?: string } = {}): Promise<string | null> => {
+  const scene = sceneForLayer(layer);
+  const s = useStudio.getState();
+  const asset = s.project?.assets[assetId];
+  if (!scene || !asset || asset.kind !== "model") return null;
+  const info = await ensureModelInfo(assetId);
+  const id = newId("obj");
+  const object = modelObject(id, opts.name ?? asset.name.replace(/\.(glb|gltf)$/i, ""), assetId, info ?? undefined, [opts.x ?? 0, 0, opts.ahead ?? 1], opts.heightM);
+  if (!useStudio.getState().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name}` })) return null;
+  use3D.setState({ objectId: id });
+  return id;
+};
+
+/** A picture (e.g. a cut-out character PNG) standing in the layer's scene, `heightM` tall. */
+export const addPictureObject = (layer: Layer, assetId: string, opts: { heightM?: number; x?: number; ahead?: number; name?: string } = {}): string | null => {
+  const scene = sceneForLayer(layer);
+  const asset = useStudio.getState().project?.assets[assetId];
+  if (!scene || !asset || asset.kind !== "image") return null;
+  const aspect = (asset.meta.width ?? 1) / (asset.meta.height ?? 1);
+  const object = pictureObject(newId("obj"), opts.name ?? asset.name.replace(/\.\w+$/, ""), assetId, aspect, opts.heightM ?? 1.7, [opts.x ?? 0, 0, opts.ahead ?? 1]);
+  if (!useStudio.getState().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name}` })) return null;
+  use3D.setState({ objectId: object.id });
+  return object.id;
+};
+
+/** Pick a picture file, import it, and stand it in the layer's scene. */
+export const addPictureFromFile = async (layer: Layer): Promise<string | null> => {
+  const files = await window.be.files.chooseFiles("image");
+  if (!files.length) return null;
+  const [asset] = await importMediaFiles(files.slice(0, 1), { quiet: true });
+  return asset ? addPictureObject(layer, asset.id) : null;
+};
+
+/** Pick a .glb/.gltf file, import it, and add it to the layer's scene. */
+export const addModelFromFile = async (layer: Layer): Promise<string | null> => {
+  const files = await window.be.files.chooseFiles("model");
+  if (!files.length) return null;
+  const [asset] = await importMediaFiles(files.slice(0, 1), { quiet: true });
+  return asset ? addModelObject(layer, asset.id) : null;
 };
 
 /** A traced area as its own piece in the layer's 3D scene (fixed in place; give it physics or breaking after). */

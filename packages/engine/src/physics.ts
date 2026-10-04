@@ -14,7 +14,11 @@
  * result for the same input on any run.
  *
  * Pieces of a breaking object start fixed in place, let go at their release frame with a push and
- * spin, and, when they rebuild, are moved back along an eased path to where they started.
+ * spin, and, when they rebuild, are moved back along an eased path to where they started. Pieces of a
+ * surface that breaks on impact let go when something moving fast enough is about to hit them: the
+ * pieces within the impact radius are freed just before contact, so the hit carries them the way it
+ * was going (and loses speed doing it). Bodies that let go later ("released") follow their
+ * animation until then and leave with the speed and spin they had.
  */
 import RAPIER from "@dimforge/rapier3d-deterministic-compat";
 import type { PhysicsBody, Quat, ResolvedPhysics, Vec3 } from "@be/core";
@@ -28,6 +32,10 @@ interface Run {
   readonly physics: ResolvedPhysics;
   world: RAPIER.World | null;
   bodies: RAPIER.RigidBody[];
+  /** Body index by Rapier handle (for working out what an impact touches). */
+  byHandle: Map<number, number>;
+  /** Impact fragments let go so far. */
+  freed: Set<number>;
   readonly data: Float32Array;
   /** Frames recorded so far. */
   done: number;
@@ -106,7 +114,7 @@ export class PhysicsEngine {
       return existing;
     }
     const data = new Float32Array(Math.max(1, p.frames * p.movers * 7));
-    const r: Run = { physics: p, world: null, bodies: [], data, done: 0, from: new Map(), busy: null, saved: false, loading: Promise.resolve() };
+    const r: Run = { physics: p, world: null, bodies: [], byHandle: new Map(), freed: new Set(), data, done: 0, from: new Map(), busy: null, saved: false, loading: Promise.resolve() };
     this.runs.set(p.key, r);
     // Already prepared (this session in another window, or a previous session)?
     r.loading = (async () => {
@@ -125,11 +133,16 @@ export class PhysicsEngine {
     const p = r.physics;
     const world = new RAPIER.World({ x: p.gravity[0], y: p.gravity[1], z: p.gravity[2] });
     world.timestep = 1 / (p.fps * p.substeps);
-    r.bodies = p.bodies.map((b) => {
-      const desc = b.kind === "dynamic" ? RAPIER.RigidBodyDesc.dynamic() : b.kind === "kinematic" ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed();
+    r.byHandle = new Map();
+    r.freed = new Set();
+    r.bodies = p.bodies.map((b, i) => {
+      const desc = b.kind === "dynamic" ? RAPIER.RigidBodyDesc.dynamic() : b.kind === "kinematic" || b.kind === "released" ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed();
       desc.setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] });
+      // Something fast may come through: keep it from tunnelling through thin pieces.
+      if (b.kind === "dynamic" || b.kind === "released") desc.setCcdEnabled(true);
       const body = world.createRigidBody(desc);
       world.createCollider(colliderFor(b), body);
+      r.byHandle.set(body.handle, i);
       return body;
     });
     r.world = world;
@@ -164,15 +177,88 @@ export class PhysicsEngine {
           body.setTranslation({ x: pos[0], y: pos[1], z: pos[2] }, true);
           body.setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] }, true);
         }
-      } else if (b.kind === "kinematic" && b.path) {
-        const o = Math.min(f, r.physics.frames - 1) * 7;
-        const n = Math.min(f + 1, r.physics.frames - 1) * 7;
+      } else if ((b.kind === "kinematic" || b.kind === "released") && b.path) {
+        const last = b.path.length / 7 - 1;
+        if (b.kind === "released" && f >= (b.release ?? 0)) {
+          // Lets go: physics from here, with the speed and spin it had.
+          if (f === b.release) {
+            body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+            const v = b.velocity ?? [0, 0, 0];
+            const w = b.spin ?? [0, 0, 0];
+            body.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
+            body.setAngvel({ x: w[0], y: w[1], z: w[2] }, true);
+          }
+          return;
+        }
+        const o = Math.min(f, last) * 7;
+        const n = Math.min(f + 1, last) * 7;
         if (f === 0) {
           body.setTranslation({ x: b.path[o]!, y: b.path[o + 1]!, z: b.path[o + 2]! }, true);
           body.setRotation({ x: b.path[o + 3]!, y: b.path[o + 4]!, z: b.path[o + 5]!, w: b.path[o + 6]! }, true);
         }
         body.setNextKinematicTranslation({ x: b.path[n]!, y: b.path[n + 1]!, z: b.path[n + 2]! });
         body.setNextKinematicRotation({ x: b.path[n + 3]!, y: b.path[n + 4]!, z: b.path[n + 5]!, w: b.path[n + 6]! });
+      }
+    });
+    this.impacts(r, f);
+  }
+
+  /**
+   * Surfaces that break where they're hit: anything moving (not a piece of debris) that will touch
+   * an unbroken piece within the next frame, at least that surface's impact speed, frees the pieces
+   * within its radius of the hit — before contact, so the hit carries them through. Deterministic:
+   * bodies are checked in order.
+   */
+  private impacts(r: Run, f: number): void {
+    const p = r.physics;
+    const world = r.world!;
+    if (!p.bodies.some((b, i) => b.impact && !r.freed.has(i))) return;
+    const fps = p.fps;
+    p.bodies.forEach((b, i) => {
+      if (b.kind === "fixed" || b.kind === "fragment") return;
+      if (b.kind === "released" && f < (b.release ?? 0)) {
+        // Still on its path: its speed is the path's.
+        if (!b.path) return;
+      }
+      const body = r.bodies[i]!;
+      const t = body.translation();
+      let v: Vec3;
+      if (b.kind === "kinematic" || (b.kind === "released" && f < (b.release ?? 0))) {
+        const last = b.path!.length / 7 - 1;
+        const n = Math.min(f + 1, last) * 7;
+        v = [(b.path![n]! - t.x) * fps, (b.path![n + 1]! - t.y) * fps, (b.path![n + 2]! - t.z) * fps];
+      } else {
+        const lv = body.linvel();
+        v = [lv.x, lv.y, lv.z];
+      }
+      const speed = Math.hypot(v[0], v[1], v[2]);
+      if (speed < 0.5) return;
+      const collider = body.collider(0);
+      // Where it will be one frame from now.
+      const ahead = { x: t.x + v[0] / fps, y: t.y + v[1] / fps, z: t.z + v[2] / fps };
+      const hits = new Map<number, Vec3>();
+      world.intersectionsWithShape(ahead, body.rotation(), collider.shape, (c) => {
+        const j = r.byHandle.get(c.parent()?.handle ?? -1);
+        const hb = j === undefined ? undefined : p.bodies[j];
+        if (j !== undefined && hb?.impact && !r.freed.has(j) && speed >= hb.impact.speed && !hits.has(hb.impact.group)) hits.set(hb.impact.group, [ahead.x, ahead.y, ahead.z]);
+        return true;
+      });
+      for (const [group, at] of [...hits.entries()].sort((a, c) => a[0] - c[0])) {
+        p.bodies.forEach((fb, j) => {
+          if (!fb.impact || fb.impact.group !== group || r.freed.has(j)) return;
+          const fbody = r.bodies[j]!;
+          const ft = fbody.translation();
+          const d = Math.hypot(ft.x - at[0], ft.y - at[1], ft.z - at[2]);
+          if (d > fb.impact.radius) return;
+          r.freed.add(j);
+          // Carried the way the hit was going: what's in its path at its speed (pushed ahead of it, so
+          // it carries on through), less toward the edge of the break; a little scatter and tumble.
+          const k = 1.1 * (1 - 0.6 * (d / fb.impact.radius));
+          const jit = (s: number) => (((Math.sin((j + 1) * 12.9898 + s * 78.233) * 43758.5453) % 1) + 1) % 1 - 0.5;
+          fbody.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+          fbody.setLinvel({ x: v[0] * k + jit(1) * speed * 0.15, y: v[1] * k + jit(2) * speed * 0.15, z: v[2] * k + jit(3) * speed * 0.1 }, true);
+          fbody.setAngvel({ x: jit(4) * 6, y: jit(5) * 6, z: jit(6) * 6 }, true);
+        });
       }
     });
   }

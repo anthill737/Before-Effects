@@ -14,6 +14,8 @@
  *   prepare():          (exports) waits for the building photo and the prepared physics motion.
  */
 import {
+  objectPose,
+  balancesPicture,
   type EvaluatedSource,
   eulerDegToQuat,
   evalProp,
@@ -206,6 +208,14 @@ export class SceneHost implements ExternalSourceRenderer {
   private renderer!: THREE.WebGPURenderer;
   private readonly built = new Map<string, Built>();
   private readonly targets = new Map<string, THREE.RenderTarget>();
+  /**
+   * When each render target and built scene was last used. Unused ones are freed (a target after a
+   * few seconds, a scene after a minute) so graphics memory follows what's being shown, not every
+   * 3D layer a long show has passed through (each target is ~80 MB at 1080p).
+   */
+  private readonly targetUsed = new Map<string, number>();
+  private readonly builtUsed = new Map<string, number>();
+  private lastSweep = 0;
   private readonly photos = new Map<string, THREE.Texture | null>();
   private readonly photoLoading = new Map<string, Promise<void>>();
   /** Prepared physics motion (set by the renderer). */
@@ -215,6 +225,10 @@ export class SceneHost implements ExternalSourceRenderer {
   /** Loads a model asset's file (GLB) for 3D scenes; set by the host app. */
   modelSource: ((assetId: string) => Promise<Uint8Array | null>) | null = null;
   private readonly models = new Map<string, GLTF | null>();
+  /** Models that couldn't be read, with why (for the 3D panel and the agent API). */
+  readonly modelErrors = new Map<string, string>();
+  /** Told when a model can't be read (the app logs it). */
+  onModelError: ((assetId: string, message: string) => void) | null = null;
   private readonly modelLoading = new Map<string, Promise<void>>();
   /** Called when something arrives that changes a render (photo loaded). */
   onChange: (() => void) | null = null;
@@ -264,15 +278,23 @@ export class SceneHost implements ExternalSourceRenderer {
     if (!this.modelLoading.has(assetId) && this.modelSource) {
       const p = this.modelSource(assetId)
         .then(async (bytes) => {
-          if (!bytes) {
-            this.models.set(assetId, null);
-            return;
-          }
+          if (!bytes) throw new Error("the file is missing or unreadable");
           const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
           const gltf = await new GLTFLoader().parseAsync(buf, "");
           this.models.set(assetId, gltf);
+          this.modelErrors.delete(assetId);
         })
-        .catch(() => void this.models.set(assetId, null))
+        .catch((e: unknown) => {
+          const msg = String((e as Error)?.message ?? e);
+          const why = /draco|meshopt|ktx2|basis/i.test(msg)
+            ? "it uses compression this app can't read yet (Draco, Meshopt or KTX2): export it again without compression"
+            : /fetch|load|uri|url|resource/i.test(msg)
+              ? "it refers to other files (textures or .bin): export it as a single .glb file"
+              : msg;
+          this.models.set(assetId, null);
+          this.modelErrors.set(assetId, why);
+          this.onModelError?.(assetId, why);
+        })
         .finally(() => {
           this.modelLoading.delete(assetId);
           this.onChange?.();
@@ -318,6 +340,7 @@ export class SceneHost implements ExternalSourceRenderer {
   }
 
   private buildScene(id: string): Built {
+    this.builtUsed.set(id, performance.now());
     let b = this.built.get(id);
     if (b) return b;
     const scene = new THREE.Scene();
@@ -450,11 +473,15 @@ export class SceneHost implements ExternalSourceRenderer {
       // shattered pieces); a box's sides stay plain.
       const mappedSides = o.geometry?.kind === "area";
       if (m?.style === "image" && m.assetId) {
-        // A picture on the front (e.g. what's seen through an opening).
+        // A picture on the front (e.g. what's seen through an opening, or a cut-out character). Its
+        // transparent parts are cut out, from the picture and from its shadow.
         front.userData.image = m.assetId;
         side = make();
         side.userData.sideOf = true;
         if (mappedSides) side.userData.image = m.assetId;
+        for (const x of [front, side]) x.alphaTest = 0.5;
+        // A standing picture casts its shadow whichever side the light is on.
+        if (o.geometry?.kind === "plane") front.side = THREE.DoubleSide;
         mats.push(front, side);
       } else if (m?.style === "photo") {
         front.userData.photo = true;
@@ -537,15 +564,16 @@ export class SceneHost implements ExternalSourceRenderer {
       const L = o.light;
       const c = srgb(L.color);
       const g = L.type === "ambient" ? srgb(L.color.map((x) => x * 0.3)) : null;
-      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: evalProp(L.intensity, t), position: evalProp(o.position, t), target: L.target, angle: L.angle, softness: L.softness });
+      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: evalProp(L.intensity, t), position: objectPose(r.scene, o, t).place([0, 0, 0]), target: L.target, angle: L.angle, softness: L.softness, balance: balancesPicture(L) });
     }
     for (const ro of r.objects) {
       const e = b.entries.get(ro.object.id)!;
       const o = e.model;
-      const pos = evalProp(o.position, t);
-      const rot = evalProp(o.rotation, t);
-      const scl = evalProp(o.scale, t).map((s) => s / 100) as unknown as Vec3;
-      const q = eulerDegToQuat(rot);
+      // Where it is: its own animation about its pivot, carried by whatever it rides on.
+      const pose = objectPose(r.scene, o, t);
+      const pos = pose.place([0, 0, 0]);
+      const scl = pose.scale;
+      const q = pose.q;
       if (e.light && o.light) {
         const L: Light3D = o.light;
         const k = evalProp(L.intensity, t);
@@ -588,7 +616,9 @@ export class SceneHost implements ExternalSourceRenderer {
       // Materials.
       const m = o.material;
       const picture = m?.style === "photo" || m?.style === "image";
-      const gain = picture && m.opacity >= 1 ? pictureGain(frontIrradiance(lightsNow, e.pieces[0] ? placePoint(e.pieces[0].center, pos, q, scl, o.pivot) : pos)) : null;
+      // Evened out by the picture's own lighting only: added lights (lanterns, glows) brighten it and
+      // cast shadows on top of the picture instead of being cancelled out.
+      const gain = picture && m.opacity >= 1 ? pictureGain(frontIrradiance(lightsNow.filter((l) => l.balance), e.pieces[0] ? pose.place(e.pieces[0].center) : pos)) : null;
       for (const mat of e.mats) {
         if (mat instanceof THREE.MeshStandardMaterial && m) {
           const c = evalProp(m.color, t);
@@ -628,19 +658,30 @@ export class SceneHost implements ExternalSourceRenderer {
           if (this.models.get(e.model3d.pending) === undefined) pending = true;
           continue;
         }
-        // Placed by the object's transform; the file's own animation follows the layer's time.
+        // Placed by the object's transform (turning about its pivot), or by physics once it moves
+        // under it; the file's own animation follows the layer's time.
         const { root, mixer } = e.model3d;
         root.visible = o.visible;
-        root.position.set(pos[0], pos[1], pos[2]);
-        root.quaternion.set(q[0], q[1], q[2], q[3]);
         root.scale.set(scl[0], scl[1], scl[2]);
+        const fromMotion = ro.poseIndex >= 0 && !!physics && src.frame >= (ro.motionFrom ?? 0);
+        if (fromMotion && !(motion && motion.ready > src.frame)) pending = true;
+        if (fromMotion && motion && motion.ready > src.frame) {
+          const off = (src.frame * physics!.movers + ro.poseIndex) * 7;
+          const d = motion.data;
+          root.position.set(d[off]!, d[off + 1]!, d[off + 2]!);
+          root.quaternion.set(d[off + 3]!, d[off + 4]!, d[off + 5]!, d[off + 6]!);
+        } else {
+          const w = pose.place([0, 0, 0]);
+          root.position.set(w[0], w[1], w[2]);
+          root.quaternion.set(q[0], q[1], q[2], q[3]);
+        }
         const clip = o.clip ?? { speed: 1, offset: 0 };
         mixer.setTime(Math.max(0, (t / FLICKS_PER_SECOND) * clip.speed + clip.offset));
         continue;
       }
       // Pieces: from prepared motion once they move, otherwise placed with the object.
       const moving = ro.poseIndex >= 0 && physics;
-      const needMotion = moving && src.frame >= SceneHost.firstMoving(physics);
+      const needMotion = moving && src.frame >= (ro.motionFrom ?? SceneHost.firstMoving(physics));
       const haveMotion = !!motion && motion.ready > src.frame;
       if (needMotion && !haveMotion) pending = true;
       const list = e.pieces.length ? e.pieces : [null];
@@ -657,14 +698,14 @@ export class SceneHost implements ExternalSourceRenderer {
         } else if (o.blocks && piece && !moving) {
           // Blocks: each pushed out or turned about its own middle, worked out from time.
           const bp = blockPose(o.blocks, e.pieces, i, t / FLICKS_PER_SECOND);
-          const w = placePoint([piece.center[0], piece.center[1], piece.center[2] + bp.dz], pos, q, scl, o.pivot);
+          const w = pose.place([piece.center[0], piece.center[1], piece.center[2] + bp.dz]);
           mesh.position.set(w[0], w[1], w[2]);
           tmpQ.set(q[0], q[1], q[2], q[3]);
           if (bp.angle) tmpQ.multiply(blockQ.setFromAxisAngle(bp.axis === "x" ? X_AXIS : Y_AXIS, bp.angle));
           mesh.quaternion.copy(tmpQ);
         } else {
           const c = piece ? piece.center : ([0, 0, 0] as Vec3);
-          const w = placePoint(c, pos, q, scl, o.pivot);
+          const w = pose.place(c);
           mesh.position.set(w[0], w[1], w[2]);
           mesh.quaternion.set(q[0], q[1], q[2], q[3]);
         }
@@ -673,7 +714,38 @@ export class SceneHost implements ExternalSourceRenderer {
     return { b, pending };
   }
 
+  /** Free render targets and built scenes nobody has drawn for a while (at most once a second). */
+  private sweep(): void {
+    const now = performance.now();
+    if (now - this.lastSweep < 1000) return;
+    this.lastSweep = now;
+    for (const [key, used] of this.targetUsed) {
+      if (now - used < 5000) continue;
+      this.targets.get(key)?.dispose();
+      this.targets.delete(key);
+      this.targetUsed.delete(key);
+    }
+    for (const [id, used] of this.builtUsed) {
+      if (now - used < 60_000) continue;
+      const b = this.built.get(id);
+      if (b) {
+        for (const e of b.entries.values()) this.dropEntry(b, e);
+        b.entries.clear();
+        for (const h of b.helpers) b.scene.remove(h);
+        if (b.backdrop) {
+          b.backdrop.geometry.dispose();
+          (b.backdrop.material as THREE.Material).dispose();
+        }
+        b.frustum?.geometry.dispose();
+      }
+      this.built.delete(id);
+      this.builtUsed.delete(id);
+    }
+  }
+
   private target(key: string, w: number, h: number): THREE.RenderTarget {
+    this.targetUsed.set(key, performance.now());
+    this.sweep();
     let rt = this.targets.get(key);
     if (!rt || rt.width !== w || rt.height !== h) {
       rt?.dispose();
@@ -714,13 +786,18 @@ export class SceneHost implements ExternalSourceRenderer {
     if (!u) return null;
     const { b } = u;
     const r = src.resolved!;
-    const cam = showCamera(r.canvas, r.scene.cameraDistance);
+    const cam = showCamera(r.canvas, r.cameraDistance);
     b.showCam.fov = cam.fovY;
     b.showCam.aspect = cam.aspect;
     b.showCam.near = 0.05;
     b.showCam.far = 500;
     b.showCam.position.set(cam.eye[0], cam.eye[1], cam.eye[2]);
     b.showCam.lookAt(cam.target[0], cam.target[1], cam.target[2]);
+    // A composition sized differently from the building canvas frames its part of it (from its top
+    // left, like the 2D layers), from the same viewpoint: nothing stretches, depth lines up.
+    const v = src.view;
+    if (v && (v.width !== r.canvas.width || v.height !== r.canvas.height)) b.showCam.setViewOffset(r.canvas.width, r.canvas.height, 0, 0, v.width, v.height);
+    else b.showCam.clearViewOffset();
     b.showCam.updateProjectionMatrix();
     this.setInspectOnly(b, false);
     this.fitShadows(b, height);
@@ -768,7 +845,7 @@ export class SceneHost implements ExternalSourceRenderer {
       b.backdropKey = key;
     }
     // The show camera's view as lines.
-    const cam = showCamera(r.canvas, r.scene.cameraDistance);
+    const cam = showCamera(r.canvas, r.cameraDistance);
     if (!b.frustum) {
       b.frustum = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.6 }));
       b.scene.add(b.frustum);

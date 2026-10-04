@@ -9,3 +9,4 @@ export * from "./renderer.ts";
 export * from "./venue3d.ts";
 export * from "./sim/engine.ts";
 export * from "./physics.ts";
+export * from "./models.ts";

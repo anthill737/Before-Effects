@@ -1,5 +1,6 @@
 /** Contextual inspector: only what the current selection needs, simple controls first. */
 import {
+  regionDepth,
   defaultParams,
   getRecipe,
   blendSetup,
@@ -654,6 +655,15 @@ const RegionEditPanel = () => {
           </Field>
           <Field label="Grow / shrink edge" help="Push the edge out (+) or pull it in (−), in every scene.">
             <Slider label="Grow or shrink edge" min={-40} max={40} unit="px" value={one.expansion ?? 0} onChange={(v) => apply({ type: "region.update", args: { venueId: venue.id, regionId: one.id, changes: { expansion: v } } }, { label: "Grow/shrink area edge", coalesceKey: `expand-${one.id}` })} />
+          </Field>
+          <Field label="Depth in 3D" help="How the area sits when a 3D scene makes it a solid (every scene agrees): standing out from the building front (+, a column) or set back into it (−, a window in its frame). Its kind gives a usual depth until you set one.">
+            <Slider label="Stands out (+) or set back (−)" min={-100} max={200} unit="cm" value={Math.round(regionDepth(one).standOut * 100)} onChange={(v) => apply({ type: "region.update", args: { venueId: venue.id, regionId: one.id, changes: { depth: { standOut: v / 100 } } } }, { label: "Change the area's depth", coalesceKey: `depth-${one.id}` })} />
+            <Slider label="Thickness" min={1} max={200} unit="cm" value={Math.round(regionDepth(one).thickness * 100)} onChange={(v) => apply({ type: "region.update", args: { venueId: venue.id, regionId: one.id, changes: { depth: { thickness: v / 100 } } } }, { label: "Change the area's thickness", coalesceKey: `thick-${one.id}` })} />
+            {one.depth && (
+              <button className="link small" onClick={() => apply({ type: "region.update", args: { venueId: venue.id, regionId: one.id, changes: { depth: null } } }, { label: "Usual depth for its kind" })}>
+                Back to the usual depth for a {one.kind}
+              </button>
+            )}
           </Field>
           <p className="muted small">
             {one.holes?.length ? `${one.holes.length} hole${one.holes.length > 1 ? "s" : ""} cut out. ` : "No holes. "}

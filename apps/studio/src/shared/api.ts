@@ -13,7 +13,7 @@ export interface AppPaths {
 
 /** What media import learned about a file (copied into the project's media folder). */
 export interface ImportedMedia {
-  readonly kind: "image" | "video" | "audio" | "unknown";
+  readonly kind: "image" | "video" | "audio" | "model" | "unknown";
   readonly path: string;
   readonly originalPath: string;
   /** Its place in Google Drive when it came from there (the file at `path` is the local copy). */
@@ -354,7 +354,7 @@ export interface BeApi {
     showInFolder(path: string): Promise<void>;
     openPath(path: string): Promise<void>;
     chooseImage(): Promise<{ path: string; dataUrl: string } | null>;
-    chooseFiles(kind: "media" | "image" | "audio" | "aep"): Promise<string[]>;
+    chooseFiles(kind: "media" | "image" | "audio" | "aep" | "model"): Promise<string[]>;
     /** Copy a file into the show's media folder (original untouched). HEIC/HEIF photos are decoded to a PNG working copy. */
     importAsset(src: string, projectId: string): Promise<ImportedAsset>;
     /** The file path of a file dropped from Explorer. */

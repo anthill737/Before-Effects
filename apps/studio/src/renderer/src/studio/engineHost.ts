@@ -27,6 +27,10 @@ export const getRenderer = (): Promise<FrameRenderer> => {
       return a ? window.be.files.readFile(a.path) : null;
     };
     r.scenes.onChange = notifySimFrame;
+    r.scenes.onModelError = (assetId, why) => {
+      const a = useStudio.getState().project?.assets[assetId];
+      window.be.app.log(`3D model “${a?.name ?? assetId}” couldn't be read: ${why}`);
+    };
     media = new MediaHost(r);
     r.setMedia(media);
     r.setSimStore(simStore()).onFrameReady = notifySimFrame;

@@ -482,13 +482,17 @@ export const assetUpdate = defineOp({
         analysis: z.custom<NonNullable<Asset["analysis"]>>((v) => !!v && typeof v === "object" && Array.isArray((v as { beats?: unknown }).beats)),
         audioPath: z.string(),
         missing: z.boolean(),
+        /** Details measured later (e.g. a 3D model's size and collision hull), merged into the existing ones. */
+        meta: z.custom<Partial<Asset["meta"]>>((v) => !!v && typeof v === "object" && !Array.isArray(v), { message: "expected media details" }),
       })
       .partial(),
   }),
   apply: (d, a) => {
     const asset = d.assets[a.assetId];
     if (!asset) throw new OpError("That media item no longer exists.");
-    Object.assign(asset, a.changes);
+    const { meta, ...rest } = a.changes;
+    Object.assign(asset, rest);
+    if (meta) asset.meta = { ...asset.meta, ...meta } as Draft<Asset["meta"]>;
   },
   summarize: (a, p) => (a.changes.analysis ? `Found the beat of "${p.assets[a.assetId]?.name ?? "the music"}" (${Math.round(a.changes.analysis.bpm)} BPM).` : `Updated "${p.assets[a.assetId]?.name ?? "media"}".`),
 });
@@ -519,7 +523,7 @@ export const assetRelink = defineOp({
     if (a.originalPath) asset.originalPath = a.originalPath;
     if (a.drive) asset.drive = a.drive;
     if (a.audioPath) asset.audioPath = a.audioPath;
-    if (a.meta) asset.meta = { ...asset.meta, ...a.meta };
+    if (a.meta) asset.meta = { ...asset.meta, ...a.meta } as Draft<Asset["meta"]>;
     delete asset.missing;
   },
   summarize: (a, p) => `Relinked "${p.assets[a.assetId]?.name ?? "media"}".`,
@@ -550,6 +554,7 @@ export const venueUpdate = defineOp({
     changes: z
       .object({
         name: z.string().min(1),
+        cameraDistance: z.number().min(0.2).max(50),
         canvas: z.object({ width: z.number().int().min(16).max(16384), height: z.number().int().min(16).max(16384) }),
         referenceAssetId: z.string().nullable(),
         photo: z.object({
@@ -608,6 +613,7 @@ export const regionUpdate = defineOp({
         feather: z.number().min(0).max(500),
         expansion: z.number().min(-500).max(500),
         cutouts: z.array(id),
+        depth: z.object({ standOut: z.number().min(-20).max(50).optional(), thickness: z.number().min(0.005).max(20).optional() }).nullable(),
         /** null: reviewed, no longer a proposal. */
         proposal: z.custom<NonNullable<Region["proposal"]>>((v) => typeof v === "object").nullable(),
       })
@@ -617,9 +623,11 @@ export const regionUpdate = defineOp({
     const v = venueOf(d, a.venueId);
     const r = v.regions[a.regionId];
     if (!r) throw new OpError("That region no longer exists.");
-    const { proposal, ...rest } = a.changes;
+    const { proposal, depth, ...rest } = a.changes;
     if (rest.cutouts?.some((c) => c === a.regionId || !v.regions[c])) throw new OpError("An area can only have other existing areas cut out of it.");
     Object.assign(r, rest);
+    if (depth === null) delete r.depth;
+    else if (depth) r.depth = { ...r.depth, ...depth };
     if (proposal === null) delete r.proposal;
     else if (proposal) r.proposal = proposal as Draft<NonNullable<Region["proposal"]>>;
   },

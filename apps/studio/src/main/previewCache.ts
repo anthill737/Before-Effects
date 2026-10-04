@@ -46,7 +46,12 @@ interface Stamp {
 /** This build of the app: a rebuilt app may draw frames differently, so its frames start over. */
 const BUILD = (() => {
   try {
-    if (app.isPackaged) return String((JSON.parse(readFileSync(join(process.resourcesPath, "build-info.json"), "utf8")) as { builtAt?: string }).builtAt ?? app.getVersion());
+    // Frames last while what draws them is unchanged (a fingerprint of the rendering code), so an app
+    // update that only changes the editor keeps a prepared show. Older builds: their build time.
+    if (app.isPackaged) {
+      const info = JSON.parse(readFileSync(join(process.resourcesPath, "build-info.json"), "utf8")) as { builtAt?: string; renderHash?: string };
+      return info.renderHash ? `render ${info.renderHash}` : String(info.builtAt ?? app.getVersion());
+    }
     return `dev ${Math.round(statSync(fileURLToPath(import.meta.url)).mtimeMs)}`;
   } catch {
     return app.getVersion();
