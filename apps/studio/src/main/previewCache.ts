@@ -331,6 +331,12 @@ export const registerPreviewCacheIpc = () => {
     return stamp ? { fingerprint: stamp.fingerprint, build: stamp.build, current: BUILD } : null;
   });
 
+  // Read-only: the frames on disk (projector outputs play prepared frames, never changing them).
+  ipcMain.handle("cache:keys", async (_e, scope: DiskCacheScope): Promise<string[]> => {
+    await whenReady();
+    return index.keys(scopeDir(scope.project, scope.comp));
+  });
+
   // Keep frames an older build made from this same show, except the ones drawn differently now.
   ipcMain.handle("cache:carryOver", async (_e, scope: DiskCacheScope, fp: string, fromBuild: string, drop: Array<[number, number]>): Promise<number> => {
     await whenReady();

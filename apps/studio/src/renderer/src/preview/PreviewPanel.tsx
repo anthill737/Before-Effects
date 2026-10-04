@@ -18,6 +18,7 @@ import { clearDiskCache, refreshDiskStatus, useDiskCache } from "./diskCache.ts"
 import { pausePreparing, type PrepareJob, type PrepareTarget, startPreparing, stopPreparing, usePrepare } from "./prepare.ts";
 import { applyPlan, matchesPlan, useCachePlan } from "./recommend.ts";
 import { previewAudio } from "../studio/audioEngine.ts";
+import { followerClock, followersReady } from "./sync.ts";
 import { getMediaHost, getRenderer, venueReference } from "../studio/engineHost.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
 import { useCurrentProjector } from "../studio/projectors.ts";
@@ -857,6 +858,8 @@ export const editorSource: PreviewSource = {
   loop: () => useStudio.getState().loop,
   setPlaying: (p) => useStudio.getState().setPlaying(p),
   cacheable: () => !useStudio.getState().hoverPreview,
-  clock: () => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? previewAudio.now() : null),
+  // The editor: the sound card's clock. Outputs and the pop-out: the editor's clock (followerClock).
+  clock: () => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? previewAudio.now() : followerClock()),
   soundStarting: () => (window.be.app.kind === "editor" || window.be.app.kind === "uitest") && previewAudio.starting,
+  followersReady: () => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? followersReady() : true),
 };

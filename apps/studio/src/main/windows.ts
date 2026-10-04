@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import { app, BrowserWindow, type Display, ipcMain, screen } from "electron";
-import type { DisplayInfo, OutputConfig, OutputStatus, SyncHello, TestPattern, TransportState, WindowKind } from "../shared/api.ts";
+import type { DisplayInfo, OutputConfig, OutputShowing, OutputStatus, SyncHello, TestPattern, TransportState, WindowKind } from "../shared/api.ts";
 import { log } from "./log.ts";
 
 let editor: BrowserWindow | null = null;
@@ -159,8 +159,8 @@ export const registerWindowIpc = (mode: string) => {
 
   ipcMain.handle("windows:openOutput", (_e, config: OutputConfig) => openOutput(config));
 
-  ipcMain.on("output:frame", (e, info: { frame: number; fps: number }) => {
-    for (const o of outputs.values()) if (!o.win.isDestroyed() && o.win.webContents.id === e.sender.id) o.showing = { frame: info.frame, fps: info.fps, at: Date.now() };
+  ipcMain.on("output:frame", (e, info: Omit<OutputShowing, "at">) => {
+    for (const o of outputs.values()) if (!o.win.isDestroyed() && o.win.webContents.id === e.sender.id) o.showing = { ...info, at: Date.now() };
   });
 
   // A projector's display unplugged: its output waits and reopens when the display comes back
@@ -246,7 +246,9 @@ export const registerWindowIpc = (mode: string) => {
   });
   ipcMain.on("sync:transport", (e, t: TransportState) => {
     latestTransport = t;
-    for (const w of secondary()) if (w.webContents.id !== e.sender.id) w.webContents.send("sync:transport", t);
+    // To every other window: from the editor to its followers, and from a follower's own play/pause or
+    // seek (the pop-out's keys) to the editor too, whose clock then leads.
+    for (const w of [editor, ...secondary()]) if (w && !w.isDestroyed() && w.webContents.id !== e.sender.id) w.webContents.send("sync:transport", t);
   });
   ipcMain.handle("sync:hello", (e): SyncHello => {
     const out = [...outputs.values()].find((o) => o.win.webContents.id === e.sender.id);

@@ -43,7 +43,7 @@ import { hasAudio, previewAudio } from "../studio/audioEngine.ts";
 import { pausePreparing, startPreparing, stopPreparing, usePrepare } from "../preview/prepare.ts";
 import { applyPlan, computePlan } from "../preview/recommend.ts";
 import { driveMediaInUse } from "../studio/drive.ts";
-import { getRenderer } from "../studio/engineHost.ts";
+import { getMediaHost, getRenderer } from "../studio/engineHost.ts";
 import { OUTCOMES, SIZES } from "../studio/ExportDialog.tsx";
 import { useSims } from "../studio/simHost.ts";
 import { currentProjector, useProjectorPick } from "../studio/projectors.ts";
@@ -686,6 +686,49 @@ method({
   },
 });
 
+/** Everything this window holds, each owner once: graphics memory by owner, and computer memory. */
+export const memoryReport = async () => {
+  const r = await getRenderer();
+  const loop = currentPreviewLoop();
+  const fc = loop?.cache.stats();
+  const MB = (n: number) => Math.round(n / 1048576);
+  const pool = r.gpu.poolReport();
+  const media = getMediaHost()?.memoryReport();
+  const scenes = r.scenes.memoryReport();
+  const sims = r.sims?.memoryReport();
+  const physics = r.physics?.memoryReport();
+  const disk = loop?.disk.memoryReport();
+  const heap = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0;
+  const gpuTotal = (fc?.bytes ?? 0) + (media?.bytes ?? 0) + pool.inUseBytes + pool.freeBytes + scenes.targetBytes + (sims?.bytes ?? 0);
+  return {
+    graphicsMB: {
+      frameCache: MB(fc?.bytes ?? 0),
+      frameCacheBudget: MB(fc?.budget ?? 0),
+      frameCacheFrames: fc?.frames ?? 0,
+      media: MB(media?.bytes ?? 0),
+      mediaBudget: MB(media?.budget ?? 0),
+      poolInUse: MB(pool.inUseBytes),
+      poolInUseCount: pool.inUse,
+      poolFree: MB(pool.freeBytes),
+      poolFreeCount: pool.free,
+      scene3dTargets: MB(scenes.targetBytes),
+      scene3dTargetCount: scenes.targets,
+      simulationFrames: MB(sims?.bytes ?? 0),
+      counted: MB(gpuTotal),
+    },
+    scene3d: { builtScenes: scenes.builtScenes, geometries: scenes.geometries, textures: scenes.textures },
+    computerMB: { scriptHeap: MB(heap), preparedMotion: MB(physics?.bytes ?? 0), diskStaging: MB(disk?.stagingBytes ?? 0) },
+    disk: disk ?? null,
+  };
+};
+
+method({
+  name: "memory.report",
+  summary: "What this window holds, by owner (each counted once): graphics memory for finished frames, pictures and video, the texture pool (lent out and kept for reuse), 3D render targets and simulation frames; computer memory for scripts, prepared 3D motion and frames being saved. For finding what grows.",
+  params: z.object({}),
+  run: () => memoryReport(),
+});
+
 method({
   name: "preview.get",
   summary: "Preview settings and what it actually renders: view, resolution choice, rendered size, frames per second (and skipped frames), playback mode and cache amounts.",
@@ -702,6 +745,7 @@ method({
       achievedFps: stats.achievedFps,
       targetFps: stats.targetFps,
       dropped: stats.dropped,
+      stepsBack: stats.stepsBack,
       mode: stats.mode,
       cacheFrames: stats.cacheFrames,
       buffering: stats.mode === "preparing" && s.diskCache ? stats.preparing : null,
@@ -709,6 +753,11 @@ method({
       avSyncMs: stats.avSyncMs,
       avSyncMaxMs: stats.avSyncMaxMs,
       audioStarts: previewAudio.starts,
+      recentChanges: currentPreviewLoop()?.changes.slice(-12) ?? [],
+      recentSoundStarts: previewAudio.startLog.slice(-8),
+      soundStallsMs: previewAudio.stalls.slice(-8),
+      unshownCauses: currentPreviewLoop()?.causes ?? null,
+      now: Math.round(performance.now()),
       scene3dResolves: scene3dResolves(),
       orbit: s.orbit,
       playbackMode: s.playbackMode,

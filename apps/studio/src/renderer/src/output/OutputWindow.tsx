@@ -7,12 +7,17 @@
 import { useEffect, useRef, useState } from "react";
 import "../studio/styles.css";
 import type { OutputConfig, TestPattern } from "../../../shared/api.ts";
-import { PreviewLoop } from "../preview/loop.ts";
+import { PreviewLoop, usePreviewStats } from "../preview/loop.ts";
+import { usePreview } from "../preview/settings.ts";
 import { editorSource } from "../preview/PreviewPanel.tsx";
-import { startFollowerSync } from "../preview/sync.ts";
+import { followerClockError, startFollowerSync } from "../preview/sync.ts";
 import { getMediaHost, getRenderer } from "../studio/engineHost.ts";
 import { useStudio } from "../studio/store.ts";
 import { onSimFrame } from "../studio/simHost.ts";
+
+/** Graphics memory for an output's frames (MB): the few seconds read ahead from disk, with room to spare. */
+const OUTPUT_CACHE_MB = 2048;
+let reportTimer = 0;
 
 const drawPattern = (c: HTMLCanvasElement, pattern: TestPattern, label: string, w: number, h: number) => {
   c.width = w;
@@ -105,7 +110,8 @@ export const OutputWindow = () => {
       const hello = await window.be.sync.hello();
       if (hello.output) setConfig(hello.output);
       offCfg = window.be.sync.onOutputConfig(setConfig);
-      off = await startFollowerSync();
+      // Edits in the editor: frames this output holds that they change are drawn again.
+      off = await startFollowerSync((m) => m.compId && loopRef.current?.invalidate(m.compId, m.affected, m.others));
       setStatus("");
     })();
     const onKey = (e: KeyboardEvent) => {
@@ -116,6 +122,7 @@ export const OutputWindow = () => {
       off?.();
       offCfg?.();
       window.removeEventListener("keydown", onKey);
+      clearInterval(reportTimer);
       loopRef.current?.stop();
     };
   }, []);
@@ -126,19 +133,32 @@ export const OutputWindow = () => {
       if (!canvasRef.current) return;
       const loop = new PreviewLoop(r, canvasRef.current, editorSource, () => ({ width: window.innerWidth, height: window.innerHeight }));
       loop.fixed = { view: "projector", projectorId: config.projectorId, fraction: 1 };
-      // Tell the editor what this output shows (frame and drawing rate), a few times a second:
-      // for checking that several outputs stay in step, and that this one is alive.
+      // Prepared frames come from disk a few seconds ahead: graphics memory for that, not the
+      // editor's whole frame cache (each output is a window of its own).
+      loop.cache.setBudget(Math.min(usePreview.getState().cacheBudgetMB, OUTPUT_CACHE_MB) * 1024 * 1024);
+      // Tell the editor what this output shows, four times a second: the frame, different frames
+      // shown and frames passed over, how far its picture is from the editor's clock (the sound),
+      // and draws (redraws included), for checking outputs keep up and stay in step.
       const drawn: number[] = [];
-      let lastSent = 0;
+      let frameNow = 0;
       loop.onFrame = (frame) => {
         const now = performance.now();
+        frameNow = frame;
         drawn.push(now);
-        while (drawn.length && now - drawn[0]! > 1000) drawn.shift();
-        if (now - lastSent > 250) {
-          lastSent = now;
-          window.be.windows.reportOutputFrame({ frame, fps: drawn.length });
-        }
       };
+      reportTimer = window.setInterval(() => {
+        const now = performance.now();
+        while (drawn.length && now - drawn[0]! > 1000) drawn.shift();
+        const st = usePreviewStats.getState();
+        const s = useStudio.getState();
+        const onDisk = s.project && s.compId ? loop.disk.framesOnDisk(s.project, s.compId, 1, "full").size : 0;
+        const MB = (n: number) => Math.round(n / 1048576);
+        const pool = r.gpu.poolReport();
+        const memoryMB = { frameCache: MB(loop.cache.stats().bytes), media: MB(getMediaHost()?.memoryReport().bytes ?? 0), poolInUse: MB(pool.inUseBytes), poolFree: MB(pool.freeBytes), scene3d: MB(r.scenes.memoryReport().targetBytes) };
+        const ahead = s.compId ? loop.readyAhead(s.compId, frameNow, 1, "full", 90) : 0;
+        const clock = followerClockError();
+        window.be.windows.reportOutputFrame({ frame: frameNow, fps: drawn.length, unique: st.achievedFps, skipped: st.dropped, stepsBack: st.stepsBack, causes: { ...loop.causes }, clockErrMs: clock.recentMs, clockErrMaxMs: clock.maxMs, syncMs: st.avSyncMs, syncMaxMs: st.avSyncMaxMs, diskReadMs: st.diskReadMs, framesOnDisk: onDisk, ahead, playing: s.playing, memoryMB });
+      }, 250);
       loopRef.current = loop;
       getMediaHost()?.onLoaded(() => loop.invalidateView());
       onSimFrame(() => loop.invalidateView());

@@ -3,10 +3,12 @@
  * projector panel, rename it, arrange both side by side with an overlap, switch between them, check
  * the edge blend in each output, then export every projector (one file each) and check the files.
  */
-import { blendSetup, blendWeight, secondsToTime } from "@be/core";
+import { blendSetup, blendWeight, type Projector, secondsToTime } from "@be/core";
 import { PhysicsEngine } from "@be/engine";
+import { dispatch } from "./agent/core.ts";
 import { currentPreviewLoop } from "./preview/PreviewPanel.tsx";
 import { usePreviewStats } from "./preview/loop.ts";
+import { applyPlan, computePlan } from "./preview/recommend.ts";
 import { usePreview } from "./preview/settings.ts";
 import { applyEffect } from "./studio/actions.ts";
 import { getRenderer } from "./studio/engineHost.ts";
@@ -87,6 +89,69 @@ let skip = "";
 const skipped = () => ({ ok: true, note: `SKIPPED: ${skip}` });
 const rows: Record<string, number[]> = {};
 
+/** Preview settings before the output steps changed them (null: not changed). */
+let kept: Partial<ReturnType<typeof usePreview.getState>> | null = null;
+const restorePreview = () => {
+  if (kept) usePreview.getState().set(kept);
+  kept = null;
+};
+
+/**
+ * The show-night way: memory as recommended for this computer, the opening seconds prepared to disk
+ * (in a folder of the test's own), then these projectors' outputs play them read from disk, following
+ * the editor's clock, for 3 s from when it plays. Counted from what each put on its screen: different
+ * frames a second, frames never shown, going back to an earlier frame, its clock against the editor's.
+ */
+const playOutputs = async (projectors: Projector[]) => {
+  if (!kept) {
+    const b = usePreview.getState();
+    kept = { cacheBudgetMB: b.cacheBudgetMB, videoCacheMB: b.videoCacheMB, diskCache: b.diskCache, diskCacheFolder: b.diskCacheFolder, diskCacheGB: b.diskCacheGB, playbackMode: b.playbackMode, resolution: b.resolution };
+    applyPlan((await computePlan()).plan);
+    usePreview.getState().set({ diskCacheFolder: `${(await window.be.app.paths()).renders}\\ui-test\\preview-cache`, diskCacheGB: 2, playbackMode: "cache", resolution: "full" });
+  }
+  const c = st().project!.compositions[st().compId!]!;
+  const fps = c.frameRate.num / c.frameRate.den;
+  const call = async (method: string, params: Record<string, unknown>) => {
+    const r = await dispatch({ callId: `proj-${method}`, requestId: `proj-${method}`, method, params });
+    if (!r.ok) throw new Error(`${method}: ${r.error?.message}`);
+    return r.result as { frames?: { state?: string; done?: number; total?: number } };
+  };
+  await call("prepare.frames", { target: "scene", scene: st().compId!, resolution: "full", fromSeconds: 0, toSeconds: 8 });
+  const prep = await call("prepare.wait", { timeoutMs: 180_000 });
+  const displays = await window.be.displays.list();
+  const d = displays.find((x) => !x.primary) ?? displays[0]!;
+  for (const pr of projectors) await window.be.windows.openOutput({ venueId: venue().id, projectorId: pr.id, displayId: d.id, pattern: "none" });
+  const open = async () => (await window.be.windows.outputs()).filter((o) => o.open && o.showing && projectors.some((p) => p.id === o.projectorId));
+  let ready = false;
+  for (let i = 0; i < 100 && !ready; i++) {
+    ready = (await open()).filter((o) => (o.showing!.framesOnDisk ?? 0) > 0).length >= projectors.length;
+    if (!ready) await sleep(150);
+  }
+  st().setRange({ start: 0, end: secondsToTime(8) });
+  st().setTime(0);
+  const playFrom = Math.round(performance.now());
+  st().setPlaying(true);
+  await until(() => usePreviewStats.getState().mode === "playing", 60_000);
+  await sleep(1400);
+  const samples: Array<{ frames: number[]; editor: number; unshown: number[] }> = [];
+  for (let i = 0; i < 4; i++) {
+    const outs = await open();
+    if (outs.length >= projectors.length) samples.push({ frames: outs.map((o) => o.showing!.frame), editor: Math.round((st().time / 705_600_000) * fps), unshown: outs.map((o) => o.showing!.skipped ?? 0) });
+    await sleep(400);
+  }
+  const shown = (await open()).map((o) => o.showing!);
+  const changes = (currentPreviewLoop()?.changes ?? []).filter((x) => x.at >= playFrom).map((x) => `${((x.at - playFrom) / 1000).toFixed(2)} s ${x.state}${x.followers ? "" : " (outputs not ready)"}`);
+  st().setPlaying(false);
+  st().setRange(null);
+  // Blackout all, then close.
+  for (const o of await open()) await window.be.windows.setOutputPattern(o.projectorId, "black");
+  await sleep(300);
+  for (const pr of projectors) await window.be.windows.closeOutput(pr.id);
+  const each = (f: (o: (typeof shown)[number]) => unknown) => shown.map(f).join(" and ");
+  const note = `${prep.frames?.done ?? 0}/${prep.frames?.total ?? 0} frames prepared; different frames a second ${each((o) => o.unique ?? 0)}, never shown ${each((o) => o.skipped ?? 0)} (so far at 1.4/1.8/2.2/2.6 s of playing: ${samples.map((x) => x.unshown.join("+")).join(", ")}), went back ${each((o) => o.stepsBack ?? 0)} times, clock off the editor's by at most ${each((o) => o.clockErrMaxMs ?? 0)} ms (unshown: ${each((o) => `${o.causes?.lateReads ?? 0} late reads, ${o.causes?.lateTurns ?? 0} late turns`)}); editor reads a frame in ${usePreviewStats.getState().diskReadMs} ms, holds up to ${usePreviewStats.getState().cacheBudgetMB} MB of frames: ${changes.join(", ")}`;
+  return { prepared: prep.frames?.state === "done", ready, fps, samples, shown, note };
+};
+
 export const PROJECTOR_STEPS: Record<string, Step> = {
   "proj-add": async () => {
     if (!venue()?.regions || !Object.values(venue().regions).some((r) => r.name === "Facade")) {
@@ -146,42 +211,27 @@ export const PROJECTOR_STEPS: Record<string, Step> = {
     await until(() => venue().blend?.enabled === true);
     return { ok: fadeA && fadeB && off && flat, note: `Projector outputs: ${a!.name} fades from ${ra[Math.round(w * 0.5)]!.toFixed(3)} to ${ra[Math.round(w * 0.98)]!.toFixed(3)} at its right edge, ${b!.name} from ${rb[Math.round(w * 0.02)]!.toFixed(3)} at its left edge; with blending off the edge stays at ${rOff[Math.round(w * 0.98)]!.toFixed(3)}`, settle: 600 };
   },
+  "proj-output-smooth": async () => {
+    if (skip) return skipped();
+    // Show night with one projector: its output plays the prepared frames as they are, with the editor.
+    const r = await playOutputs(list().slice(0, 1));
+    restorePreview();
+    const o = r.shown[0];
+    const ok = r.prepared && r.ready && !!o && (o.unique ?? 0) >= r.fps * 0.9 && (o.skipped ?? 0) <= 3 && (o.stepsBack ?? 0) === 0 && (o.clockErrMaxMs ?? 0) < 100;
+    return { ok, note: `one output reading prepared frames: ${r.note}` };
+  },
   "proj-outputs-sync": async () => {
     if (skip) return skipped();
-    const displays = await window.be.displays.list();
-    const d = displays.find((x) => !x.primary) ?? displays[0]!;
-    // Both projectors' outputs (on one display here: they overlap, which is fine for the check).
-    for (const pr of list()) await window.be.windows.openOutput({ venueId: venue().id, projectorId: pr.id, displayId: d.id, pattern: "none" });
-    const both = async () => (await window.be.windows.outputs()).filter((o) => o.open && o.showing).length >= 2;
-    let ready = false;
-    for (let i = 0; i < 100 && !ready; i++) {
-      ready = await both();
-      if (!ready) await sleep(150);
-    }
-    st().setTime(0);
-    st().setPlaying(true);
-    await sleep(2500);
-    const fps = (() => {
-      const c = st().project!.compositions[st().compId!]!;
-      return c.frameRate.num / c.frameRate.den;
-    })();
-    const samples: Array<{ a: number; b: number; editor: number; rates: number[] }> = [];
-    for (let i = 0; i < 4; i++) {
-      const outs = (await window.be.windows.outputs()).filter((o) => o.open && o.showing);
-      const editor = Math.round((st().time / 705_600_000) * fps);
-      if (outs.length >= 2) samples.push({ a: outs[0]!.showing!.frame, b: outs[1]!.showing!.frame, editor, rates: outs.map((o) => o.showing!.fps) });
-      await sleep(400);
-    }
-    st().setPlaying(false);
-    // Blackout all, then close.
-    for (const o of await window.be.windows.outputs()) if (o.open) await window.be.windows.setOutputPattern(o.projectorId, "black");
-    await sleep(300);
-    for (const pr of list()) await window.be.windows.closeOutput(pr.id);
-    const apart = samples.map((x) => Math.abs(x.a - x.b));
-    const behind = samples.map((x) => x.editor - Math.min(x.a, x.b));
+    // Both projectors' outputs (on one display here: both full screen, one over the other, on top of
+    // the editor — more than a show asks of the computer, where each has a display of its own) stay
+    // in step with each other and the editor; how smoothly each played is in the note.
+    const r = await playOutputs(list());
+    const apart = r.samples.map((x) => Math.max(...x.frames) - Math.min(...x.frames));
+    const behind = r.samples.map((x) => x.editor - Math.min(...x.frames));
+    restorePreview();
     // Reports are sampled up to 250 ms apart, so allow that much between them.
-    const ok = ready && samples.length >= 3 && Math.max(...apart) <= Math.ceil(fps * 0.3) && Math.max(...behind) <= Math.ceil(fps * 0.6);
-    return { ok, note: `two outputs playing together: frames apart ${apart.join("/")} (reports are up to 250 ms old), behind the editor ${behind.join("/")} frames; drawing at ${samples.at(-1)?.rates.join(" and ")} frames/s; blackout and close worked` };
+    const ok = r.prepared && r.ready && r.shown.length >= 2 && r.shown.every((o) => (o.stepsBack ?? 0) === 0 && (o.clockErrMaxMs ?? 0) < 100) && r.samples.length >= 3 && Math.max(...apart) <= Math.ceil(r.fps * 0.3) && Math.max(...behind) <= Math.ceil(r.fps * 0.6);
+    return { ok, note: `two outputs reading prepared frames, in step: frames apart ${apart.join("/")} (reports are up to 250 ms old), behind the editor ${behind.join("/")}; ${r.note}` };
   },
   "proj-export-all": async () => {
     if (skip) return skipped();

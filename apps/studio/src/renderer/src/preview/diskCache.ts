@@ -205,6 +205,11 @@ export class DiskFrames {
     return this.saves.size;
   }
 
+  /** Saving: frames on their way to disk, the pixel memory they hold, and frames remembered to save later. */
+  memoryReport(): { saving: number; stagingBytes: number; backlog: number; reading: number } {
+    return { saving: this.saves.size, stagingBytes: this.staging, backlog: this.backlog.size, reading: this.reads.size };
+  }
+
   private readAvg = 0;
   /** How long reading a frame back takes, from asking for it to its being in graphics memory (ms, recent average). */
   get readMs(): number {
@@ -214,6 +219,13 @@ export class DiskFrames {
   get enabled(): boolean {
     return !this.disposed && usePreview.getState().diskCache && !!window.be?.cache;
   }
+
+  /**
+   * Projector outputs and the pop-out preview read prepared frames but never change what's on disk:
+   * they use a scene's frames only when its stamp is exactly this show and this build, and never
+   * check (and so never delete), save or stamp frames. The editor owns the frames on disk.
+   */
+  readonly readOnly = !!window.be?.app && window.be.app.kind !== "editor" && window.be.app.kind !== "uitest";
 
   /** Called when frames are saved to disk or dropped (throttle in the listener). */
   subscribe(fn: () => void): () => void {
@@ -258,7 +270,7 @@ export class DiskFrames {
    * The texture can be released as soon as this returns its promise (the GPU copy is queued).
    */
   async saveNow(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): Promise<number | null> {
-    const s = this.enabled ? this.scope(project, compId) : null;
+    const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
     if (!s) return null;
     const key = frameKey(frame, fraction, quality);
     if (s.onDisk.has(key)) return 0;
@@ -281,6 +293,22 @@ export class DiskFrames {
       const sc: Scope = { id, project: project.id, comp: compId, ready: false, onDisk: new Set(), epoch: 0 };
       this.scopes.set(id, sc);
       const fp = fingerprint(JSON.stringify(project));
+      if (this.readOnly) {
+        const scope = { project: project.id, comp: compId };
+        const retry = () => setTimeout(() => this.scopes.get(id) === sc && this.scopes.delete(id), 3000);
+        void window.be.cache
+          .previous(scope)
+          .then(async (prev) => {
+            // Only frames made from exactly this show by this build; otherwise render (and ask again later).
+            if (!prev || prev.fingerprint !== fp || prev.build !== prev.current) return retry();
+            const keys = await window.be.cache.keys(scope);
+            if (this.scopes.get(id) !== sc) return;
+            for (const k of keys) sc.onDisk.add(k);
+            sc.ready = true;
+          })
+          .catch(retry);
+        return null;
+      }
       this.carryOver(project, compId, fp)
         .then(() => window.be.cache.validate({ project: project.id, comp: compId }, fp))
         .then(
@@ -372,7 +400,7 @@ export class DiskFrames {
 
   /** A frame was just rendered and cached: save it too (in the background). */
   offer(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): void {
-    const s = this.enabled ? this.scope(project, compId) : null;
+    const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
     if (s) this.save(s, frame, fraction, quality, tex);
   }
 
@@ -443,6 +471,7 @@ export class DiskFrames {
 
   /** Save one remembered frame, if there's room and it's still in this graphics memory. Call once per tick. */
   pump(cache: FrameCache): void {
+    if (this.readOnly) return;
     if (!this.enabled || this.backlog.size === 0 || this.saves.size >= MAX_SAVES) return;
     for (const [id, r] of this.backlog) {
       this.backlog.delete(id);
@@ -483,6 +512,12 @@ export class DiskFrames {
    * such information are checked again before use.
    */
   changed(project: Project | null, compId: string, affected: Affected, rate: Rational | null, others?: Readonly<Record<string, Affected>>): void {
+    if (this.readOnly) {
+      // The editor deletes and restamps frames an edit changes; look again once it has.
+      for (const sc of [...this.scopes.values()]) this.drop(sc);
+      this.emit();
+      return;
+    }
     for (const sc of [...this.scopes.values()]) {
       // Another show (or none): its frames are checked against it again before use.
       if (!project || sc.project !== project.id) {

@@ -178,6 +178,9 @@ export const encodeWav = (buf: AudioBuffer): Uint8Array => {
 // ---------------------------------------------------------------------------------------------
 // Live preview player (editor window only)
 
+/** The sound card's clock not moving for longer than this (ms; it normally moves every 10 ms or so) counts as standing still. */
+const STALL_MS = 60;
+
 class PreviewPlayer {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -187,6 +190,15 @@ class PreviewPlayer {
   private running = false;
   /** True while sound is loading for a start; prevents restart storms. */
   starting = false;
+  private readonly listeners = new Set<() => void>();
+  /** Called when sound starts loading, starts playing or stops. */
+  onChange(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+  private changed(): void {
+    for (const fn of this.listeners) fn();
+  }
   private token = 0;
   private signature = "";
 
@@ -197,25 +209,71 @@ class PreviewPlayer {
    */
   now(): Flicks | null {
     if (!this.running || !this.ctx) return null;
+    this.watch();
     return this.startT + Math.round(Math.max(0, this.ctx.currentTime - this.startCtx) * F);
   }
+
+  /**
+   * The sound card's clock stands still: sound starts a moment ahead, and a sound device that sat
+   * idle can take half a second to wake once it has started (it can also hiccup). The time (and the
+   * editor's picture) stands still meanwhile; outputs following it are told to hold too, rather than
+   * carrying the clock on and going back.
+   */
+  get waiting(): boolean {
+    return this.watch();
+  }
+
+  /** Note when the sound card's clock last moved (and how long it stood still); whether it's standing still now. */
+  private watch(): boolean {
+    if (!this.running || !this.ctx) return false;
+    const now = performance.now();
+    const t = this.ctx.currentTime;
+    if (t !== this.lastCtxTime) {
+      if (now - this.lastAdvance > STALL_MS && t > this.startCtx) {
+        this.stalls.push(Math.round(now - this.lastAdvance));
+        if (this.stalls.length > 20) this.stalls.shift();
+      }
+      this.lastCtxTime = t;
+      this.lastAdvance = now;
+    }
+    return this.ctx.state !== "running" || t <= this.startCtx || now - this.lastAdvance > STALL_MS;
+  }
+
+  private keepAwake: ConstantSourceNode | null = null;
+  private lastCtxTime = -1;
+  private lastAdvance = 0;
+  /** Recent times the sound card's clock stood still for longer than a moment while playing (ms; diagnostics). */
+  readonly stalls: number[] = [];
 
   async start(project: Project, compId: Id, t: Flicks, end: Flicks): Promise<void> {
     this.stop();
     const my = ++this.token;
     if (!hasAudio(project, compId)) return;
     this.starting = true;
+    this.changed();
     let items: Mixable[];
     try {
       items = await collect(project, compId);
     } finally {
       if (my === this.token) this.starting = false;
     }
-    if (my !== this.token || items.length === 0) return;
+    if (my !== this.token || items.length === 0) {
+      this.changed();
+      return;
+    }
     this.ctx ??= new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
     if (this.ctx.state === "suspended") await this.ctx.resume();
     this.master ??= this.ctx.createGain();
     this.master.connect(this.ctx.destination);
+    // While playing, an inaudible constant (-100 dB) keeps the sound device awake: after half a
+    // minute of digital silence it's put to sleep, and waking it when sound comes back stops the
+    // clock (and the picture) for half a second or more. (Not while paused: the computer can sleep.)
+    if (!this.keepAwake) {
+      this.keepAwake = this.ctx.createConstantSource();
+      this.keepAwake.offset.value = 1e-5;
+      this.keepAwake.connect(this.ctx.destination);
+      this.keepAwake.start();
+    }
     // Picture may have moved on while sound was loading; start from the current playhead.
     const cur = useStudio.getState().time;
     const at = this.ctx.currentTime + 0.03;
@@ -223,9 +281,14 @@ class PreviewPlayer {
     this.startT = cur;
     this.startCtx = at;
     this.running = true;
+    this.lastCtxTime = this.ctx.currentTime;
+    this.lastAdvance = performance.now();
     this.startCount++;
+    this.changed();
   }
 
+  /** Recent starts (diagnostics): when (ms) and why. */
+  readonly startLog: Array<{ at: number; why: string }> = [];
   private startCount = 0;
   /** Times sound has started playing (each play, and each resync after drifting from the picture). */
   get starts(): number {
@@ -242,7 +305,15 @@ class PreviewPlayer {
       }
     }
     this.nodes = [];
+    if (this.keepAwake) {
+      this.keepAwake.stop();
+      this.keepAwake.disconnect();
+      this.keepAwake = null;
+    }
+    const was = this.running || this.starting;
     this.running = false;
+    this.starting = false;
+    if (was) this.changed();
   }
 
   /** Restart when audio-relevant parts of the project change during playback. */
@@ -287,6 +358,8 @@ export const startAudioSync = (): (() => void) => {
     const now = previewAudio.now();
     const drift = now === null ? Infinity : Math.abs(now - s.time);
     if (!previewAudio.isRunning || drift > F * 0.15 || sig !== previewAudio.sig) {
+      previewAudio.startLog.push({ at: Math.round(performance.now()), why: !previewAudio.isRunning ? "not playing" : sig !== previewAudio.sig ? "sound changed" : `${Math.round((drift / F) * 1000)} ms from the picture` });
+      if (previewAudio.startLog.length > 20) previewAudio.startLog.shift();
       previewAudio.sig = sig;
       void previewAudio.start(s.project, comp.id, s.time, end);
     }

@@ -62,6 +62,7 @@ const api: BeApi = {
     validate: (scope, fp) => ipcRenderer.invoke("cache:validate", scope, fp),
     stamp: (scope, fp) => ipcRenderer.invoke("cache:stamp", scope, fp),
     previous: (scope) => ipcRenderer.invoke("cache:previous", scope),
+    keys: (scope) => ipcRenderer.invoke("cache:keys", scope),
     carryOver: (scope, fp, fromBuild, drop) => ipcRenderer.invoke("cache:carryOver", scope, fp, fromBuild, drop),
     invalidate: (scope, ranges) => ipcRenderer.invoke("cache:invalidate", scope, ranges),
     put: (scope, key, data) => ipcRenderer.invoke("cache:put", scope, key, data),

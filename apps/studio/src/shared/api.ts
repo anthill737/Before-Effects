@@ -244,10 +244,46 @@ export interface DisplayInfo {
 /** Shared playback clock: `time` (flicks) was current at wall-clock `at` (ms since epoch). */
 export interface TransportState {
   readonly playing: boolean;
+  /** The editor's time (flicks) at `at` (ms epoch): while playing, its sound clock's. */
   readonly time: number;
   readonly at: number;
   readonly loop: boolean;
   readonly range: { readonly start: number; readonly end: number } | null;
+  /** Playing, but held: the editor is reading frames ahead, or its sound is starting (followers hold too). */
+  readonly held?: boolean;
+}
+
+/** What a projector output reports a few times a second. */
+export interface OutputShowing {
+  /** The frame on its screen. */
+  readonly frame: number;
+  /** Draws in the last second (redraws of the same frame included). */
+  readonly fps: number;
+  /** Different frames shown in the last second. */
+  readonly unique?: number;
+  /** Frames passed over without being shown, since playback started. */
+  readonly skipped?: number;
+  /** Why frames went unshown (since it opened): due but not yet read from disk, and passed over by the clock between two turns to draw. */
+  readonly causes?: { readonly lateReads: number; readonly lateTurns: number; readonly slowTurns?: number; readonly longestTurnMs?: number };
+  /** Times its picture went back to an earlier frame while playing (shows frames again), since playback started. */
+  readonly stepsBack?: number;
+  /** Its clock against the editor's next report (ms): largest in the last two seconds and since playback started. */
+  readonly clockErrMs?: number;
+  readonly clockErrMaxMs?: number;
+  /** Its picture against the editor's clock (the sound): recent average and largest since playback started (ms; positive = ahead). */
+  readonly syncMs?: number | null;
+  readonly syncMaxMs?: number | null;
+  /** Reading a prepared frame back from disk (ms, recent average); 0 when it renders every frame. */
+  readonly diskReadMs?: number;
+  /** Prepared frames it can read from disk for the scene it shows. */
+  readonly framesOnDisk?: number;
+  /** Frames ready in its graphics memory from the one it shows on (the editor waits for a second of them before playing). */
+  readonly ahead?: number;
+  readonly playing?: boolean;
+  /** Graphics memory this output holds, by owner (MB): finished frames, pictures and video, texture pool (lent out / kept), 3D render targets. */
+  readonly memoryMB?: { readonly frameCache: number; readonly media: number; readonly poolInUse: number; readonly poolFree: number; readonly scene3d: number };
+  /** When the editor received the report (ms epoch). */
+  readonly at: number;
 }
 
 export type TestPattern = "none" | "identify" | "grid" | "checker" | "white" | "black" | "colors";
@@ -267,8 +303,8 @@ export interface OutputStatus {
   readonly open: boolean;
   /** Its display was disconnected: it reopens when the display comes back. */
   readonly waiting?: boolean;
-  /** What the output last showed (it reports a few times a second): frame number, drawing rate, when (ms epoch). */
-  readonly showing?: { readonly frame: number; readonly fps: number; readonly at: number };
+  /** What the output last showed (it reports a few times a second). */
+  readonly showing?: OutputShowing;
 }
 
 export interface SyncHello {
@@ -389,6 +425,8 @@ export interface BeApi {
     validate(scope: DiskCacheScope, fingerprint: string): Promise<string[]>;
     /** After edits were applied: the frames on disk now belong to this version of the show. */
     stamp(scope: DiskCacheScope, fingerprint: string): Promise<void>;
+    /** Frame keys of a composition on disk, without checking or changing anything (projector outputs read prepared frames). */
+    keys(scope: DiskCacheScope): Promise<string[]>;
     /** What a composition's frames on disk were made from (show fingerprint and app build), and this app's build; null when unknown. */
     previous(scope: DiskCacheScope): Promise<{ fingerprint: string; build: string; current: string } | null>;
     /**
@@ -446,7 +484,7 @@ export interface BeApi {
     closeOutput(projectorId: string): Promise<void>;
     setOutputPattern(projectorId: string, pattern: TestPattern): Promise<void>;
     /** Output windows: report the frame now showing (for sync and health checks). */
-    reportOutputFrame(info: { frame: number; fps: number }): void;
+    reportOutputFrame(info: Omit<OutputShowing, "at">): void;
     outputs(): Promise<OutputStatus[]>;
     onWindowsChanged(cb: (s: { preview: boolean; outputs: OutputStatus[] }) => void): () => void;
   };

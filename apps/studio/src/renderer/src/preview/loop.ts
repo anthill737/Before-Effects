@@ -19,6 +19,7 @@ import { FrameCache } from "./cache.ts";
 import { type DiskFrames, diskFramesFor } from "./diskCache.ts";
 import { effectiveFraction, type RenderSize, renderSize, usePreview } from "./settings.ts";
 import { currentProjector, useProjectorPick } from "../studio/projectors.ts";
+import { unshownBetween } from "../../../shared/shownFrames.ts";
 
 export interface PreviewSource {
   project(): Project | null;
@@ -37,12 +38,16 @@ export interface PreviewSource {
   clock?(): Flicks | null;
   /** Sound is being got ready to play: the picture waits for it (so the two start together). */
   soundStarting?(): boolean;
+  /** Projector outputs open in other windows have enough frames read ahead to start playing with this one. */
+  followersReady?(): boolean;
 }
 
 export interface PreviewStats {
   targetFps: number;
   achievedFps: number;
   dropped: number;
+  /** Times the picture went back to an earlier frame while playing (not round the loop). */
+  stepsBack: number;
   gpuMs: number;
   size: RenderSize | null;
   fraction: number;
@@ -64,6 +69,7 @@ export const usePreviewStats = create<PreviewStats>(() => ({
   targetFps: 30,
   achievedFps: 0,
   dropped: 0,
+  stepsBack: 0,
   gpuMs: 0,
   size: null,
   fraction: 1,
@@ -96,8 +102,33 @@ export class PreviewLoop {
   private syncMax: number | null = null;
   private wasPlaying = false;
   private dropped = 0;
+  /** Times the picture went back to an earlier frame while playing (not round the loop): each shows frames again. */
+  private stepsBack = 0;
+  /**
+   * Why frames went unshown while playing (diagnostics): due but not yet read back from disk, and
+   * passed over by the clock between two turns to draw (the window wasn't given a turn in time).
+   */
+  readonly causes = { lateReads: 0, lateTurns: 0, slowTurns: 0, longestTurnMs: 0 };
+  /** The time this window's clock was at on its last turn while playing. */
+  private lastPlayT: number | null = null;
+  /** When (ms epoch) its playing clock was last set: the moment the show time it shows is for. */
+  clockAt = 0;
+  private lateReadFrame = -1;
+  /** The last frame shown while playing, since playing started (-1: none yet). */
+  private lastPlayedFrame = -1;
+  /** Playback went round the loop since the last frame shown: the range's last frame. */
+  private wrappedAt: number | null = null;
   /** Playing prepared frames from disk: playback caught up with the reading, so the next second is read in before going on. */
   private buffering = false;
+  private bufferingSince = 0;
+  /** Its own frames ready to start, waiting for open outputs since then (null: not waiting). */
+  private followerWaitSince: number | null = null;
+  private lastMode: PreviewStats["mode"] = "paused";
+  /** Waiting for open outputs to read ahead too: at most this long (ms), so an output that can't read never stalls playback. */
+  private static readonly FOLLOWER_WAIT_MS = 3000;
+  /** Recent playback state changes (diagnostics): when (ms), the new state, and why. */
+  readonly changes: Array<{ at: number; state: string; ready: number; of: number; followers: boolean }> = [];
+  private lastState = "";
   private slow = 0;
   private fast = 0;
   private gpuPending = false;
@@ -125,10 +156,17 @@ export class PreviewLoop {
   start(): void {
     const tick = (now: number) => {
       this.raf = requestAnimationFrame(tick);
+      const t0 = performance.now();
       try {
         this.tick(now);
       } catch (e) {
         console.error("[preview] frame failed", e);
+      }
+      // Turns that took long themselves (diagnostics): over a frame at 60 Hz.
+      if (this.wasPlaying) {
+        const ms = performance.now() - t0;
+        if (ms > 16) this.causes.slowTurns++;
+        this.causes.longestTurnMs = Math.max(this.causes.longestTurnMs, Math.round(ms));
       }
     };
     this.raf = requestAnimationFrame(tick);
@@ -192,8 +230,9 @@ export class PreviewLoop {
     const range = this.source.range() ?? { start: 0, end: comp.duration };
     const quality = this.fixed ? "full" : s.effectQuality;
     const cacheable = this.source.cacheable?.() ?? true;
-    // Frames on disk: previews only (projector outputs always render), never temporary hover previews.
-    const useDisk = !this.fixed && cacheable && this.disk.enabled;
+    // Frames on disk: never for temporary hover previews. Projector outputs read prepared frames
+    // (read-only) and render the rest.
+    const useDisk = cacheable && this.disk.enabled && (!this.fixed || this.disk.readOnly);
 
     // Auto: adaptive while playing, full quality when paused (accurate stills and stepping).
     let fraction = this.fixed?.fraction ?? effectiveFraction(s);
@@ -208,9 +247,12 @@ export class PreviewLoop {
     let preparing: PreviewStats["preparing"] = null;
 
     if (!playing || this.fixed || s.playbackMode !== "cache") this.buffering = false;
-    if (playing && !this.wasPlaying) {
+    const justStarted = playing && !this.wasPlaying;
+    if (justStarted) {
       this.sync = [];
       this.syncMax = null;
+      // Counting starts afresh (the frame shown before playing may be from before a seek).
+      this.lastPlayedFrame = -1;
     }
     this.wasPlaying = playing;
     if (playing && !this.fixed && s.playbackMode === "cache") {
@@ -234,8 +276,12 @@ export class PreviewLoop {
       const second = !fits && useDisk ? Math.min(count, Math.max(2, Math.round(fps * 3))) : 0;
       let ready = 0;
       while (ready < second && this.cache.has(compId, f0 + ((from - f0 + ready) % n), fraction, quality)) ready++;
-      if (ready < Math.min(second, 2)) this.buffering = true;
-      else if (ready >= second) this.buffering = false;
+      // Starting, or caught up with the reading: read ahead before going on (on starting, even when
+      // the first frames are still in memory from before).
+      if (ready < Math.min(second, 2) || (justStarted && ready < second)) {
+        if (!this.buffering) this.bufferingSince = performance.now();
+        this.buffering = true;
+      } else if (ready >= second && (!this.buffering || (this.source.followersReady?.() ?? true) || performance.now() - this.bufferingSince > PreviewLoop.FOLLOWER_WAIT_MS)) this.buffering = false;
       const lead = this.buffering ? second : 0;
       for (let k = 0; k < count; k++) {
         const f = f0 + ((from - f0 + k) % n);
@@ -268,10 +314,28 @@ export class PreviewLoop {
           mode = "playing";
         }
       }
+      // Read ahead but waiting for open outputs to do the same: still held (playing a few frames
+      // then holding again would show as stutter, and start the sound twice).
+      if (this.buffering && mode === "playing") {
+        mode = "preparing";
+        preparing = { done: ready, total: second };
+      }
+      // Starting with its own frames ready (also when they're all in memory): open outputs read a
+      // second ahead first (at most FOLLOWER_WAIT_MS), so they start with it instead of catching up.
+      if (mode === "playing" && this.lastMode !== "playing" && !(this.source.followersReady?.() ?? true)) {
+        this.followerWaitSince ??= performance.now();
+        if (performance.now() - this.followerWaitSince < PreviewLoop.FOLLOWER_WAIT_MS) {
+          mode = "preparing";
+          preparing = { done: count, total: count };
+        }
+      }
     }
+    if (mode === "playing" || !playing) this.followerWaitSince = null;
+    this.lastMode = mode;
 
+    if (mode !== "playing") this.lastPlayT = null;
     if (mode === "playing") {
-      const before = timeToFrame(t, comp.frameRate);
+      const before = timeToFrame(this.lastPlayT ?? t, comp.frameRate);
       const audioT = this.source.clock?.() ?? null;
       if (audioT !== null) t = audioT;
       else if (this.source.soundStarting?.()) {
@@ -291,15 +355,22 @@ export class PreviewLoop {
         }
       }
       this.source.setTime(t);
-      const after = timeToFrame(t, comp.frameRate);
-      // Frames passed over since the last tick (round the loop when it wrapped; none when the sound
-      // clock holds or nudges the picture back).
-      const advanced = wrapped ? timeToFrame(range.end - 1, comp.frameRate) - before + 1 + after - timeToFrame(range.start, comp.frameRate) : after - before;
-      if (advanced > 1) this.dropped += advanced - 1;
+      this.lastPlayT = t;
+      this.clockAt = Date.now();
+      const advanced = timeToFrame(t, comp.frameRate) - before;
+      if (wrapped) this.wrappedAt = timeToFrame(range.end - 1, comp.frameRate);
+      // The clock passed over frames between two turns to draw.
+      else if (advanced > 1 && advanced < fps * 5) this.causes.lateTurns += advanced - 1;
     }
 
     // ---- frame -------------------------------------------------------------------------
     const frame = timeToFrame(t, comp.frameRate);
+    const state = `${mode}${this.buffering ? " buffering" : ""}${mode === "playing" && this.source.clock?.() == null ? (this.source.soundStarting?.() ? " (sound starting)" : " (no sound clock)") : ""}`;
+    if (state !== this.lastState) {
+      this.lastState = state;
+      this.changes.push({ at: Math.round(now), state, ready: preparing?.done ?? 0, of: preparing?.total ?? 0, followers: this.source.followersReady?.() ?? true });
+      if (this.changes.length > 40) this.changes.shift();
+    }
     const out = this.outputSize(project, compId, view);
     const size = renderSize(out.w, out.h, fraction, this.renderer.maxTextureSize);
     if (this.canvas.width !== size.width || this.canvas.height !== size.height) {
@@ -310,6 +381,8 @@ export class PreviewLoop {
     const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId ?? useProjectorPick.getState().id}|${cacheable}|${this.version}`;
     // Frames that were too busy to save to disk earlier are saved now, one per tick.
     if (useDisk) this.disk.pump(this.cache);
+    // Reading ahead goes on while the picture stays on one frame (an output while the editor holds).
+    if (useDisk && mode === "playing") this.readAhead(project, compId, frame, fraction, quality, range);
     // Redraw only when something visible changed: on high-refresh displays the same frame is not redrawn every refresh.
     const needsDraw = this.dirty || key !== this.lastKey;
     if (!needsDraw) {
@@ -317,13 +390,16 @@ export class PreviewLoop {
       return;
     }
 
-    if (useDisk && mode === "playing") this.readAhead(project, compId, frame, fraction, quality, range);
     let content = cacheable ? this.cache.get(compId, frame, fraction, quality) : null;
     // Playing from disk, a frame shown is behind the playhead: it goes before the frames read ahead.
     if (content && useDisk && mode === "playing" && this.disk.has(project, compId, frame, fraction, quality)) this.cache.demote(compId, frame, fraction, quality);
     // On disk: keep the previous picture until it's read (usually a few hundredths of a second), unless that takes too long
     // (while buffering it's always read: rendering a prepared frame again is slower).
     if (!content && useDisk && this.disk.fetch(this.cache, project, compId, frame, fraction, quality, true) === "reading" && (this.buffering || this.disk.readingFor(project, compId, frame, fraction, quality) < DISK_WAIT_MS)) {
+      if (mode === "playing" && frame !== this.lateReadFrame) {
+        this.lateReadFrame = frame;
+        this.causes.lateReads++;
+      }
       this.report(fps, size, fraction, mode, preparing, false);
       return;
     }
@@ -361,6 +437,15 @@ export class PreviewLoop {
     this.lastKey = key;
     this.dirty = false;
     if (frame !== this.lastPresentedFrame) {
+      // Frames never shown: passed over by the clock, or not ready in time (round the loop counts
+      // from the last frame of the range; seconds apart is a seek).
+      if (mode === "playing") {
+        const u = unshownBetween(this.lastPlayedFrame, frame, this.wrappedAt, timeToFrame(range.start, comp.frameRate), fps);
+        this.dropped += u.unshown;
+        if (u.back) this.stepsBack++;
+        this.lastPlayedFrame = frame;
+      }
+      this.wrappedAt = null;
       this.presented.push(now);
       this.lastPresentedFrame = frame;
       const sound = mode === "playing" ? (this.source.clock?.() ?? null) : null;
@@ -389,6 +474,13 @@ export class PreviewLoop {
       }
     }
     this.report(fps, size, fraction, mode, preparing, playing && !this.fixed && !s.frameSkipping);
+  }
+
+  /** Frames in graphics memory one after another from `frame` (up to `max`): how far ahead it can play without reading. */
+  readyAhead(compId: string, frame: number, fraction: number, quality: string, max: number): number {
+    let n = 0;
+    while (n < max && this.cache.has(compId, frame + n, fraction, quality)) n++;
+    return n;
   }
 
   /**
@@ -428,13 +520,15 @@ export class PreviewLoop {
   private lastReport = 0;
   private report(fps: number, size: RenderSize, fraction: number, mode: PreviewStats["mode"], preparing: PreviewStats["preparing"], everyFrame: boolean) {
     const now = performance.now();
-    if (now - this.lastReport < 250 && mode !== "preparing") return;
+    // At most four times a second, except while preparing and when starting or stopping (the sound starts with the picture).
+    if (now - this.lastReport < 250 && mode !== "preparing" && mode === usePreviewStats.getState().mode) return;
     this.lastReport = now;
     const c = this.cache.stats();
     usePreviewStats.setState({
       targetFps: fps,
       achievedFps: mode === "playing" ? this.achieved(now) : 0,
       dropped: this.dropped,
+      stepsBack: this.stepsBack,
       gpuMs: this.gpuMs,
       size,
       fraction,
@@ -452,6 +546,7 @@ export class PreviewLoop {
 
   resetDropped(): void {
     this.dropped = 0;
+    this.stepsBack = 0;
   }
 
   /**
