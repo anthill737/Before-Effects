@@ -89,6 +89,13 @@ export class PhysicsEngine {
   constructor(private readonly store: SimStore | null) {}
 
   /** Recorded motion and how many frames of it are ready (null when nothing has been prepared). */
+  /** Prepared motion held in memory (bytes, computer memory) and how many scenes it's for. */
+  memoryReport(): { worlds: number; bytes: number } {
+    let bytes = 0;
+    for (const r of this.runs.values()) bytes += r.data.byteLength;
+    return { worlds: this.runs.size, bytes };
+  }
+
   motion(key: string): { data: Float32Array; ready: number } | null {
     const r = this.runs.get(key);
     return r ? { data: r.data, ready: r.done } : null;

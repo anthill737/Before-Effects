@@ -86,6 +86,13 @@ export class SimEngine {
     private readonly store: SimStore,
   ) {}
 
+  /** Simulation frames kept on the graphics card (a bounded set) and simulations being prepared. */
+  memoryReport(): { frames: number; bytes: number; running: number } {
+    let bytes = 0;
+    for (const t of this.lru.values()) bytes += t.width * t.height * Math.max(1, t.depthOrArrayLayers) * (t.format === "rgba16float" ? 8 : t.format === "rgba32float" ? 16 : 4);
+    return { frames: this.lru.size, bytes, running: this.runs.size };
+  }
+
   /** Prepared frames so far (known after the first status() or prepare()). */
   preparedFrames(key: string): number | undefined {
     return this.prepared.get(key);

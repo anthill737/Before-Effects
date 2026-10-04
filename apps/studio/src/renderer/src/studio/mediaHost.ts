@@ -37,6 +37,11 @@ export class MediaHost implements MediaProvider {
     });
   }
 
+  /** Graphics memory for pictures and decoded video frames, against the video cache amount. */
+  memoryReport(): { images: number; videoFrames: number; bytes: number; budget: number } {
+    return { images: this.images.size, videoFrames: this.frames.size, bytes: this.bytes, budget: budget() };
+  }
+
   /** Diagnostics: what's loaded, loading and failed. */
   stats(): { images: number; frames: number; loading: number; failed: string[]; keys: string[] } {
     return { images: this.images.size, frames: this.frames.size, loading: this.loading.size, failed: [...this.failed], keys: [...this.frames.keys()].slice(0, 6) };

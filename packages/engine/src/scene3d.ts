@@ -714,6 +714,15 @@ export class SceneHost implements ExternalSourceRenderer {
     return { b, pending };
   }
 
+  /** What the 3D host holds on the graphics card: its render targets, built scenes and three.js's own count. */
+  memoryReport(): { targets: number; targetBytes: number; builtScenes: number; geometries: number; textures: number } {
+    let targetBytes = 0;
+    // Half-float colour with 4x multisampling, plus the resolved copy and depth.
+    for (const rt of this.targets.values()) targetBytes += rt.width * rt.height * (8 * 4 + 8 + 4 * 4);
+    const info = this.renderer.info.memory as { geometries?: number; textures?: number };
+    return { targets: this.targets.size, targetBytes, builtScenes: this.built.size, geometries: info.geometries ?? 0, textures: info.textures ?? 0 };
+  }
+
   /** Free render targets and built scenes nobody has drawn for a while (at most once a second). */
   private sweep(): void {
     const now = performance.now();
