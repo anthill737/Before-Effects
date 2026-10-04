@@ -44,6 +44,10 @@ const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
   // mattes, adjustment layers and the newer blend modes draw differently; 2D layers (pictures,
   // video, text, shapes, effects, masks, the basic blend modes) and simulations don't.
   "2026-10-04T01:38:20.094Z": ["3d", "track-matte", "adjustment", "blend-mode"],
+  // 4b61055 (render 35efe0e6e524ff03). Since then only how graphics memory is reused and reported
+  // changed, not what's drawn: of 1,951 frames (2D, 3D and physics) made again, the ones that differ
+  // differ only as much as that build's own frames do when it makes them twice (breaking 3D pieces).
+  "render 35efe0e6e524ff03": [],
 };
 const JPEG_QUALITY = 0.92;
 /** Saves at once (enough to keep the graphics card and every compression worker busy), and the pixel memory they may hold while waiting for compression. */
