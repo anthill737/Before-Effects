@@ -38,37 +38,65 @@ const cleanPartialDownloads = () => {
   }
 };
 
-/** Run detection on a canvas-sized image; progress goes to `onProgress`. Rejects with code "needs-download" or "cancelled". */
+/**
+ * On the graphics card, a run that says nothing for this long has stalled (it waits for memory the
+ * card doesn't have — e.g. while the editor's frame caches fill it — instead of failing).
+ */
+const GPU_STALL_MS = 45_000;
+
+/**
+ * Run detection on a canvas-sized image; progress goes to `onProgress`. Rejects with code
+ * "needs-download" or "cancelled". A run on the graphics card that stalls starts again on the
+ * processor (slower, but it finishes).
+ */
 export const detectHouse = (requestId: string, image: string, opts: { allowDownload: boolean; device?: "gpu" | "cpu" }, onProgress: (p: DetectProgress) => void): Promise<HouseDetection> =>
   new Promise((resolve, reject) => {
     if (!runs.size) cleanPartialDownloads();
-    const child = spawn(process.execPath, [hostScript()], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
-    runs.set(requestId, child);
     let settled = false;
-    let stderr = "";
-    const done = (f: () => void) => {
+    const finish = (f: () => void) => {
       if (settled) return;
       settled = true;
       runs.delete(requestId);
       f();
     };
-    child.stderr?.on("data", (d) => (stderr = (stderr + String(d)).slice(-4000)));
-    child.stdout?.on("data", () => {});
-    child.on("message", (m: { type: string; stage?: string; fraction?: number; text?: string; detection?: HouseDetection; message?: string; code?: string }) => {
-      if (m.type === "ready") child.send({ type: "run", image, cacheDir: modelsDir(), allowDownload: opts.allowDownload, ...(opts.device ? { device: opts.device } : {}) });
-      else if (m.type === "progress") onProgress({ requestId, stage: m.stage!, fraction: m.fraction!, text: m.text! });
-      else if (m.type === "result") done(() => resolve(m.detection!));
-      else if (m.type === "error") done(() => reject(Object.assign(new Error(m.message), { code: m.code })));
-    });
-    child.on("exit", (code, signal) => {
-      done(() => {
-        if (signal === "SIGTERM" || code === null) reject(Object.assign(new Error("Cancelled."), { code: "cancelled" }));
-        else {
-          log(`house detection exited (${code}): ${stderr.slice(-1500)}`);
-          reject(new Error(`House detection stopped unexpectedly (exit ${code}). ${stderr.trim().split("\n").pop() ?? ""}`));
-        }
+    const attempt = (device: "gpu" | "cpu" | undefined) => {
+      const child = spawn(process.execPath, [hostScript()], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
+      runs.set(requestId, child);
+      let stderr = "";
+      let lastHeard = Date.now();
+      let retried = false;
+      const watchdog = setInterval(() => {
+        if (settled || retried || device === "cpu" || Date.now() - lastHeard < GPU_STALL_MS) return;
+        retried = true;
+        clearInterval(watchdog);
+        log(`house detection ${requestId}: nothing from the graphics card for ${GPU_STALL_MS / 1000} s; starting again on the processor`);
+        onProgress({ requestId, stage: "load", fraction: 0.02, text: "The graphics card is busy: finding the parts with the processor instead (slower)" });
+        child.kill();
+        attempt("cpu");
+      }, 1000);
+      child.stderr?.on("data", (d) => (stderr = (stderr + String(d)).slice(-4000)));
+      child.stdout?.on("data", () => {});
+      child.on("message", (m: { type: string; stage?: string; fraction?: number; text?: string; detection?: HouseDetection; message?: string; code?: string }) => {
+        lastHeard = Date.now();
+        if (retried) return;
+        if (m.type === "ready") child.send({ type: "run", image, cacheDir: modelsDir(), allowDownload: opts.allowDownload, ...(device ? { device } : {}) });
+        else if (m.type === "progress") onProgress({ requestId, stage: m.stage!, fraction: m.fraction!, text: m.text! });
+        else if (m.type === "result") finish(() => resolve(m.detection!));
+        else if (m.type === "error") finish(() => reject(Object.assign(new Error(m.message), { code: m.code })));
       });
-    });
+      child.on("exit", (code, signal) => {
+        clearInterval(watchdog);
+        if (retried) return;
+        finish(() => {
+          if (signal === "SIGTERM" || code === null) reject(Object.assign(new Error("Cancelled."), { code: "cancelled" }));
+          else {
+            log(`house detection exited (${code}): ${stderr.slice(-1500)}`);
+            reject(new Error(`House detection stopped unexpectedly (exit ${code}). ${stderr.trim().split("\n").pop() ?? ""}`));
+          }
+        });
+      });
+    };
+    attempt(opts.device);
   });
 
 export const cancelDetect = (requestId: string) => {

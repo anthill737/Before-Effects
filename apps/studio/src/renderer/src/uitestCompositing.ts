@@ -40,6 +40,16 @@ const st = () => useStudio.getState();
 const comp = () => currentComp(st())!;
 const topLayer = () => comp().layers[comp().layerOrder[0]!]!;
 const select = (label: string) => document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
+/** A choice shown as a list, or as buttons when there are only a few: its values (by label for buttons), and a way to pick one. */
+const choiceOf = (label: string) => {
+  const list = select(label);
+  if (list) return { values: [...list.options].map((o) => o.value), pick: (v: string) => choose(list, v) };
+  const group = document.querySelector<HTMLElement>(`[role="radiogroup"][aria-label="${label}"]`);
+  const buttons = group ? [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')] : [];
+  // Buttons carry layer names: map them to ids.
+  const idOf = (name: string) => (name.startsWith("Nothing") ? "" : (comp().layerOrder.find((id) => comp().layers[id]!.name === name) ?? name));
+  return { values: buttons.map((b) => idOf(b.textContent!.trim())), pick: (v: string) => click(buttons.find((b) => idOf(b.textContent!.trim()) === v)) };
+};
 
 /** The preview once it stops changing, as luminance in a grid of blocks over the composition. */
 const NX = 64, NY = 36;
@@ -144,18 +154,17 @@ export const COMPOSITING_STEPS: Record<string, Step> = {
   "comp-show-through": async () => {
     if (skip) return skipped();
     const l = topLayer();
-    const list = select("Show only through");
     const drawn = () => evaluateComp(st().project!, comp().id, st().time).layers.map((x) => x.id);
     // A layer that's drawn at this moment, so its disappearing shows.
-    const other = list ? [...list.options].map((o) => o.value).find((v) => v && drawn().includes(v)) : undefined;
-    if (!other) return { ok: false, note: "no layer drawn here offered to show through" };
-    choose(list, other);
+    const other = choiceOf("Show only through").values.find((v) => v && drawn().includes(v));
+    if (!other) return { ok: false, note: `no layer drawn here offered to show through (offered: ${choiceOf("Show only through").values.join(", ") || "none"})` };
+    choiceOf("Show only through").pick(other);
     const set = await until(() => topLayer().trackMatte?.layerId === other);
     const hidden = !drawn().includes(other);
     await until(() => !!select("Where it shows"));
     choose(select("Where it shows"), "luma-inverted");
     const mode = await until(() => topLayer().trackMatte?.mode === "luma-inverted");
-    choose(select("Show only through"), "");
+    choiceOf("Show only through").pick("");
     const cleared = await until(() => !topLayer().trackMatte);
     const back = drawn().includes(other);
     return { ok: set && hidden && mode && cleared && back, note: `“${l.name}” shown only through “${comp().layers[other]!.name}” (which then isn't drawn itself), where it's dark; cleared, and that layer is drawn again` };
