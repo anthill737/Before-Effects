@@ -1,7 +1,7 @@
 /** Preview frames on disk: keys, safe file layout, size accounting and least-recently-used eviction. */
 import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildTag, diskKey, DiskIndex, fingerprint, formatSize, frameFile, frameKey, frameOfKey, isLegacyKey, keyOfFile, parseDiskKey, parseRegQuery, pickGraphicsCard, safeName, scopeDir } from "../src/shared/diskFrames.ts";
+import { buildTag, diskKey, DiskIndex, fingerprint, formatSize, frameFile, frameKey, frameOfKey, isLegacyKey, keyOfFile, parseDiskKey, parseRegQuery, pickGraphicsCard, safeName, scopeDir, usable, usableKey } from "../src/shared/diskFrames.ts";
 
 const MB = 1024 ** 2;
 const GB = 1024 ** 3;
@@ -65,6 +65,45 @@ describe("frame keys and file layout", () => {
     expect(safeName("comp_lq3x9k0001abcdefg")).toBe("comp_lq3x9k0001abcdefg");
     expect(safeName("a/b")).not.toBe(safeName("a_b"));
     expect(frameFile("../x", frameKey(1, 1, "full"))).toBeNull();
+  });
+});
+
+describe("which build's frame is used", () => {
+  const mine = buildTag("render new");
+  const old = buildTag("render old"); // draws 3D differently from this build
+  const twin = buildTag("render twin"); // draws everything the same
+  const stranger = buildTag("render unlisted");
+  const older = new Map<string, readonly string[]>([
+    [old, ["3d"]],
+    [twin, []],
+  ]);
+  // Whether a frame has none of the kinds a build draws differently: a 2D frame, a frame with 3D.
+  const flat = () => true;
+  const with3d = (changed: readonly string[]) => !changed.includes("3d");
+  const pick = (keys: string[], drawsSame: (c: readonly string[]) => boolean) => usableKey(new Set(keys), 7, 1, "full", "sigaaaa", mine, older, drawsSame);
+  const k = (tag: string, sig = "sigaaaa") => diskKey(7, 1, "full", sig, tag);
+
+  it("takes this build's own frame first", () => {
+    expect(pick([k(old), k(mine), k(twin)], with3d)).toBe(k(mine));
+  });
+
+  it("takes an earlier build's frame only where it draws the same", () => {
+    expect(pick([k(old)], flat)).toBe(k(old));
+    expect(pick([k(old)], with3d)).toBeNull(); // made again by this build
+    expect(pick([k(old), k(twin)], with3d)).toBe(k(twin));
+  });
+
+  it("never takes a frame of an unlisted build, or of another version of the show", () => {
+    expect(pick([k(stranger)], flat)).toBeNull();
+    expect(pick([k(mine, "sigbbbb"), k(old, "sigbbbb")], flat)).toBeNull();
+  });
+
+  it("counts frames by the same rule", () => {
+    for (const keys of [[k(mine)], [k(old)], [k(twin)], [k(stranger)], [k(mine, "sigbbbb")]])
+      for (const drawsSame of [flat, with3d]) {
+        const counted = keys.some((key) => usable(parseDiskKey(key)!, "sigaaaa", mine, older, drawsSame));
+        expect(counted).toBe(pick(keys, drawsSame) !== null);
+      }
   });
 });
 

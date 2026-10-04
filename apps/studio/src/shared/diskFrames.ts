@@ -6,7 +6,9 @@
  *             (project id) and composition, plus the frame's signature — what it's made from
  *             (frameSignatures in core) — and the tag of the app build that drew it. Any version of
  *             the show (unsaved edits, an earlier save, a recovered or copied show) finds the frames
- *             made from the same inputs; versions that differ keep frames of their own.
+ *             made from the same inputs; versions that differ keep frames of their own. A build
+ *             uses its own frames, and an earlier build's only where it draws them the same
+ *             (usableKey); frames are never renamed as another build's.
  *   Layout    <cache root>/<show>/<composition>/<fraction>_<quality>/<frame>-<signature>-<build>.jpg.
  *             Frames saved before signatures are <frame>.jpg, with a stamp.json per composition
  *             naming the version of the show and the build they were made from. Names are made
@@ -28,6 +30,35 @@ export const parseDiskKey = (key: string): { frame: number; fraction: number; qu
   const m = KEY.exec(key);
   if (!m) return null;
   return { frame: Number(m[1]), fraction: Number(m[2]), quality: m[3]!, ...(m[4] ? { signature: m[4], tag: m[5]! } : {}) };
+};
+
+/**
+ * Earlier builds whose frames a build uses: their tag → the kinds of content (ContentKind in core)
+ * the build draws differently from them. `drawsSame(changed)` says whether a frame has none of them.
+ */
+export type OlderBuilds = ReadonlyMap<string, readonly string[]>;
+
+/**
+ * Which frame on disk shows a frame of the show as it is now (its signature): the one this build
+ * drew (its tag), else one an earlier build drew where it draws the same. Frames keep the tag of the
+ * build that drew them, so a frame drawn differently is never taken for this build's. Null: none.
+ */
+export const usableKey = (onDisk: ReadonlySet<string>, frame: number, fraction: number, quality: string, signature: string, tag: string, older: OlderBuilds, drawsSame: (changed: readonly string[]) => boolean): string | null => {
+  const own = diskKey(frame, fraction, quality, signature, tag);
+  if (onDisk.has(own)) return own;
+  for (const [t, changed] of older) {
+    const k = diskKey(frame, fraction, quality, signature, t);
+    if (t !== tag && onDisk.has(k) && drawsSame(changed)) return k;
+  }
+  return null;
+};
+
+/** Whether a key on disk shows its frame for the show as it is now (by the rule of usableKey). */
+export const usable = (d: { signature?: string; tag?: string }, signature: string, tag: string, older: OlderBuilds, drawsSame: (changed: readonly string[]) => boolean): boolean => {
+  if (!d.signature || !d.tag || d.signature !== signature) return false;
+  if (d.tag === tag) return true;
+  const changed = older.get(d.tag);
+  return changed !== undefined && drawsSame(changed);
 };
 
 /** Saved before frames carried a signature (they're tied to their composition's stamp instead). */

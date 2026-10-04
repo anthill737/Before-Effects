@@ -23,14 +23,14 @@
  * Also here: how much memory the computer and its graphics card have, for the preview settings.
  */
 import { execFile } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rmdir, stat, statfs, unlink, utimes, writeFile } from "node:fs/promises";
 import { cpus, totalmem } from "node:os";
 import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { app, ipcMain } from "electron";
 import type { CacheSpace, DiskCacheConfig, DiskCacheScope, DiskCacheStatus, DiskCacheUsage, MachineMemory } from "../shared/api.ts";
-import { buildTag, type DiskEntry, DiskIndex, frameFile, keyOfFile, parseRegQuery, pickGraphicsCard, scopeDir } from "../shared/diskFrames.ts";
+import { buildTag, type DiskEntry, DiskIndex, frameFile, isLegacyKey, keyOfFile, parseDiskKey, parseRegQuery, pickGraphicsCard, scopeDir } from "../shared/diskFrames.ts";
+import { renderHash } from "../shared/renderHash.ts";
 import { paths } from "./files.ts";
 import { log } from "./log.ts";
 
@@ -46,18 +46,21 @@ interface Stamp {
   readonly build: string;
 }
 
-/** This build of the app: a rebuilt app may draw frames differently, so its frames start over. */
+/**
+ * This build of the app, as far as drawing frames goes: a fingerprint of the rendering code
+ * (shared/renderHash.ts), so an app update that only changes the editor keeps a prepared show, and
+ * the app run from the repository is the same build as one packaged from the same sources. Older
+ * builds: their build time.
+ */
 const BUILD = (() => {
   try {
-    // Frames last while what draws them is unchanged (a fingerprint of the rendering code), so an app
-    // update that only changes the editor keeps a prepared show. Older builds: their build time.
     if (app.isPackaged) {
       const info = JSON.parse(readFileSync(join(process.resourcesPath, "build-info.json"), "utf8")) as { builtAt?: string; renderHash?: string };
       return info.renderHash ? `render ${info.renderHash}` : String(info.builtAt ?? app.getVersion());
     }
-    return `dev ${Math.round(statSync(fileURLToPath(import.meta.url)).mtimeMs)}`;
+    return `render ${renderHash(resolve(app.getAppPath(), "..", ".."))}`;
   } catch {
-    return app.getVersion();
+    return `dev ${Date.now()}`;
   }
 })();
 
@@ -315,17 +318,23 @@ export const registerPreviewCacheIpc = () => {
     return index.keys(scopeDir(scope.project, scope.comp));
   });
 
-  // Frames already on disk given the names this build looks for (frames saved before signatures,
-  // and frames an earlier build drew that this one draws the same), renamed in place. Returns the keys.
+  // Frames saved before signatures, given their signatures in the show the window has open (the
+  // version their stamp names), renamed in place. They keep the tag of the build their stamp names
+  // (the one that drew them): a frame is never named as another build's. Returns the keys.
   ipcMain.handle("cache:adopt", async (_e, scope: DiskCacheScope, renames: Array<[string, string]>): Promise<string[]> => {
     await whenReady();
     const s = scopeDir(scope.project, scope.comp);
+    const stamp = stamps.get(s);
+    if (!stamp) return index.keys(s);
+    const tag = buildTag(stamp.build);
     const gen = generation;
     let done = 0;
     for (let i = 0; i < renames.length; i += 64) {
       await Promise.all(
         renames.slice(i, i + 64).map(async ([from, to]) => {
-          const a = index.has(s, from) && !index.has(s, to) ? fileOf({ scope: s, key: from }) : null;
+          const d = parseDiskKey(to);
+          const ok = isLegacyKey(from) && d?.tag === tag && d.frame === parseDiskKey(from)?.frame;
+          const a = ok && index.has(s, from) && !index.has(s, to) ? fileOf({ scope: s, key: from }) : null;
           const b = fileOf({ scope: s, key: to });
           if (!a || !b) return;
           try {
@@ -340,7 +349,7 @@ export const registerPreviewCacheIpc = () => {
         }),
       );
     }
-    log(`preview frames: ${s}: ${done} of ${renames.length} frames named by what they're made from (build ${BUILD})`);
+    log(`preview frames: ${s}: ${done} of ${renames.length} frames named by what they're made from (drawn by build ${stamp.build})`);
     return index.keys(s);
   });
 

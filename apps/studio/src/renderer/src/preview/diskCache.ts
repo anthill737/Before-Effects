@@ -16,6 +16,8 @@
  *             or opening a recovered or copied show, the frames whose inputs are unchanged are found
  *             and only the others are made again; frames of other versions stay on disk (until the
  *             size limit retires them) and are never shown in their place. Edits delete nothing.
+ *             A frame keeps the tag of the build that drew it: this build uses its own frames, and
+ *             an earlier build's only where it draws them the same (CARRY_OVER).
  *
  * Format: JPEG at high quality. Frames are working-space half floats (8 bytes a pixel: 66 MB for a
  * 4K frame), far too much to move through the desktop process and disk 30 times a second, and
@@ -29,7 +31,7 @@ import { type Affected, contentAt, type ContentKind, frameSignatures, frameToTim
 import { COMMON, type FrameRenderer } from "@be/engine";
 import { create } from "zustand";
 import type { DiskCacheStatus, DiskCacheUsage } from "../../../shared/api.ts";
-import { buildTag, diskKey, fingerprint, frameKey, isLegacyKey, parseDiskKey } from "../../../shared/diskFrames.ts";
+import { buildTag, diskKey, fingerprint, frameKey, isLegacyKey, type OlderBuilds, parseDiskKey, usable, usableKey } from "../../../shared/diskFrames.ts";
 import { useStudio } from "../studio/store.ts";
 import type { FrameCache } from "./cache.ts";
 import { usePreview } from "./settings.ts";
@@ -37,29 +39,55 @@ import { usePreview } from "./settings.ts";
 const GB = 1024 ** 3;
 
 /**
- * Builds of the app whose prepared frames this build keeps where it draws them the same: a build
- * (its name: "render <hash>", or an older build time) → the kinds of content this build draws
- * differently. Frames of the show as it is now that use any of those kinds are made again; the rest
- * are given this build's tag. A build not listed keeps its frames to itself. An entry is added only
- * after checking that frames of the other kinds come out identical (byte for byte on disk).
+ * Earlier builds of the app whose prepared frames this build uses where it draws them the same: a
+ * build (its name: "render <hash>", or an older build time) → the kinds of content this build draws
+ * differently. Their frames keep their own tag (they're never named as this build's); one is used
+ * only when the frame has none of those kinds, and the others are made again under this build's
+ * tag. A build not listed keeps its frames to itself. An entry is added only after checking that
+ * frames of the other kinds come out identical (byte for byte on disk).
  */
 const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
   // a3cc304 as installed on 2026-10-04 (its build time is its stamp). Since then 3D scenes, track
   // mattes, adjustment layers and the newer blend modes draw differently; 2D layers (pictures,
   // video, text, shapes, effects, masks, the basic blend modes) and simulations don't.
   "2026-10-04T01:38:20.094Z": ["3d", "track-matte", "adjustment", "blend-mode"],
-  // 4b61055 (render 35efe0e6e524ff03). Since then only how graphics memory is reused and reported
-  // changed, not what's drawn. A whole 35,340-frame show made again came out byte-identical in 32,823
-  // frames; the rest are 3D frames that 4b61055 itself draws differently from one preparation to the
-  // next (turning blocks, falling bricks, the frame a light comes on): in a 2,100-frame stretch, two
-  // preparations by 4b61055 and two by this build each matched an earlier one in 1,200–1,320 frames.
-  "render 35efe0e6e524ff03": [],
-  // d2f1de1 (render 31e6845873c4b4e0), installed 2026-10-04. This build draws each 3D frame the same
-  // whatever was drawn before it (shadows redrawn for every frame; scenes made once their pictures
-  // are in), so some 3D frames it makes differ from that build's. Those prepared frames were
-  // approved, so they're kept (given this build's tag). Replacements, once made in another folder
-  // and checked, take their place under the same names.
-  "render 31e6845873c4b4e0": [],
+  // 4b61055 (render 35efe0e6e524ff03) and d2f1de1 (render 31e6845873c4b4e0). 2D frames come out
+  // byte-identical (a whole 35,340-frame show made again matched in every 2D frame). Their 3D frames
+  // depended on what was drawn before them (shadows were redrawn only now and then; a scene made
+  // while its pictures loaded kept other materials): this build draws each 3D frame the same
+  // whatever came before, and differently from those builds in many frames (slat edges, lights
+  // coming on), so their 3D frames are made again.
+  "render 35efe0e6e524ff03": ["3d"],
+  "render 31e6845873c4b4e0": ["3d"],
+  // bb3976b (render acce1c077445a6e3) draws like this build, but when installed it named the frames
+  // it found from d2f1de1 as its own: its 3D frames may be d2f1de1's, so they're made again too.
+  "render acce1c077445a6e3": ["3d"],
+};
+
+/** Earlier builds' tags → what this build draws differently from them (this build's own tag left out). */
+let olderOf: { tag: string; builds: OlderBuilds } | null = null;
+const olderBuilds = (tag: string): OlderBuilds => {
+  if (olderOf?.tag !== tag) olderOf = { tag, builds: new Map(Object.entries(CARRY_OVER).flatMap(([b, changed]) => (buildTag(b) === tag ? [] : [[buildTag(b), changed] as const]))) };
+  return olderOf.builds;
+};
+
+/**
+ * The kinds of content in a frame, by its signature (what it's made from, so the same in every
+ * version of the show): asked only for frames an earlier build drew.
+ */
+const kindsBySignature = new Map<string, ReadonlySet<ContentKind>>();
+const drawsSame = (project: Project, compId: string, frame: number, signature: string, changed: readonly string[]): boolean => {
+  if (!changed.length) return true;
+  let kinds = kindsBySignature.get(signature);
+  if (!kinds) {
+    const comp = project.compositions[compId];
+    if (!comp) return false;
+    kinds = contentAt(project, compId, frameToTime(frame, comp.frameRate));
+    if (kindsBySignature.size >= 400_000) kindsBySignature.clear();
+    kindsBySignature.set(signature, kinds);
+  }
+  const k = kinds;
+  return !changed.some((c) => k.has(c as ContentKind));
 };
 
 /** This build: its name and the tag its frames carry on disk (asked once). */
@@ -279,11 +307,17 @@ export class DiskFrames {
   /** Is this frame on disk (as far as this window knows; false until the composition has been checked)? */
   has(project: Project, compId: string, frame: number, fraction: number, quality: string): boolean {
     const s = this.enabled ? this.scope(project, compId) : null;
-    return !!s && s.onDisk.has(this.keyOf(s, project, frame, fraction, quality));
+    return !!s && this.found(s, project, frame, fraction, quality) !== null;
   }
 
-  /** A frame's key on disk for this version of the show and this build. */
-  private keyOf(s: Scope, project: Project, frame: number, fraction: number, quality: string): string {
+  /** The frame on disk that shows this frame of the show as it is now (this build's, or an earlier build's where it draws the same), or null. */
+  private found(s: Scope, project: Project, frame: number, fraction: number, quality: string): string | null {
+    const sig = signaturesOf(project, s.comp)(frame);
+    return usableKey(s.onDisk, frame, fraction, quality, sig, s.tag, olderBuilds(s.tag), (changed) => drawsSame(project, s.comp, frame, sig, changed));
+  }
+
+  /** Where this build saves a frame of the show as it is now. */
+  private ownKey(s: Scope, project: Project, frame: number, fraction: number, quality: string): string {
     return diskKey(frame, fraction, quality, signaturesOf(project, s.comp)(frame), s.tag);
   }
 
@@ -297,10 +331,12 @@ export class DiskFrames {
     const out = new Set<number>();
     const sig = signaturesOf(project, compId);
     const want = frameKey(0, fraction, quality).slice(1);
+    const older = olderBuilds(s.tag);
     for (const k of s.onDisk) {
       const d = parseDiskKey(k);
-      if (!d?.signature || d.tag !== s.tag || frameKey(0, d.fraction, d.quality).slice(1) !== want) continue;
-      if (d.signature === sig(d.frame)) out.add(d.frame);
+      if (!d?.signature || frameKey(0, d.fraction, d.quality).slice(1) !== want) continue;
+      const signature = sig(d.frame);
+      if (usable(d, signature, s.tag, older, (changed) => drawsSame(project, compId, d.frame, signature, changed))) out.add(d.frame);
     }
     let m = s.counted.get(project);
     if (!m) s.counted.set(project, (m = new Map()));
@@ -317,8 +353,8 @@ export class DiskFrames {
   async saveNow(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): Promise<number | null> {
     const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
     if (!s) return null;
-    const key = this.keyOf(s, project, frame, fraction, quality);
-    if (s.onDisk.has(key)) return 0;
+    if (this.found(s, project, frame, fraction, quality)) return 0;
+    const key = this.ownKey(s, project, frame, fraction, quality);
     await this.slot(tex.width, tex.height);
     if (!this.enabled) return null;
     return (await this.save(s, key, frame, fraction, quality, tex, true)) ?? null;
@@ -341,7 +377,7 @@ export class DiskFrames {
       void (async () => {
         const { tag } = await currentBuild();
         let keys = await window.be.cache.keys(scope);
-        if (!this.readOnly) keys = await this.adopt(project, compId, keys, tag);
+        if (!this.readOnly) keys = await this.adopt(project, compId, keys);
         if (this.scopes.get(id) !== sc) return;
         sc.tag = tag;
         for (const k of keys) sc.onDisk.add(k);
@@ -373,41 +409,24 @@ export class DiskFrames {
   }
 
   /**
-   * Frames on disk this build can use for the show as it is now, given the names it looks for:
-   *   - saved before signatures: when the composition's stamp is exactly this version of the show,
-   *     made by this build or by one this build draws the same (CARRY_OVER);
-   *   - drawn by an earlier build this one draws the same, for this version of the show.
-   * Frames of other versions keep their names (they're those versions' frames). Returns the keys.
+   * Frames saved before signatures, when their composition's stamp is exactly the show as it is now:
+   * renamed by what they're made from (their signatures in this version), keeping the tag of the
+   * build the stamp names (the one that drew them). Whether this build uses them is decided when
+   * they're looked up. Returns the keys.
    */
-  private async adopt(project: Project, compId: string, keys: string[], tag: string): Promise<string[]> {
-    const comp = project.compositions[compId];
-    if (!comp) return keys;
-    const sig = signaturesOf(project, compId);
-    const drawsSame = (frame: number, changed: readonly ContentKind[]) => {
-      if (!changed.length) return true;
-      const kinds = contentAt(project, compId, frameToTime(frame, comp.frameRate));
-      return !changed.some((k) => kinds.has(k));
-    };
-    const renames: Array<[string, string]> = [];
-    const scope = { project: project.id, comp: compId };
+  private async adopt(project: Project, compId: string, keys: string[]): Promise<string[]> {
     const legacy = keys.filter(isLegacyKey);
-    if (legacy.length) {
-      const prev = await window.be.cache.previous(scope).catch(() => null);
-      const changed = !prev ? undefined : prev.build === prev.current ? [] : CARRY_OVER[prev.build];
-      if (prev && changed && prev.fingerprint === fingerprint(JSON.stringify(project)))
-        for (const k of legacy) {
-          const d = parseDiskKey(k)!;
-          if (drawsSame(d.frame, changed)) renames.push([k, diskKey(d.frame, d.fraction, d.quality, sig(d.frame), tag)]);
-        }
-    }
-    const older = new Map(Object.entries(CARRY_OVER).map(([b, changed]) => [buildTag(b), changed]));
-    for (const k of keys) {
-      const d = parseDiskKey(k);
-      if (!d?.signature || d.tag === tag || d.signature !== sig(d.frame)) continue;
-      const changed = older.get(d.tag!);
-      if (changed && drawsSame(d.frame, changed)) renames.push([k, diskKey(d.frame, d.fraction, d.quality, d.signature, tag)]);
-    }
-    return renames.length ? await window.be.cache.adopt(scope, renames) : keys;
+    if (!legacy.length || !project.compositions[compId]) return keys;
+    const scope = { project: project.id, comp: compId };
+    const prev = await window.be.cache.previous(scope).catch(() => null);
+    if (!prev || prev.fingerprint !== fingerprint(JSON.stringify(project))) return keys;
+    const sig = signaturesOf(project, compId);
+    const tag = buildTag(prev.build);
+    const renames = legacy.map((k): [string, string] => {
+      const d = parseDiskKey(k)!;
+      return [k, diskKey(d.frame, d.fraction, d.quality, sig(d.frame), tag)];
+    });
+    return await window.be.cache.adopt(scope, renames);
   }
 
   /**
@@ -419,10 +438,10 @@ export class DiskFrames {
     const comp = project.compositions[compId];
     const s = this.enabled && comp ? this.scope(project, compId) : null;
     if (!s || !comp) return "absent";
-    const key = this.keyOf(s, project, frame, fraction, quality);
+    const key = this.found(s, project, frame, fraction, quality);
+    if (!key) return "absent";
     const id = `${s.id}|${key}`;
     if (this.reads.has(id)) return "reading";
-    if (!s.onDisk.has(key)) return "absent";
     if (!now && this.reads.size >= MAX_READS) return "wait";
     this.reads.set(id, performance.now());
     void this.read(cache, s, s.epoch, key, frame, fraction, quality, comp.height / comp.width).finally(() => this.reads.delete(id));
@@ -432,7 +451,8 @@ export class DiskFrames {
   /** How long this frame has been reading (ms), or -1 when it isn't. */
   readingFor(project: Project, compId: string, frame: number, fraction: number, quality: string): number {
     const s = this.scopes.get(`${project.id}/${compId}`);
-    const started = s?.ready ? this.reads.get(`${s.id}|${this.keyOf(s, project, frame, fraction, quality)}`) : undefined;
+    const key = s?.ready ? this.found(s, project, frame, fraction, quality) : null;
+    const started = s && key ? this.reads.get(`${s.id}|${key}`) : undefined;
     return started === undefined ? -1 : performance.now() - started;
   }
 
@@ -478,7 +498,8 @@ export class DiskFrames {
   /** A frame was just rendered and cached: save it too (in the background). */
   offer(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): void {
     const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
-    if (s) this.save(s, this.keyOf(s, project, frame, fraction, quality), frame, fraction, quality, tex);
+    // (Only frames just rendered by this build are offered: never one read from disk.)
+    if (s && !this.found(s, project, frame, fraction, quality)) this.save(s, this.ownKey(s, project, frame, fraction, quality), frame, fraction, quality, tex);
   }
 
   /**
@@ -554,7 +575,8 @@ export class DiskFrames {
       this.backlog.delete(id);
       if (this.scopes.get(r.scope.id) !== r.scope || r.scope.onDisk.has(r.key)) continue;
       // What's in graphics memory now is the show as it is now: only if that's still this frame's version.
-      if (!project || project.id !== r.scope.project || this.keyOf(r.scope, project, r.frame, r.fraction, r.quality) !== r.key) continue;
+      // (And none on disk for it meanwhile: the cached picture may be one read back from there.)
+      if (!project || project.id !== r.scope.project || this.ownKey(r.scope, project, r.frame, r.fraction, r.quality) !== r.key || this.found(r.scope, project, r.frame, r.fraction, r.quality)) continue;
       const tex = cache.peek(r.scope.comp, r.frame, r.fraction, r.quality);
       if (!tex) continue;
       this.save(r.scope, r.key, r.frame, r.fraction, r.quality, tex);
