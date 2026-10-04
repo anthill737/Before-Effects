@@ -75,7 +75,13 @@ let generation = 0;
 let free: { bytes: number | null; at: number } = { bytes: null, at: 0 };
 
 let defaultRoot: string | null = null;
-const rootFor = (c: DiskCacheConfig): string => resolve(c.folder ? join(c.folder, PICKED_SUBFOLDER) : (defaultRoot ??= join(paths().cache, "preview")));
+/**
+ * The folder for a configuration. A separate profile (a second copy of the app, e.g. a build being
+ * tested) keeps its frames in the profile unless a folder is picked: another build opening the same
+ * show must never find, and discard, the frames of the copy in use.
+ */
+const rootFor = (c: DiskCacheConfig): string =>
+  resolve(c.folder ? join(c.folder, PICKED_SUBFOLDER) : (defaultRoot ??= process.env.BE_PROFILE_DIR ? join(app.getPath("userData"), "Cache", "preview") : join(paths().cache, "preview")));
 
 /** A path under the root, or null if it would be anywhere else. */
 const inside = (base: string, parts: readonly string[]): string | null => {
