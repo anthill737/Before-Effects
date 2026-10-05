@@ -616,7 +616,7 @@ method({
   params: z.object({
     target: z.enum(["scene", "show"]),
     scene: z.string().optional().describe("target scene: a scene id or name (default the current one)"),
-    resolution: z.enum(["full", "half", "quarter"]).optional().describe("default: the preview's size (Auto counts as Full)"),
+    resolution: z.enum(["full", "half", "quarter", "eighth"]).optional().describe("default: the preview's size (Auto counts as Full)"),
     raiseDiskLimit: z.boolean().optional(),
     fromSeconds: z.number().min(0).optional().describe("only part of the scene: from here (seconds)…"),
     toSeconds: z.number().min(0).optional().describe("…to here"),
@@ -759,6 +759,7 @@ method({
       soundStallsMs: previewAudio.stalls.slice(-8),
       unshownCauses: currentPreviewLoop()?.causes ?? null,
       smoothness: currentPreviewLoop()?.smoothness ?? null,
+      liveRenders: currentPreviewLoop()?.renders ?? 0,
       now: Math.round(performance.now()),
       scene3dResolves: scene3dResolves(),
       orbit: s.orbit,

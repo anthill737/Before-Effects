@@ -18,6 +18,10 @@
  *             size limit retires them) and are never shown in their place. Edits delete nothing.
  *             A frame keeps the tag of the build that drew it: this build uses its own frames, and
  *             an earlier build's only where it draws them the same (CARRY_OVER).
+ *   Sizes     a smaller preview (Half, Quarter, Eighth) with no frame of its own size on disk uses one
+ *             prepared at a larger size, decoded straight to its own size and kept in graphics
+ *             memory at that size (so it isn't read and shrunk again, and memory holds more). Never
+ *             the other way round: a larger view never shows a smaller frame.
  *
  * Format: JPEG at high quality. Frames are working-space half floats (8 bytes a pixel: 66 MB for a
  * 4K frame), far too much to move through the desktop process and disk 30 times a second, and
@@ -31,7 +35,7 @@ import { type Affected, contentAt, type ContentKind, frameSignatures, frameToTim
 import { COMMON, type FrameRenderer } from "@be/engine";
 import { create } from "zustand";
 import type { DiskCacheStatus, DiskCacheUsage } from "../../../shared/api.ts";
-import { buildTag, diskKey, fingerprint, frameKey, isLegacyKey, type OlderBuilds, parseDiskKey, usable, usableKey } from "../../../shared/diskFrames.ts";
+import { buildTag, diskKey, fingerprint, isLegacyKey, type OlderBuilds, parseDiskKey, scopeDir, usable, usableKey } from "../../../shared/diskFrames.ts";
 import { useStudio } from "../studio/store.ts";
 import type { FrameCache } from "./cache.ts";
 import { usePreview } from "./settings.ts";
@@ -62,7 +66,14 @@ const CARRY_OVER: Readonly<Record<string, readonly ContentKind[]>> = {
   // bb3976b (render acce1c077445a6e3) draws like this build, but when installed it named the frames
   // it found from d2f1de1 as its own: its 3D frames may be d2f1de1's, so they're made again too.
   "render acce1c077445a6e3": ["3d"],
+  // 73e98de (render de75b15df8150478). Since then shapes and masks are drawn once and reused (the
+  // same pixels), and preparing at a smaller size decodes video at that size; full-size frames come
+  // out byte-identical (checked on cut 4: 3D, video and mask-heavy stretches).
+  "render de75b15df8150478": [],
 };
+
+/** Larger sizes whose prepared frames a smaller preview shows (decoded to its own size). */
+const LARGER = [1, 0.5, 0.25];
 
 /** Earlier builds' tags → what this build draws differently from them (this build's own tag left out). */
 let olderOf: { tag: string; builds: OlderBuilds } | null = null;
@@ -307,7 +318,29 @@ export class DiskFrames {
   /** Is this frame on disk (as far as this window knows; false until the composition has been checked)? */
   has(project: Project, compId: string, frame: number, fraction: number, quality: string): boolean {
     const s = this.enabled ? this.scope(project, compId) : null;
-    return !!s && this.found(s, project, frame, fraction, quality) !== null;
+    return !!s && this.foundAny(s, project, frame, fraction, quality) !== null;
+  }
+
+  /** On disk at this size, or prepared at a larger one (shown scaled down), or null. */
+  private foundAny(s: Scope, project: Project, frame: number, fraction: number, quality: string): string | null {
+    const own = this.found(s, project, frame, fraction, quality);
+    if (own) return own;
+    for (const f of LARGER) {
+      if (f <= fraction + 1e-6) continue;
+      const k = this.found(s, project, frame, f, quality);
+      if (k) return k;
+    }
+    return null;
+  }
+
+  /** Frames removed by the disk cache's size limit (oldest first): no longer on disk. */
+  private dropEvicted(gone: ReadonlyArray<{ scope: string; key: string }>): void {
+    for (const sc of this.scopes.values()) {
+      const dir = scopeDir(sc.project, sc.comp);
+      let n = 0;
+      for (const e of gone) if (e.scope === dir && sc.onDisk.delete(e.key)) n++;
+      if (n) sc.version++;
+    }
   }
 
   /** The frame on disk that shows this frame of the show as it is now (this build's, or an earlier build's where it draws the same), or null. */
@@ -330,11 +363,11 @@ export class DiskFrames {
     if (hit) return hit;
     const out = new Set<number>();
     const sig = signaturesOf(project, compId);
-    const want = frameKey(0, fraction, quality).slice(1);
     const older = olderBuilds(s.tag);
     for (const k of s.onDisk) {
       const d = parseDiskKey(k);
-      if (!d?.signature || frameKey(0, d.fraction, d.quality).slice(1) !== want) continue;
+      // This size, or a larger one (shown scaled down).
+      if (!d?.signature || d.quality !== quality || d.fraction < fraction - 1e-6) continue;
       const signature = sig(d.frame);
       if (usable(d, signature, s.tag, older, (changed) => drawsSame(project, compId, d.frame, signature, changed))) out.add(d.frame);
     }
@@ -438,25 +471,25 @@ export class DiskFrames {
     const comp = project.compositions[compId];
     const s = this.enabled && comp ? this.scope(project, compId) : null;
     if (!s || !comp) return "absent";
-    const key = this.found(s, project, frame, fraction, quality);
+    const key = this.foundAny(s, project, frame, fraction, quality);
     if (!key) return "absent";
     const id = `${s.id}|${key}`;
     if (this.reads.has(id)) return "reading";
     if (!now && this.reads.size >= MAX_READS) return "wait";
     this.reads.set(id, performance.now());
-    void this.read(cache, s, s.epoch, key, frame, fraction, quality, comp.height / comp.width).finally(() => this.reads.delete(id));
+    void this.read(cache, s, s.epoch, key, frame, fraction, quality, comp.height / comp.width, Math.max(1, Math.round(comp.width * fraction))).finally(() => this.reads.delete(id));
     return "reading";
   }
 
   /** How long this frame has been reading (ms), or -1 when it isn't. */
   readingFor(project: Project, compId: string, frame: number, fraction: number, quality: string): number {
     const s = this.scopes.get(`${project.id}/${compId}`);
-    const key = s?.ready ? this.found(s, project, frame, fraction, quality) : null;
+    const key = s?.ready ? this.foundAny(s, project, frame, fraction, quality) : null;
     const started = s && key ? this.reads.get(`${s.id}|${key}`) : undefined;
     return started === undefined ? -1 : performance.now() - started;
   }
 
-  private async read(cache: FrameCache, s: Scope, epoch: number, key: string, frame: number, fraction: number, quality: string, aspect: number): Promise<void> {
+  private async read(cache: FrameCache, s: Scope, epoch: number, key: string, frame: number, fraction: number, quality: string, aspect: number, width: number): Promise<void> {
     const current = () => s.epoch === epoch && this.scopes.get(s.id) === s;
     const t0 = performance.now();
     try {
@@ -467,7 +500,9 @@ export class DiskFrames {
         return;
       }
       if (!current()) return;
-      const bmp = await createImageBitmap(new Blob([bytes as BlobPart], { type: "image/jpeg" }), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+      // A frame prepared at a larger size is decoded straight to this size (the alpha band below keeps its proportion).
+      const larger = (parseDiskKey(key)?.fraction ?? fraction) > fraction + 1e-6;
+      const bmp = await createImageBitmap(new Blob([bytes as BlobPart], { type: "image/jpeg" }), { colorSpaceConversion: "none", premultiplyAlpha: "none", ...(larger ? { resizeWidth: width, resizeQuality: "medium" as const } : {}) });
       try {
         if (!current() || cache.has(s.comp, frame, fraction, quality)) return;
         // Saved with an alpha band the image is twice as tall as the frame's shape.
@@ -499,7 +534,7 @@ export class DiskFrames {
   offer(project: Project, compId: string, frame: number, fraction: number, quality: string, tex: GPUTexture): void {
     const s = this.enabled && !this.readOnly ? this.scope(project, compId) : null;
     // (Only frames just rendered by this build are offered: never one read from disk.)
-    if (s && !this.found(s, project, frame, fraction, quality)) this.save(s, this.ownKey(s, project, frame, fraction, quality), frame, fraction, quality, tex);
+    if (s && !this.foundAny(s, project, frame, fraction, quality)) this.save(s, this.ownKey(s, project, frame, fraction, quality), frame, fraction, quality, tex);
   }
 
   /**
@@ -551,7 +586,8 @@ export class DiskFrames {
         if (!u) return null;
         s.onDisk.add(key);
         s.version++;
-        setUsage(u);
+        if (u.evicted?.length) this.dropEvicted(u.evicted);
+        setUsage({ bytes: u.bytes, files: u.files, limitBytes: u.limitBytes });
         this.emit();
         return jpeg.byteLength;
       } catch (e) {

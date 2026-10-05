@@ -24,6 +24,7 @@ import { formatSize } from "../../../shared/diskFrames.ts";
 import { getRenderer } from "../studio/engineHost.ts";
 import { useSims } from "../studio/simHost.ts";
 import { useStudio } from "../studio/store.ts";
+import { activity } from "./activity.ts";
 import { type DiskFrames, diskFramesFor, saveTiming } from "./diskCache.ts";
 import { usePreview } from "./settings.ts";
 
@@ -82,7 +83,8 @@ export const measuredBytesPerPixel = (projectId = useStudio.getState().project?.
   }
 };
 
-const resolutionOf = (fraction: number): PlanResolution => (fraction > 0.75 ? "full" : fraction > 0.375 ? "half" : "quarter");
+const resolutionOf = (fraction: number): PlanResolution => (fraction > 0.75 ? "full" : fraction > 0.375 ? "half" : fraction > 0.1875 ? "quarter" : "eighth");
+const RES_NAME: Record<PlanResolution, string> = { full: "Full", half: "Half", quarter: "Quarter", eighth: "Eighth" };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const clock = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`);
 
@@ -146,9 +148,8 @@ export const startPreparing = async (opts: PrepareOptions): Promise<PrepareJob> 
   const job: PrepareJob = { target: opts.target, compId: t.id, name: t.name, resolution, quality, ...(frames ? { frames } : {}), state: "waiting", done: 0, total, rendered: 0, failedFrames: 0, fps: 0, etaSeconds: null, phase: "Starting", diskBytes, startedAt: Date.now() };
   usePrepare.setState({ job });
 
-  // Prepared frames live on disk, and playback uses them at this size from the cache.
-  const named = resolution === "full" ? "full" : resolution === "half" ? "half" : "quarter";
-  const settings: Parameters<typeof s.set>[0] = { diskCache: true, playbackMode: "cache", resolution: named };
+  // Prepared frames live on disk, at this size. (How Play behaves is the person's own choice: unchanged.)
+  const settings: Parameters<typeof s.set>[0] = { diskCache: true, resolution };
   // Room on disk: the limit must hold every frame, or the cache would delete the first frames to make
   // room for the last ones.
   const space = await window.be.cache.space().catch(() => null);
@@ -164,7 +165,7 @@ export const startPreparing = async (opts: PrepareOptions): Promise<PrepareJob> 
         finishedAt: Date.now(),
         reason:
           want * GB > spare
-            ? `Every frame of “${t.name}” at ${resolution === "full" ? "Full" : resolution === "half" ? "Half" : "Quarter"} size needs about ${formatSize(diskBytes)} on disk, more than ${space?.drive ?? "the drive"} can spare (${formatSize(space?.freeBytes ?? 0)} free). Prepare at a smaller size, free some space, or choose another folder for preview frames.`
+            ? `Every frame of “${t.name}” at ${RES_NAME[resolution]} size needs about ${formatSize(diskBytes)} on disk, more than ${space?.drive ?? "the drive"} can spare (${formatSize(space?.freeBytes ?? 0)} free). Prepare at a smaller size, free some space, or choose another folder for preview frames.`
             : `Every frame of “${t.name}” needs about ${formatSize(diskBytes)} on disk, but the disk cache is set to ${formatSize(limit)}. Raise it to ${want} GB (Quality & speed → Disk space), or use the recommended settings.`,
       });
       return usePrepare.getState().job!;
@@ -173,12 +174,14 @@ export const startPreparing = async (opts: PrepareOptions): Promise<PrepareJob> 
   usePreview.getState().set(settings);
   const ctl = { stop: false, pause: false };
   running = ctl;
+  activity.preparing = true;
   const renderer = await getRenderer();
   void run(renderer, diskFramesFor(renderer), ctl).catch((e) => update({ state: "failed", finishedAt: Date.now(), phase: "Stopped", reason: `Preparation stopped: ${String((e as Error)?.message ?? e)}` }));
   return usePrepare.getState().job!;
 };
 
 export const stopPreparing = () => {
+  activity.preparing = false;
   if (running) running.stop = true;
   running = null;
   const j = usePrepare.getState().job;
@@ -208,8 +211,18 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
     if (!p.compositions[compId]) throw new Error("the scene was deleted");
     return p;
   };
+  // Playing and editing come first: while the preview plays, or just after the person did something,
+  // preparation waits (keeping its place), then carries on.
+  const busy = () => useStudio.getState().playing || performance.now() - activity.lastInteraction < 500;
   const halt = async (): Promise<boolean> => {
-    while (ctl.pause && !ctl.stop) await sleep(200);
+    let gaveWay = false;
+    while ((ctl.pause || busy()) && !ctl.stop) {
+      if (!ctl.pause && !gaveWay) {
+        gaveWay = true;
+        update({ phase: "Waiting while you play or edit" });
+      }
+      await sleep(ctl.pause ? 200 : 100);
+    }
     return ctl.stop;
   };
 
@@ -262,7 +275,7 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
       const t0 = performance.now();
       await disk.slot(w, h);
       const t1 = performance.now();
-      await r.prepareAt(p, compId, t);
+      await r.prepareAt(p, compId, t, fraction);
       const t2 = performance.now();
       p = current(); // an edit may have arrived while media loaded
       const tex = r.renderContent(p, compId, t, fraction, quality);
@@ -348,4 +361,5 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
       : { reason: `Every frame (${total.toLocaleString()}) is on disk${j.rendered ? `; ${j.rendered.toLocaleString()} rendered in ${clock(took)}` : ""}.` }),
   });
   running = null;
+  activity.preparing = false;
 };

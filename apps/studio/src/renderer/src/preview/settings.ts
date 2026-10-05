@@ -32,7 +32,22 @@ export interface PreviewSettings {
   autoFraction: number;
   /** "fit" or a zoom where 1 = one output pixel per screen pixel. */
   zoom: "fit" | number;
+  /** "cache": Cache Before Playback (render the range first, then play it); "realtime": play as it renders, skipping frames to keep time. */
   playbackMode: "realtime" | "cache";
+  /**
+   * The frames a preview plays (as After Effects' Range): the work area (the preview range set with
+   * Range start / end), the work area extended to take in the playhead, everything, or a stretch
+   * round the playhead.
+   */
+  previewRange: "workarea-extended" | "workarea" | "entire" | "around";
+  /** "around": seconds before and after the playhead. */
+  aroundBefore: number;
+  aroundAfter: number;
+  /** Stopping while caching before playback plays the frames cached so far (from the range's start). */
+  playCachedOnStop: boolean;
+  /** Cache frames when idle: after this many seconds of nothing happening, frames ahead of the playhead are rendered and kept. */
+  idleCache: boolean;
+  idleDelaySeconds: number;
   effectQuality: "full" | "draft";
   simQuality: "full" | "draft";
   /** Real-time mode: skip frames to keep timing (true) or play every frame, slower if needed (false). */
@@ -62,6 +77,12 @@ const DEFAULTS: PreviewSettings = {
   autoFraction: 1,
   zoom: "fit",
   playbackMode: "realtime",
+  previewRange: "workarea-extended",
+  aroundBefore: 2,
+  aroundAfter: 5,
+  playCachedOnStop: true,
+  idleCache: true,
+  idleDelaySeconds: 2,
   effectQuality: "full",
   simQuality: "full",
   frameSkipping: true,

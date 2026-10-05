@@ -111,8 +111,9 @@ export const VIEWING_STEPS: Record<string, Step> = {
     choose(document.querySelector<HTMLSelectElement>('select[aria-label="Preview size"]'), "half");
     await sleep(300);
     const w = await watchPlay(5);
-    const ok = prep?.state === "done" && w.rendered === 0 && w.canvasWidth === 1920 && w.m.stalls === 0 && w.m.longestGapMs <= 100 && w.m.newFrames >= 140;
-    return { ok, note: `Half chosen in the size menu: ${w.m.newFrames} new pictures in 5 s, all read from the frames prepared at full size (${w.rendered} rendered, shown at ${w.canvasWidth} px wide); stalls over 100 ms ${w.m.stalls}, longest gap ${w.m.longestGapMs} ms, first picture ${w.m.startWaitMs} ms after Play` };
+    // Half is 960 wide: the frames prepared at full size, decoded straight to that size (none rendered again).
+    const ok = prep?.state === "done" && w.rendered === 0 && w.canvasWidth === 960 && w.m.stalls === 0 && w.m.longestGapMs <= 100 && w.m.newFrames >= 140;
+    return { ok, note: `Half chosen in the size menu: ${w.m.newFrames} new pictures in 5 s, all from the frames prepared at full size, decoded to Half (${w.rendered} rendered, shown at ${w.canvasWidth} px wide); stalls over 100 ms ${w.m.stalls}, longest gap ${w.m.longestGapMs} ms, first picture ${w.m.startWaitMs} ms after Play` };
   },
   "view-size-steady": async () => {
     await prepared();

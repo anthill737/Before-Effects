@@ -15,7 +15,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MachineMemory } from "../../../shared/api.ts";
 import { formatSize } from "../../../shared/diskFrames.ts";
 import { clearDiskCache, refreshDiskStatus, useDiskCache } from "./diskCache.ts";
+import { touched } from "./activity.ts";
 import { pausePreparing, type PrepareJob, type PrepareTarget, startPreparing, stopPreparing, usePrepare } from "./prepare.ts";
+import type { PlanResolution } from "../../../shared/cachePlan.ts";
 import { applyPlan, matchesPlan, useCachePlan } from "./recommend.ts";
 import { previewAudio } from "../studio/audioEngine.ts";
 import { followerClock, followersReady } from "./sync.ts";
@@ -27,7 +29,7 @@ import { venuePhotoUrl } from "../space/actions.ts";
 import { TracingLayer } from "../space/TracingLayer.tsx";
 import { useTrace } from "../space/traceStore.ts";
 import { ActionBar, CalibrationOverlay, RegionOverlay } from "./overlays.tsx";
-import { effectiveFraction, fractionLabel, MIN_DISK_GB, MIN_MEMORY_MB, RESOLUTIONS, type ResolutionChoice, usePreview, type View } from "./settings.ts";
+import { effectiveFraction, fractionLabel, MIN_DISK_GB, MIN_MEMORY_MB, RESOLUTIONS, type PreviewSettings, type ResolutionChoice, usePreview, type View } from "./settings.ts";
 import { onSimFrame, simProgress, useSims } from "../studio/simHost.ts";
 import { dropOnArea, isContentDrag, readDragPayload } from "../studio/assign.ts";
 import { areaAt } from "../space/areaEdit.ts";
@@ -321,7 +323,7 @@ const OrbitControls = () => {
 const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "popout"; hasProjector: boolean; onPopOut: () => void }) => {
   const s = usePreview();
   const stats = usePreviewStats();
-  const [open, setOpen] = useState<"overlays" | "quality" | null>(null);
+  const [open, setOpen] = useState<"overlays" | "quality" | "preview" | null>(null);
   const setView = (view: View) => {
     s.set({ view });
     if (role === "editor") window.be.windows.setPreviewView(view);
@@ -403,6 +405,14 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
           </div>
         )}
       </div>
+      {role === "editor" && (
+        <div className="tool-pop">
+          <button className="ghost small-btn" aria-expanded={open === "preview"} onClick={() => setOpen(open === "preview" ? null : "preview")} title="What Play plays and caches, and preparing frames ahead">
+            Preview ▾
+          </button>
+          {open === "preview" && <PreviewPopover />}
+        </div>
+      )}
       <div className="tool-pop">
         <button className="ghost small-btn" aria-expanded={open === "quality"} onClick={() => setOpen(open === "quality" ? null : "quality")}>
           Quality & speed ▾
@@ -484,11 +494,11 @@ const AmountField = ({ label, gb, min, max, step, title, onChange }: { label: st
   );
 };
 
-const RES_LABEL = { full: "Full", half: "Half", quarter: "Quarter" } as const;
+const RES_LABEL = { full: "Full", half: "Half", quarter: "Quarter", eighth: "Eighth" } as const;
 const clockText = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min${s % 60 >= 1 ? ` ${Math.round(s % 60)} s` : ""}` : `${Math.max(1, Math.round(s))} s`);
 
 /** Start preparing a scene or the show (at the preview's size; Auto uses the recommended size). */
-const prepareNow = async (target: PrepareTarget, recommended?: "full" | "half" | "quarter") => {
+const prepareNow = async (target: PrepareTarget, recommended?: PlanResolution) => {
   const auto = usePreview.getState().resolution === "auto";
   try {
     await startPreparing({ target, raiseDiskLimit: true, ...(auto && recommended ? { resolution: recommended } : {}) });
@@ -589,6 +599,93 @@ const enterFullScreen = () => {
   const el = document.querySelector<HTMLElement>(".preview-panel .preview-scroll");
   if (el && !document.fullscreenElement) void el.requestFullscreen().catch(() => undefined);
 };
+
+/**
+ * Play / stop, as Space and the Play button do. Stopping while caching before playback plays what's
+ * been cached so far (when that's on) instead of stopping.
+ */
+export const togglePlay = () => {
+  const s = useStudio.getState();
+  touched();
+  if (s.playing && usePreview.getState().playCachedOnStop && activeLoop?.playCachedFrames()) return;
+  s.setPlaying(!s.playing);
+};
+
+const RANGES: Array<{ id: PreviewSettings["previewRange"]; label: string; hint: string }> = [
+  { id: "workarea-extended", label: "Work area, extended by the playhead", hint: "The preview range (Range start / end); from the playhead when it's outside it" },
+  { id: "workarea", label: "Work area", hint: "Only the preview range (Range start / end), or the whole scene when none is set" },
+  { id: "entire", label: "Entire duration", hint: "The whole scene" },
+  { id: "around", label: "Around the playhead", hint: "A few seconds before and after the playhead" },
+];
+
+/** What Play plays and caches (as After Effects' Preview panel), and preparing frames ahead. */
+const PreviewPopover = () => {
+  const s = usePreview();
+  const job = usePrepare((j) => j.job);
+  const busy = !!job && ["waiting", "preparing", "checking"].includes(job.state);
+  const st = useStudio.getState();
+  const comp = st.project && st.compId ? st.project.compositions[st.compId] : undefined;
+  const prepareRange = (startSeconds: number, endSeconds: number) => void startPreparing({ target: "scene", raiseDiskLimit: true, range: { startSeconds, endSeconds } }).catch(() => undefined);
+  return (
+    <div className="popover preview-pop" role="dialog" aria-label="Preview">
+      <label className="tool-field">
+        <span>Range</span>
+        <select value={s.previewRange} onChange={(e) => s.set({ previewRange: e.target.value as PreviewSettings["previewRange"] })} aria-label="Preview range">
+          {RANGES.map((r) => (
+            <option key={r.id} value={r.id} title={r.hint}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {s.previewRange === "around" && (
+        <div className="row gap">
+          <label className="small">
+            Before <input className="text-input num" type="number" min={0} max={60} step={0.5} value={s.aroundBefore} onChange={(e) => s.set({ aroundBefore: Math.max(0, Number(e.target.value) || 0) })} aria-label="Seconds before the playhead" /> s
+          </label>
+          <label className="small">
+            After <input className="text-input num" type="number" min={0.5} max={120} step={0.5} value={s.aroundAfter} onChange={(e) => s.set({ aroundAfter: Math.max(0.5, Number(e.target.value) || 0.5) })} aria-label="Seconds after the playhead" /> s
+          </label>
+        </div>
+      )}
+      <label className="check" title="Render every frame of the range first, then play it smoothly with sound">
+        <input type="checkbox" checked={s.playbackMode === "cache"} onChange={(e) => s.set({ playbackMode: e.target.checked ? "cache" : "realtime" })} /> Cache before playback
+      </label>
+      <label className="check" title="Pressing Space (or Pause) while it's still caching plays the frames cached so far, from the range's start">
+        <input type="checkbox" checked={s.playCachedOnStop} onChange={(e) => s.set({ playCachedOnStop: e.target.checked })} /> If caching, Space plays the cached frames
+      </label>
+      <label className="check" title="When nothing happens for a moment, frames ahead of the playhead are rendered and kept, so they play at once">
+        <input type="checkbox" checked={s.idleCache} onChange={(e) => s.set({ idleCache: e.target.checked })} /> Cache frames when idle, after{" "}
+        <input className="text-input num" type="number" min={0.5} max={60} step={0.5} value={s.idleDelaySeconds} onChange={(e) => s.set({ idleDelaySeconds: Math.max(0.5, Number(e.target.value) || 2) })} aria-label="Seconds idle before caching" /> s
+      </label>
+      <h3>Prepare ahead (kept on disk)</h3>
+      <p className="muted small">At the preview size ({RESOLUTIONS.find((r) => r.id === s.resolution)?.label}). Frames already prepared are skipped; playing pauses it.</p>
+      <div className="row gap wrap">
+        <button className="ghost small-btn" disabled={busy || !st.range} title={st.range ? "The preview range" : "Set Range start / end first"} onClick={() => st.range && prepareRange(st.range.start / 705_600_000, st.range.end / 705_600_000)}>
+          Work area
+        </button>
+        <button
+          className="ghost small-btn"
+          disabled={busy || !comp}
+          onClick={() => {
+            const t = useStudio.getState().time / 705_600_000;
+            prepareRange(Math.max(0, t - s.aroundBefore), Math.min((comp?.duration ?? 0) / 705_600_000, t + s.aroundAfter));
+          }}
+        >
+          Around the playhead
+        </button>
+        <button className="ghost small-btn" disabled={busy || !comp} onClick={() => void startPreparing({ target: "scene", raiseDiskLimit: true }).catch(() => undefined)}>
+          This scene
+        </button>
+        <button className="ghost small-btn" disabled={busy || !showCompOf(st.project)} title={showCompOf(st.project) ? "Every scene, in show order" : "Assemble a show first (+ Scene menu)"} onClick={() => void startPreparing({ target: "show", raiseDiskLimit: true }).catch(() => undefined)}>
+          Whole show
+        </button>
+      </div>
+      <PrepareStatus />
+    </div>
+  );
+};
+const showCompOf = (p: import("@be/core").Project | null) => (p ? p.compositionOrder.some((id) => p.compositions[id]?.show) : false);
 
 /** Whole gigabytes, the way computers and graphics cards are sold ("32 GB", "12 GB"). */
 const wholeGB = (bytes: number) => `${Math.max(1, Math.round(bytes / GB))} GB`;
@@ -761,7 +858,7 @@ const TransportBar = ({ role }: { role: "editor" | "popout" }) => {
       <button className="icon" onClick={() => st.stepFrames(-1)} title="Previous frame (←)" aria-label="Previous frame">
         ◀︎❘
       </button>
-      <button className="play" onClick={() => st.setPlaying(!playing)} title={playing ? "Pause (Space)" : "Play (Space)"} aria-label={playing ? "Pause" : "Play"}>
+      <button className="play" onClick={togglePlay} title={playing ? "Pause (Space)" : "Play (Space)"} aria-label={playing ? "Pause" : "Play"}>
         {playing ? "❚❚" : "▶"}
       </button>
       <button className="icon" onClick={() => st.stepFrames(1)} title="Next frame (→)" aria-label="Next frame">
@@ -817,10 +914,12 @@ const StatusLine = () => {
       )}
       {st.mode === "preparing" && st.preparing && (
         <span className="preparing">
-          Preparing frames for smooth playback {st.preparing.done} / {st.preparing.total}
+          {st.preparing.kind === "load" ? "Loading cached frames" : "Rendering frames before playback"} {st.preparing.done} / {st.preparing.total}
           <progress max={st.preparing.total} value={st.preparing.done} />
+          {st.preparing.kind !== "load" && s.playCachedOnStop ? " · Space plays what's cached" : ""}
         </span>
       )}
+      {st.mode === "paused" && st.idle && <span className="muted">Caching while idle: {st.idle.cached} new · {st.idle.ahead} frames ready ahead</span>}
       {st.mode === "playing" && (
         <span className={behind ? "warn" : ""}>
           {st.achievedFps} / {Math.round(st.targetFps * 100) / 100} fps{st.dropped ? ` · ${st.dropped} frames skipped` : ""}

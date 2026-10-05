@@ -387,8 +387,10 @@ export const registerPreviewCacheIpc = () => {
     pending.delete(fid);
     if (free.bytes !== null) free.bytes -= data.byteLength;
     index.add(s, key, data.byteLength);
-    deleteFiles(index.evict(config.limitBytes));
-    return usage();
+    const gone = index.evict(config.limitBytes);
+    deleteFiles(gone);
+    // The window that saved learns what went, so it never counts those frames as on disk.
+    return gone.length ? { ...usage(), evicted: gone.map((e) => ({ scope: e.scope, key: e.key })) } : usage();
   });
 
   ipcMain.handle("cache:get", async (_e, scope: DiskCacheScope, key: string): Promise<Uint8Array | null> => {

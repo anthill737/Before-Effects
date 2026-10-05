@@ -200,6 +200,8 @@ export interface DiskCacheUsage {
   readonly bytes: number;
   readonly files: number;
   readonly limitBytes: number;
+  /** From saving a frame: frames the size limit removed to make room (folder scope and key). */
+  readonly evicted?: ReadonlyArray<{ readonly scope: string; readonly key: string }>;
 }
 
 export interface DiskCacheStatus extends DiskCacheUsage {

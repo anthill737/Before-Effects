@@ -10,13 +10,20 @@
  *
  * With frames kept on disk (diskCache.ts, a preview setting), frames missing from graphics memory
  * are read back instead of rendered: while preparing, while playing (read ahead) and when stepping.
- * Projector output windows always render.
+ *
+ * As in After Effects: the range a preview plays is a setting (work area, work area extended by the
+ * playhead, entire duration, around the playhead), fixed when it starts; Cache Before Playback renders
+ * the range first; stopping while it caches plays what's cached so far; and when nothing happens for
+ * a moment, frames ahead of the playhead are cached in the background (stopping as soon as anything
+ * happens, and not while a preparation job runs).
  */
 import { type Affected, type Flicks, frameToTime, type Project, rateToFps, timeToFrame } from "@be/core";
 import type { FrameRenderer, PreviewView } from "@be/engine";
 import { create } from "zustand";
 import { FrameCache } from "./cache.ts";
 import { type DiskFrames, diskFramesFor } from "./diskCache.ts";
+import { activity, touched } from "./activity.ts";
+import { rangeFor } from "../../../shared/previewRange.ts";
 import { effectiveFraction, type RenderSize, renderSize, usePreview } from "./settings.ts";
 import { currentProjector, useProjectorPick } from "../studio/projectors.ts";
 import { unshownBetween } from "../../../shared/shownFrames.ts";
@@ -54,8 +61,11 @@ export interface PreviewStats {
   cacheFrames: number;
   cacheMB: number;
   cacheBudgetMB: number;
-  preparing: { done: number; total: number } | null;
+  /** Before playing: frames rendered ("render") or read from disk ("load") of those needed. */
+  preparing: { done: number; total: number; kind?: "render" | "load" } | null;
   mode: "playing" | "paused" | "preparing";
+  /** Caching while idle: frames cached ahead of the playhead in this stretch (null when not). */
+  idle: { cached: number; ahead: number } | null;
   /** Reading a frame back from disk: recent average (ms). */
   diskReadMs: number;
   /** Playing with sound: how far each new picture is from the sound (ms; positive = picture ahead), on average over the last second, and the largest since playback started. */
@@ -78,6 +88,7 @@ export const usePreviewStats = create<PreviewStats>(() => ({
   cacheBudgetMB: 1536,
   preparing: null,
   mode: "paused",
+  idle: null,
   diskReadMs: 0,
   avSyncMs: null,
   avSyncMaxMs: null,
@@ -116,6 +127,8 @@ export class PreviewLoop {
    * `startWaitMs`: from pressing play to the first picture.
    */
   readonly smoothness = { stalls: 0, stalledMs: 0, longestGapMs: 0, startWaitMs: 0, newFrames: 0 };
+  /** Frames this preview has rendered itself (playing, stepping, caching while idle), since it opened. */
+  renders = 0;
   private playStartedAt: number | null = null;
   private lastNewFrameAt: number | null = null;
   /** The time this window's clock was at on its last turn while playing. */
@@ -133,6 +146,15 @@ export class PreviewLoop {
   /** Its own frames ready to start, waiting for open outputs since then (null: not waiting). */
   private followerWaitSince: number | null = null;
   private lastMode: PreviewStats["mode"] = "paused";
+  /** The range being played (fixed when playing starts), and the cached stretch when stopping while caching played what was cached. */
+  private playRange: { start: Flicks; end: Flicks } | null = null;
+  private cachedPlay: { start: Flicks; end: Flicks } | null = null;
+  /** Idle: since when nothing happened, and what was showing then. */
+  private idleSince = 0;
+  private idleKey = "";
+  private idleStats: { cached: number; ahead: number } | null = null;
+  /** An idle frame's GPU work is still under way: no more until it's done (so Play never waits behind a queue). */
+  private idleBusy = false;
   /** Waiting for open outputs to read ahead too: at most this long (ms), so an output that can't read never stalls playback. */
   private static readonly FOLLOWER_WAIT_MS = 3000;
   /** Recent playback state changes (diagnostics): when (ms), the new state, and why. */
@@ -236,7 +258,7 @@ export class PreviewLoop {
     const fps = rateToFps(comp.frameRate);
     const view: PreviewView = this.fixed?.view ?? s.view;
     const playing = this.source.playing();
-    const range = this.source.range() ?? { start: 0, end: comp.duration };
+    let range = this.source.range() ?? { start: 0, end: comp.duration };
     const quality = this.fixed ? "full" : s.effectQuality;
     const cacheable = this.source.cacheable?.() ?? true;
     // Frames on disk: never for temporary hover previews. Projector outputs read prepared frames
@@ -246,13 +268,6 @@ export class PreviewLoop {
     // Auto: adaptive while playing, full quality when paused (accurate stills and stepping).
     let fraction = this.fixed?.fraction ?? effectiveFraction(s);
     if (!this.fixed && s.resolution === "auto" && !playing) fraction = 1;
-    // Prepared frames are full size. A smaller preview shows them (scaled down) wherever they are, rather
-    // than rendering every frame again at its own size: reading a prepared frame is far quicker than
-    // rendering one, at any size. Frames not prepared are rendered at the size chosen.
-    if (!this.fixed && useDisk && fraction < 1) {
-      const at = timeToFrame(this.source.time(), comp.frameRate);
-      if (this.cache.has(compId, at, 1, quality) || this.disk.has(project, compId, at, 1, quality)) fraction = 1;
-    }
 
     // ---- clock -------------------------------------------------------------------------
     const dt = now - this.lastTick;
@@ -274,6 +289,17 @@ export class PreviewLoop {
       this.lastPlayedFrame = -1;
     }
     this.wasPlaying = playing;
+    // The range: fixed when playing starts; projector outputs follow the editor's range.
+    if (!playing) {
+      this.playRange = null;
+      this.cachedPlay = null;
+    } else if (!this.fixed && (justStarted || !this.playRange)) {
+      this.playRange = rangeFor(comp, t, this.source.range(), s);
+      touched();
+      // Around the playhead plays its whole stretch from the start.
+      if (justStarted && s.previewRange === "around") t = this.playRange.start;
+    }
+    if (!this.fixed) range = this.cachedPlay ?? this.playRange ?? rangeFor(comp, t, this.source.range(), s);
     if (playing && !this.fixed && s.playbackMode === "cache") {
       // Prepare the whole range first, then play smoothly from the cache. A range longer than
       // graphics memory holds needs only what fits from the playhead on; frames prepared on disk
@@ -310,7 +336,8 @@ export class PreviewLoop {
       }
       if (missing.length) {
         mode = "preparing";
-        const budget = performance.now() + 24;
+        // A short slice a turn, so the window keeps redrawing (and stays responsive) while it caches.
+        const budget = performance.now() + 12;
         let fromDisk = 0;
         while (missing.length && performance.now() < budget) {
           const f = missing.shift()!;
@@ -319,6 +346,7 @@ export class PreviewLoop {
             fromDisk++;
             continue;
           }
+          this.renders++;
           const tex = this.renderer.renderContent(project, compId, frameToTime(f, comp.frameRate), fraction, quality);
           if (!tex) continue;
           const content = this.renderer.gpu.detach(tex);
@@ -326,7 +354,7 @@ export class PreviewLoop {
           if (this.renderer.lastFrameIncomplete || !this.cache.put(compId, f, fraction, quality, content)) this.renderer.gpu.defer(content);
           else if (useDisk) this.disk.offer(project, compId, f, fraction, quality, content);
         }
-        preparing = this.buffering ? { done: ready, total: second } : { done: count - missing.length - fromDisk, total: count };
+        preparing = this.buffering ? { done: ready, total: second, kind: "load" } : { done: count - missing.length - fromDisk, total: count, kind: fromDisk && !missing.length ? "load" : "render" };
         if (!this.buffering && this.cache.stats().bytes >= this.cache.stats().budget * 0.89 && (missing.length || fromDisk)) {
           // The range doesn't fit in the cache budget; play what fits in real time.
           preparing = null;
@@ -337,7 +365,7 @@ export class PreviewLoop {
       // then holding again would show as stutter, and start the sound twice).
       if (this.buffering && mode === "playing") {
         mode = "preparing";
-        preparing = { done: ready, total: second };
+        preparing = { done: ready, total: second, kind: "load" };
       }
       // Starting with its own frames ready (also when they're all in memory): open outputs read a
       // second ahead first (at most FOLLOWER_WAIT_MS), so they start with it instead of catching up.
@@ -398,8 +426,9 @@ export class PreviewLoop {
       this.dirty = true;
     }
     const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId ?? useProjectorPick.getState().id}|${cacheable}|${this.version}`;
-    // Frames that were too busy to save to disk earlier are saved now, one per tick.
-    if (useDisk) this.disk.pump(this.cache);
+    // Frames that were too busy to save to disk earlier are saved now, one per tick (not while playing:
+    // reading back and compressing frames then would compete with the playback).
+    if (useDisk && !playing) this.disk.pump(this.cache);
     // Reading ahead goes on while the picture stays on one frame (an output while the editor holds).
     if (useDisk && mode === "playing") this.readAhead(project, compId, frame, fraction, quality, range);
     // Redraw only when something visible changed: on high-refresh displays the same frame is not redrawn every refresh.
@@ -423,12 +452,14 @@ export class PreviewLoop {
       return;
     }
     if (!content && !cacheable) {
+      this.renders++;
       const tex = this.renderer.renderContent(project, compId, frameToTime(frame, comp.frameRate), fraction, quality);
       if (!tex) return;
       // Temporary preview frame: freed once this frame has been submitted, never cached.
       content = this.renderer.gpu.detach(tex);
       this.renderer.gpu.defer(content);
     } else if (!content) {
+      this.renders++;
       const tex = this.renderer.renderContent(project, compId, frameToTime(frame, comp.frameRate), fraction, quality);
       if (!tex) return;
       content = this.renderer.gpu.detach(tex);
@@ -504,7 +535,84 @@ export class PreviewLoop {
         this.fast = 0;
       }
     }
+    // ---- Cache frames when idle ---------------------------------------------------------------
+    if (playing || key !== this.idleKey) {
+      this.idleKey = key;
+      this.idleSince = now;
+      this.idleStats = null;
+    } else if (!this.fixed && cacheable && s.idleCache && !activity.preparing && now - this.idleSince > s.idleDelaySeconds * 1000 && now - activity.lastInteraction > s.idleDelaySeconds * 1000) {
+      this.cacheIdle(project, compId, frame, fraction, quality, range, useDisk, now);
+    }
     this.report(fps, size, fraction, mode, preparing, playing && !this.fixed && !s.frameSkipping);
+  }
+
+  /**
+   * Nothing has happened for a moment: render frames from the playhead on through the preview range
+   * (round to its start) that aren't in memory or on disk, a few a turn (the window stays responsive),
+   * keeping them in memory and on disk. Stops at what memory holds.
+   */
+  private cacheIdle(project: Project, compId: string, frame: number, fraction: number, quality: "full" | "draft", range: { start: Flicks; end: Flicks }, useDisk: boolean, now: number) {
+    if (this.idleBusy) return;
+    const comp = project.compositions[compId]!;
+    const f0 = timeToFrame(range.start, comp.frameRate);
+    const f1 = Math.max(f0 + 1, timeToFrame(range.end - 1, comp.frameRate) + 1);
+    const n = f1 - f0;
+    const c = this.cache.stats();
+    const frameBytes = Math.max(1, Math.round(comp.width * fraction) * Math.round(comp.height * fraction) * 8);
+    const room = Math.max(0, Math.floor((c.budget * 0.9 - c.bytes) / frameBytes));
+    void now;
+    let ahead = 0;
+    let cached = this.idleStats?.cached ?? 0;
+    const start = frame >= f0 && frame < f1 ? frame : f0;
+    let rendered = 0;
+    for (let k = 0; k < n; k++) {
+      const f = f0 + ((start - f0 + k) % n);
+      if (this.cache.has(compId, f, fraction, quality) || (useDisk && this.disk.has(project, compId, f, fraction, quality))) {
+        ahead++;
+        continue;
+      }
+      // One frame a turn, and only once the graphics card has finished the last one.
+      if (rendered >= Math.min(1, room)) break;
+      this.renders++;
+      const tex = this.renderer.renderContent(project, compId, frameToTime(f, comp.frameRate), fraction, quality);
+      if (!tex) break;
+      const content = this.renderer.gpu.detach(tex);
+      // Media still loading: it's asked for, and this frame is tried again next turn.
+      if (this.renderer.lastFrameIncomplete || !this.cache.put(compId, f, fraction, quality, content)) {
+        this.renderer.gpu.defer(content);
+        break;
+      }
+      if (useDisk) this.disk.offer(project, compId, f, fraction, quality, content);
+      rendered++;
+      cached++;
+      ahead++;
+      this.idleBusy = true;
+      void this.renderer.gpu.device.queue.onSubmittedWorkDone().then(() => (this.idleBusy = false));
+    }
+    this.idleStats = { cached, ahead };
+  }
+
+  /**
+   * Stopping while caching before playback: play the frames cached so far instead (from the range's
+   * start, as many as are cached one after another). False when there's nothing cached to play.
+   */
+  playCachedFrames(): boolean {
+    const project = this.source.project();
+    const compId = this.source.compId();
+    const comp = project && compId ? project.compositions[compId] : undefined;
+    const range = this.playRange;
+    if (!project || !compId || !comp || !range || this.lastMode !== "preparing") return false;
+    const s = usePreview.getState();
+    const fraction = effectiveFraction(s);
+    const quality = s.effectQuality;
+    const f0 = timeToFrame(range.start, comp.frameRate);
+    const f1 = Math.max(f0 + 1, timeToFrame(range.end - 1, comp.frameRate) + 1);
+    let f = f0;
+    while (f < f1 && (this.cache.has(compId, f, fraction, quality) || this.disk.has(project, compId, f, fraction, quality))) f++;
+    if (f - f0 < 2) return false;
+    this.cachedPlay = { start: range.start, end: frameToTime(f, comp.frameRate) };
+    this.source.setTime(range.start);
+    return true;
   }
 
   /** Frames in graphics memory one after another from `frame` (up to `max`): how far ahead it can play without reading. */
@@ -552,7 +660,7 @@ export class PreviewLoop {
   private report(fps: number, size: RenderSize, fraction: number, mode: PreviewStats["mode"], preparing: PreviewStats["preparing"], everyFrame: boolean) {
     const now = performance.now();
     // At most four times a second, except while preparing and when starting or stopping (the sound starts with the picture).
-    if (now - this.lastReport < 250 && mode !== "preparing" && mode === usePreviewStats.getState().mode) return;
+    if (now - this.lastReport < 250 && mode !== "preparing" && mode === usePreviewStats.getState().mode && !this.idleStats) return;
     this.lastReport = now;
     const c = this.cache.stats();
     usePreviewStats.setState({
@@ -568,6 +676,7 @@ export class PreviewLoop {
       cacheBudgetMB: Math.round(c.budget / 1048576),
       preparing,
       mode,
+      idle: this.idleStats,
       diskReadMs: Math.round(this.disk.readMs),
       ...this.syncStats(now),
       stale: false,

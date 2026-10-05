@@ -48,8 +48,8 @@ export interface Footage {
   readonly seconds: number;
 }
 
-export type PlanResolution = "full" | "half" | "quarter";
-export const PLAN_FRACTION: Record<PlanResolution, number> = { full: 1, half: 1 / 2, quarter: 1 / 4 };
+export type PlanResolution = "full" | "half" | "quarter" | "eighth";
+export const PLAN_FRACTION: Record<PlanResolution, number> = { full: 1, half: 1 / 2, quarter: 1 / 4, eighth: 1 / 8 };
 
 export interface Fit {
   readonly name: string;

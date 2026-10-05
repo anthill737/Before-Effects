@@ -16,6 +16,7 @@ import { Inspector } from "./Inspector.tsx";
 import { Library } from "./Library.tsx";
 import { openProjectFile, saveProject, startAutosave } from "./persistence.ts";
 import { SpacePanel } from "../space/SpacePanel.tsx";
+import { togglePlay } from "../preview/PreviewPanel.tsx";
 import { ContentPanel } from "./ContentPanel.tsx";
 import { PreviewSidePanel } from "./SidePanels.tsx";
 import { useStudio } from "./store.ts";
@@ -87,7 +88,7 @@ const useShortcuts = () => {
         return;
       } else if (e.key === " " && !(e.target as HTMLElement)?.closest("button")) {
         e.preventDefault();
-        s.setPlaying(!s.playing);
+        togglePlay();
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         s.stepFrames(e.shiftKey ? 10 : 1);
