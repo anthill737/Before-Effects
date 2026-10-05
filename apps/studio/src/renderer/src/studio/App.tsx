@@ -123,16 +123,25 @@ const useShortcuts = () => {
   }, []);
 };
 
-/** A side panel that folds away (the panel toggles at the top right of the window; a folded panel's strip shows it again). */
+/** A side panel that folds away with its own Hide button (or the View menu); its folded strip shows it again. */
 const SidePanel = ({ side, collapsed, children }: { side: "left" | "right"; collapsed: boolean; children: React.ReactNode }) => {
   const name = side === "left" ? "left panel" : "right panel";
   if (collapsed)
     return (
       <button className={`side-shell side-strip ${side}`} onClick={() => usePreview.getState().set({ [side === "left" ? "leftCollapsed" : "rightCollapsed"]: false })} title={`Show the ${name}`} aria-label={`Show the ${name}`}>
-        {side === "left" ? "›" : "‹"}
+        <span className="side-strip-arrow">{side === "left" ? "»" : "«"}</span>
       </button>
     );
-  return <div className={`side-shell ${side}`}>{children}</div>;
+  return (
+    <div className={`side-shell ${side}`}>
+      <div className="side-head">
+        <button className="side-hide" onClick={() => usePreview.getState().set({ [side === "left" ? "leftCollapsed" : "rightCollapsed"]: true })} title={`Hide this panel (Ctrl+${side === "left" ? "[" : "]"})`} aria-label={`Hide the ${name}`}>
+          {side === "left" ? "« Hide" : "Hide »"}
+        </button>
+      </div>
+      {children}
+    </div>
+  );
 };
 
 const LeftPanel = () => {
