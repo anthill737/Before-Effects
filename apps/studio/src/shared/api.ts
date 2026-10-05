@@ -288,13 +288,48 @@ export interface OutputShowing {
   readonly at: number;
 }
 
-export type TestPattern = "none" | "identify" | "grid" | "checker" | "white" | "black" | "colors";
+/**
+ * What a projector output shows over the show. `outlines`: the house areas drawn through the current
+ * alignment (to check it on the building). `align:…`: camera-alignment patterns — `align:black`,
+ * `align:white:<level>`, `align:<x|y>:<bit>:<0|1 inverse>:<block px>:<level>` (level 0–255).
+ */
+export type TestPattern = "none" | "identify" | "grid" | "checker" | "white" | "black" | "colors" | "outlines" | `align:${string}`;
 
 export interface OutputConfig {
   readonly venueId: string;
   readonly projectorId: string;
   readonly displayId: number;
   readonly pattern: TestPattern;
+}
+
+/** The phone camera used for camera-assisted alignment (main/phone.ts). */
+export interface PhoneStatus {
+  /** The page is being served (the QR code works). */
+  readonly running: boolean;
+  /** The page's address, with its private token. */
+  readonly url: string | null;
+  readonly connected: boolean;
+  /** e.g. "Android, Chrome". */
+  readonly device: string | null;
+  readonly camera: { readonly width: number; readonly height: number; readonly facing: string | null } | null;
+  readonly orientation: "landscape" | "portrait" | null;
+  /** Whether the phone could hold its exposure, focus and white balance during the alignment. */
+  readonly controls: { readonly exposure?: string; readonly focus?: string; readonly whiteBalance?: string } | null;
+  readonly wakeLock: "on" | "off" | "unsupported" | null;
+  readonly lastSeen: number | null;
+  readonly lastFrame: { readonly width: number; readonly height: number; readonly at: number } | null;
+  /** What's wrong, in plain words (camera refused, disconnected, …). */
+  readonly message: string | null;
+}
+
+export interface PhoneCapture {
+  readonly id: string;
+  /** Saved copy (for the external-agent API). */
+  readonly path: string;
+  readonly jpeg: Uint8Array;
+  readonly width: number;
+  readonly height: number;
+  readonly at: number;
 }
 
 export interface OutputStatus {
@@ -307,6 +342,8 @@ export interface OutputStatus {
   readonly waiting?: boolean;
   /** What the output last showed (it reports a few times a second). */
   readonly showing?: OutputShowing;
+  /** The pattern it last finished drawing, and when (ms since epoch). */
+  readonly patternShown?: { readonly pattern: TestPattern; readonly at: number };
 }
 
 export interface SyncHello {
@@ -469,6 +506,18 @@ export interface BeApi {
     chooseBlend(): Promise<string | null>;
     onProgress(handler: (p: { jobId: string; stage: string; done: number; total: number }) => void): () => void;
   };
+  readonly phone: {
+    /** Serve the phone page; returns its status and a QR code (SVG) for its address. */
+    start(): Promise<{ status: PhoneStatus; qrSvg: string }>;
+    stop(): Promise<void>;
+    status(): Promise<PhoneStatus>;
+    /** A full-size camera frame taken at least `settleMs` after asking. */
+    capture(o?: { settleMs?: number; quality?: number }): Promise<PhoneCapture>;
+    /** Hold (or release) exposure, focus and white balance, where the phone's browser allows. */
+    lock(on: boolean): Promise<void>;
+    onStatus(cb: (s: PhoneStatus) => void): () => void;
+    onPreview(cb: (f: { jpeg: Uint8Array; width: number; height: number; at: number }) => void): () => void;
+  };
   readonly displays: {
     list(): Promise<DisplayInfo[]>;
     identify(): Promise<void>;
@@ -483,6 +532,8 @@ export interface BeApi {
     setOutputPattern(projectorId: string, pattern: TestPattern): Promise<void>;
     /** Output windows: report the frame now showing (for sync and health checks). */
     reportOutputFrame(info: Omit<OutputShowing, "at">): void;
+    /** The output finished drawing a pattern (alignment capture waits for it). */
+    reportOutputPattern(pattern: TestPattern): void;
     outputs(): Promise<OutputStatus[]>;
     onWindowsChanged(cb: (s: { preview: boolean; previewOnProjector?: boolean; outputs: OutputStatus[] }) => void): () => void;
   };

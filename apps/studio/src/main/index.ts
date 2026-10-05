@@ -21,6 +21,7 @@ import { registerBlender, shutdownBlender } from "./blender.ts";
 import { registerAssistantIpc, shutdownAssistant } from "./assistant.ts";
 import { registerRenderQueue, rendersBusy, shutdownRenders, whenRendersIdle } from "./renderQueue.ts";
 import { registerDriveIpc } from "./drive.ts";
+import { registerPhoneIpc } from "./phone.ts";
 import { initLog, log } from "./log.ts";
 import { stopAll, track } from "./processes.ts";
 import { runUiTest } from "./uitest.ts";
@@ -112,6 +113,7 @@ registerWindowIpc(mode);
 registerRenderQueue(mode);
 registerDriveIpc();
 registerAssistantIpc(mode);
+registerPhoneIpc();
 
 ipcMain.handle("app:paths", () => paths());
 ipcMain.handle("app:health", () => health());

@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { DisplayInfo, OutputStatus, TestPattern } from "../../../shared/api.ts";
+import { openAlign } from "./align/alignSession.ts";
 import { useStudio } from "./store.ts";
 
 const PATTERNS: Array<{ id: TestPattern; label: string; hint: string }> = [
@@ -91,6 +92,9 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
       <div className="row gap wrap">
         <button className="ghost small-btn" onClick={() => void window.be.displays.identify()} title="Shows a big number on every connected display for a few seconds">
           Identify displays
+        </button>
+        <button className="primary" onClick={() => void openAlign(venueId, projectorId).catch(() => {})} title="Align this projector to the house with your phone's camera">
+          Auto-align with phone
         </button>
         {!open ? (
           <button className="primary" onClick={() => void openOutput("none")} disabled={displayId === null}>

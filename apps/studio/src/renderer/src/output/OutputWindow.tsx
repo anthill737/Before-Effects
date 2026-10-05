@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import "../studio/styles.css";
+import { flattenPath, mapContentToOutput, mat3Invert, solveHomography, stripeLit, type Projector, type Vec2, type Venue } from "@be/core";
 import type { OutputConfig, TestPattern } from "../../../shared/api.ts";
 import { PreviewLoop, usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
@@ -20,12 +21,91 @@ import { onSimFrame } from "../studio/simHost.ts";
 const OUTPUT_CACHE_MB = 2048;
 let reportTimer = 0;
 
-const drawPattern = (c: HTMLCanvasElement, pattern: TestPattern, label: string, w: number, h: number) => {
+/** Camera-alignment patterns: flat black / grey, or Gray-code stripes (see core autoAlign.ts). */
+const drawAlign = (g: CanvasRenderingContext2D, pattern: string, w: number, h: number) => {
+  const parts = pattern.split(":");
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, w, h);
+  if (parts[1] === "black") return;
+  const level = Math.max(0, Math.min(255, Number(parts.at(-1)) || 200));
+  g.fillStyle = `rgb(${level},${level},${level})`;
+  if (parts[1] === "white") {
+    g.fillRect(0, 0, w, h);
+    return;
+  }
+  const axis = parts[1] === "y" ? "y" : "x";
+  const p = { axis, bit: Number(parts[2]), inverse: parts[3] === "1" } as const;
+  const block = Number(parts[4]) || 4;
+  const n = axis === "x" ? w : h;
+  // Runs of lit columns (or rows), drawn as rectangles.
+  let start = -1;
+  for (let i = 0; i <= n; i++) {
+    const lit = i < n && stripeLit(p, axis === "x" ? i : 0, axis === "y" ? i : 0, block);
+    if (lit && start < 0) start = i;
+    else if (!lit && start >= 0) {
+      if (axis === "x") g.fillRect(start, 0, i - start, h);
+      else g.fillRect(0, start, w, i - start);
+      start = -1;
+    }
+  }
+};
+
+/** The house areas drawn through the projector's current alignment, to check it on the building. */
+const drawOutlines = (g: CanvasRenderingContext2D, venue: Venue, projector: Projector, w: number, h: number) => {
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, w, h);
+  const cal = projector.calibration;
+  const H = solveHomography(
+    cal.points.map((x) => x.content),
+    cal.points.map((x) => x.output),
+  );
+  if (!H || !mat3Invert(H)) return;
+  const mesh = cal.mode === "mesh" ? cal.mesh : undefined;
+  const sx = w / projector.output.width;
+  const sy = h / projector.output.height;
+  const toOut = (q: Vec2): Vec2 => {
+    const p = mapContentToOutput(H, mesh, projector.output.width, projector.output.height, q);
+    return [p[0] * sx, p[1] * sy];
+  };
+  g.lineWidth = Math.max(2, Math.round(w / 640));
+  g.lineJoin = "round";
+  g.font = `600 ${Math.round(h * 0.022)}px Segoe UI, sans-serif`;
+  g.textAlign = "center";
+  for (const r of Object.values(venue.regions)) {
+    const pts = flattenPath(r.path, 8);
+    if (pts.length < 2) continue;
+    // Densify, so the curve follows the alignment grid between the outline's corners.
+    const dense: Vec2[] = [];
+    const ring = r.path.closed ? [...pts, pts[0]!] : pts;
+    for (let i = 0; i + 1 < ring.length; i++) {
+      const a = ring[i]!, b = ring[i + 1]!;
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 6));
+      for (let k = 0; k < steps; k++) dense.push([a[0] + ((b[0] - a[0]) * k) / steps, a[1] + ((b[1] - a[1]) * k) / steps]);
+    }
+    dense.push(ring.at(-1)!);
+    g.strokeStyle = "#7fd4ff";
+    g.beginPath();
+    dense.map(toOut).forEach((p, i) => (i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])));
+    g.stroke();
+    const cx = pts.reduce((t, p) => t + p[0], 0) / pts.length;
+    const cy = pts.reduce((t, p) => t + p[1], 0) / pts.length;
+    const c = toOut([cx, cy]);
+    g.fillStyle = "#ffffff";
+    g.fillText(r.name, c[0], c[1]);
+  }
+};
+
+const drawPattern = (c: HTMLCanvasElement, pattern: TestPattern, label: string, w: number, h: number, place?: { venue: Venue; projector: Projector }) => {
   c.width = w;
   c.height = h;
   const g = c.getContext("2d")!;
   g.clearRect(0, 0, w, h);
   if (pattern === "none") return;
+  if (pattern.startsWith("align:")) return drawAlign(g, pattern, w, h);
+  if (pattern === "outlines") {
+    if (place) drawOutlines(g, place.venue, place.projector, w, h);
+    return;
+  }
   if (pattern === "black") {
     g.fillStyle = "#000";
     g.fillRect(0, 0, w, h);
@@ -190,8 +270,18 @@ export const OutputWindow = () => {
 
   useEffect(() => {
     if (!patternRef.current || !projector || !config) return;
-    drawPattern(patternRef.current, config.pattern, `${projector.name.replace(/^Projector\s*/i, "") || "1"} ${projector.name}`, projector.output.width, projector.output.height);
-  }, [config, projector?.output.width, projector?.output.height, projector?.name]);
+    drawPattern(patternRef.current, config.pattern, `${projector.name.replace(/^Projector\s*/i, "") || "1"} ${projector.name}`, projector.output.width, projector.output.height, venue ? { venue, projector } : undefined);
+    // Reported once it's on screen (two frames later), so alignment capture knows the projector shows it.
+    const pattern = config.pattern;
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => window.be.windows.reportOutputPattern(pattern));
+    });
+    return () => {
+      cancelAnimationFrame(r1);
+      cancelAnimationFrame(r2);
+    };
+  }, [config, projector?.output.width, projector?.output.height, projector?.name, config?.pattern === "outlines" ? projector?.calibration : null, config?.pattern === "outlines" ? venue?.regions : null]);
 
   return (
     <div className={`output-window ${cursorShown ? "" : "cursor-hidden"}`}>

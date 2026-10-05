@@ -714,7 +714,7 @@ export class PreviewLoop {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
     const pid = this.fixed?.projectorId ?? currentProjector(project.venues[comp.venueId ?? project.activeVenueId ?? ""])?.id;
-    this.renderer.present(target, project, compId, content, { view, reference: this.reference, orbit: s.orbit, ambient: s.ambient, time: this.source.time(), ...(pid ? { projectorId: pid } : {}) });
+    this.renderer.present(target, withLivePin(project), compId, content, { view, reference: this.reference, orbit: s.orbit, ambient: s.ambient, showGrid: view === "projector" && s.overlays.grid && !this.fixed, time: this.source.time(), ...(pid ? { projectorId: pid } : {}) });
     this.renderer.gpu.release(content);
     const px = await this.renderer.readTexture(target);
     target.destroy();

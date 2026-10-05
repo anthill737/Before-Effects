@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { AutoAlign } from "./align/AutoAlign.tsx";
 import "./styles.css";
 import { editorSource, PreviewPanel } from "../preview/PreviewPanel.tsx";
 import { usePreview } from "../preview/settings.ts";
@@ -217,6 +218,7 @@ export const App = () => {
       <ExportDialog />
       <AeImportDialog />
       <DropChooser />
+      <AutoAlign />
       <Toasts />
     </div>
   );

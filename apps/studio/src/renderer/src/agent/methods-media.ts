@@ -787,6 +787,7 @@ method({
     videoCacheGB: z.number().min(0.25).optional().describe("graphics memory for decoded video frames"),
     diskCache: z.boolean().optional().describe("also keep finished frames on disk"),
     diskCacheGB: z.number().min(1).optional(),
+    overlays: z.object({ outlines: z.boolean(), selection: z.boolean(), guides: z.boolean(), grid: z.boolean() }).partial().optional().describe("what's drawn over the preview; grid: the content grid through the projector alignment (projector view)"),
     diskCacheFolder: z.string().nullable().optional().describe("a folder for preview frames, or null for the data folder's Cache\\preview"),
   }),
   run: (p) => {
@@ -803,6 +804,7 @@ method({
       ...(p.diskCache !== undefined ? { diskCache: p.diskCache } : {}),
       ...(p.diskCacheGB !== undefined ? { diskCacheGB: p.diskCacheGB } : {}),
       ...(p.diskCacheFolder !== undefined ? { diskCacheFolder: p.diskCacheFolder } : {}),
+      ...(p.overlays ? { overlays: { ...s.overlays, ...p.overlays } } : {}),
     });
     const n = usePreview.getState();
     return { view: n.view, resolution: n.resolution, orbit: n.orbit, playbackMode: n.playbackMode, frameCacheGB: n.cacheBudgetMB / 1024, videoCacheGB: n.videoCacheMB / 1024, diskCache: n.diskCache, diskCacheGB: n.diskCacheGB, diskCacheFolder: n.diskCacheFolder };

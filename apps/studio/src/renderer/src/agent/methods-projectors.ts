@@ -67,7 +67,7 @@ method({
 
 method({
   name: "projectors.update",
-  summary: "Rename a projector, change its output size, or its output correction: gamma (1 = as is), gain [r,g,b] (1 = as is), blackLevel (0..0.5).",
+  summary: "Rename a projector, change its output size, the display its output goes to (displayId from displays.list), or its output correction: gamma (1 = as is), gain [r,g,b] (1 = as is), blackLevel (0..0.5).",
   params: z.object({
     projector: z.string(),
     name: z.string().optional(),
@@ -76,6 +76,7 @@ method({
     gamma: z.number().min(0.2).max(5).optional(),
     gain: z.tuple([z.number(), z.number(), z.number()]).optional(),
     blackLevel: z.number().min(0).max(0.5).optional(),
+    displayId: z.number().int().optional(),
   }),
   mutates: true,
   run: (p, ctx) => {
@@ -83,7 +84,8 @@ method({
     const pr = projectorRef(p.projector);
     const changes: Record<string, unknown> = {};
     if (p.name) changes.name = p.name;
-    if (p.width || p.height) changes.output = { ...pr.output, width: p.width ?? pr.output.width, height: p.height ?? pr.output.height };
+    if (p.width || p.height || p.displayId !== undefined)
+      changes.output = { ...pr.output, width: p.width ?? pr.output.width, height: p.height ?? pr.output.height, ...(p.displayId !== undefined ? { displayId: String(p.displayId) } : {}) };
     if (p.gamma !== undefined || p.gain || p.blackLevel !== undefined) changes.outputColor = { gamma: p.gamma ?? pr.outputColor.gamma, gain: p.gain ? [...p.gain, 1] : pr.outputColor.gain, blackLevel: p.blackLevel ?? pr.outputColor.blackLevel };
     ctx.edit(() => st().apply({ type: "projector.update", args: { venueId: v.id, projectorId: pr.id, changes } }, { label: `Change ${pr.name}` }));
     return { projector: info(venueNow().projectors[pr.id]!), revision: currentRevision() };

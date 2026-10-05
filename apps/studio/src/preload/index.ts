@@ -103,6 +103,15 @@ const api: BeApi = {
     chooseBlend: () => ipcRenderer.invoke("blender:chooseBlend"),
     onProgress: (handler) => on("blender:progress", handler),
   },
+  phone: {
+    start: () => ipcRenderer.invoke("phone:start"),
+    stop: () => ipcRenderer.invoke("phone:stop"),
+    status: () => ipcRenderer.invoke("phone:status"),
+    capture: (o) => ipcRenderer.invoke("phone:capture", o),
+    lock: (on) => ipcRenderer.invoke("phone:lock", on),
+    onStatus: (cb) => on("phone:status", cb),
+    onPreview: (cb) => on("phone:preview", cb),
+  },
   displays: {
     list: () => ipcRenderer.invoke("displays:list"),
     identify: () => ipcRenderer.invoke("displays:identify"),
@@ -115,6 +124,7 @@ const api: BeApi = {
     closeOutput: (projectorId) => ipcRenderer.invoke("windows:closeOutput", projectorId),
     setOutputPattern: (projectorId, pattern) => ipcRenderer.invoke("windows:setOutputPattern", projectorId, pattern),
     reportOutputFrame: (info) => ipcRenderer.send("output:frame", info),
+    reportOutputPattern: (pattern) => ipcRenderer.send("output:pattern", pattern),
     outputs: () => ipcRenderer.invoke("windows:outputs"),
     onWindowsChanged: (cb) => on("windows:changed", cb),
   },

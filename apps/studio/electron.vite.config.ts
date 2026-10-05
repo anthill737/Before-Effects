@@ -3,7 +3,9 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
 
 // Workspace packages ship TypeScript sources, so they are bundled rather than externalised.
-const bundled = ["@be/core", "@be/engine", "@be/media", "libheif-js"];
+// The phone connection's certificate and QR code libraries are plain JavaScript: bundled too, so the
+// packaged app needs nothing extra installed.
+const bundled = ["@be/core", "@be/engine", "@be/media", "libheif-js", "selfsigned", "qrcode"];
 
 export default defineConfig({
   main: {

@@ -496,12 +496,20 @@ struct U {
   blend: vec4f,                    // x: other projectors (0 = no blending), y: curve
   others: array<mat3x3f, 7>,       // content px -> each other projector's output px
   otherSizes: array<vec4f, 7>,     // their output sizes (xy)
+  mesh: vec4f,                     // residual grid: columns, rows, on (1) / off (0)
 };
 @group(0) @binding(0) var content: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var<uniform> u: U;
 @group(0) @binding(3) var outMask: texture_2d<f32>;
 @group(0) @binding(4) var keepOff: texture_2d<f32>;   // content-space "keep light off here" areas
+@group(0) @binding(5) var meshTex: texture_2d<f32>;   // residual grid over the output: content-px offsets (xy)
+// Camera-measured alignment: the offset from the homography at this output pixel (bilinear between grid points).
+fn meshOffset(op: vec2f) -> vec2f {
+  if (u.mesh.z < 0.5) { return vec2f(0.0); }
+  let g = clamp(op / u.outputSize * (u.mesh.xy - 1.0), vec2f(0.0), u.mesh.xy - 1.0);
+  return textureSampleLevel(meshTex, samp, (g + 0.5) / u.mesh.xy, 0.0).xy;
+}
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
 // How far inside a projector's frame a point is (0 at the edge): side and top/bottom distances multiplied.
 fn edgeDist(p: vec2f, size: vec2f) -> f32 {
@@ -512,7 +520,7 @@ fn shaped(e: f32) -> f32 { return select(0.0, pow(e, max(u.blend.y, 0.25)), e > 
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let op = i.uv * u.outputSize;
   let h = u.hinv * vec3f(op, 1.0);
-  let cp = h.xy / h.z;
+  let cp = h.xy / h.z + meshOffset(op);
   var c = vec4f(0.0);
   if (h.z > 0.0 && all(cp >= vec2f(0.0)) && all(cp <= u.contentSize)) {
     c = textureSampleLevel(content, samp, cp / u.contentSize, 0.0);

@@ -82,8 +82,8 @@ export const renderProjectorOutput = (
   });
   const hom = projectorHomography(projector);
   const hinv = hom?.hinv ?? Float64Array.from([1, 0, 0, 0, 1, 0, 0, 0, 1]);
-  // 96 bytes of warp and correction, then the blend: vec4 + 7 mat3x3 (48 bytes each) + 7 vec4.
-  const u = new ArrayBuffer(96 + 16 + 7 * 48 + 7 * 16);
+  // 96 bytes of warp and correction, then the blend: vec4 + 7 mat3x3 (48 bytes each) + 7 vec4; then the residual grid's size.
+  const u = new ArrayBuffer(96 + 16 + 7 * 48 + 7 * 16 + 16);
   const f = new Float32Array(u);
   // mat3x3f: three vec3 columns, each padded to 16 bytes.
   for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) f[c * 4 + r] = hinv[c * 3 + r]!;
@@ -99,6 +99,10 @@ export const renderProjectorOutput = (
     for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) f[28 + k * 12 + c * 4 + r] = x.h[c * 3 + r]!;
     f.set([x.size.width, x.size.height, 0, 0], 28 + 7 * 12 + k * 4);
   });
+  // The camera-measured residual grid (alignment "mesh"), when there is one.
+  const mesh = projector.calibration.mode === "mesh" ? projector.calibration.mesh : undefined;
+  const meshTex = mesh && mesh.cols >= 2 && mesh.rows >= 2 && mesh.offsets.length === mesh.cols * mesh.rows ? meshTexture(gpu, mesh) : null;
+  f.set([meshTex ? mesh!.cols : 1, meshTex ? mesh!.rows : 1, meshTex ? 1 : 0, 0], 140);
   // Output masks are areas (in projector pixels) where light is blocked; none = nothing blocked.
   let mask: GPUTexture;
   if (projector.outputMasks.length) {
@@ -111,8 +115,52 @@ export const renderProjectorOutput = (
     const k = Math.min(1, 2048 / Math.max(contentSize.width, contentSize.height));
     keepOff = raster.mask(o.keepOff, 0, { x: 0, y: 0, w: contentSize.width, h: contentSize.height, scale: k }, "keepoff");
   }
-  gpu.pass(encoder, OUTPUT_WARP, out, [content.createView(), gpu.samplerLinear, { buffer: gpu.uniform(u) }, mask.createView(), keepOff.createView()]);
+  gpu.pass(encoder, OUTPUT_WARP, out, [content.createView(), gpu.samplerLinear, { buffer: gpu.uniform(u) }, mask.createView(), keepOff.createView(), (meshTex ?? halfZero(gpu)).createView()]);
   return out;
+};
+
+/** Float → IEEE half (round to nearest). */
+const toHalf = (v: number): number => {
+  const f = new Float32Array([v]);
+  const x = new Uint32Array(f.buffer)[0]!;
+  const sign = (x >>> 16) & 0x8000;
+  let e = ((x >>> 23) & 0xff) - 127 + 15;
+  let m = x & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  m += 0x1000;
+  if (m & 0x800000) {
+    m = 0;
+    e++;
+    if (e >= 31) return sign | 0x7c00;
+  }
+  return sign | (e << 10) | (m >> 13);
+};
+
+/** The residual grid as a texture (half floats: offsets are small, so ~0.03 px precision), one per grid. */
+const meshTextures = new WeakMap<object, { device: GPUDevice; tex: GPUTexture }>();
+const meshTexture = (gpu: Gpu, mesh: NonNullable<Projector["calibration"]["mesh"]>): GPUTexture => {
+  const hit = meshTextures.get(mesh.offsets);
+  if (hit && hit.device === gpu.device) return hit.tex;
+  const tex = gpu.device.createTexture({ label: "alignment-grid", size: [mesh.cols, mesh.rows], format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  const data = new Uint16Array(mesh.cols * mesh.rows * 4);
+  mesh.offsets.forEach((o, i) => {
+    data[i * 4] = toHalf(o[0]);
+    data[i * 4 + 1] = toHalf(o[1]);
+  });
+  gpu.device.queue.writeTexture({ texture: tex }, data, { bytesPerRow: mesh.cols * 8 }, [mesh.cols, mesh.rows]);
+  meshTextures.set(mesh.offsets, { device: gpu.device, tex });
+  return tex;
+};
+const halfZeroByDevice = new WeakMap<GPUDevice, GPUTexture>();
+const halfZero = (gpu: Gpu): GPUTexture => {
+  let t = halfZeroByDevice.get(gpu.device);
+  if (!t) {
+    t = gpu.device.createTexture({ size: [1, 1], format: "rgba16float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    gpu.device.queue.writeTexture({ texture: t }, new Uint16Array(4), { bytesPerRow: 8 }, [1, 1]);
+    halfZeroByDevice.set(gpu.device, t);
+  }
+  return t;
 };
 
 const blackByDevice = new WeakMap<GPUDevice, GPUTexture>();

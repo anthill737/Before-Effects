@@ -12,7 +12,7 @@ let editor: BrowserWindow | null = null;
 let preview: BrowserWindow | null = null;
 /** The preview is full-screen on a projector (not a window of its own on the desktop). */
 let previewOnProjector = false;
-const outputs = new Map<string, { win: BrowserWindow; config: OutputConfig; showing?: { frame: number; fps: number; at: number } }>();
+const outputs = new Map<string, { win: BrowserWindow; config: OutputConfig; showing?: { frame: number; fps: number; at: number }; patternShown?: { pattern: TestPattern; at: number } }>();
 /** Outputs whose display was disconnected, by projector: reopened when a matching display returns. */
 const waiting = new Map<string, { config: OutputConfig; label: string; size: { width: number; height: number } }>();
 let latestProject: unknown = null;
@@ -97,7 +97,7 @@ const broadcastWindows = () => {
 const outputStatus = (): OutputStatus[] => [
   ...[...outputs.entries()].map(([projectorId, o]) => {
     const d = displayInfo().find((x) => x.id === o.config.displayId);
-    return { projectorId, displayId: o.config.displayId, displayLabel: d?.label ?? "Display", displayPixels: d?.pixels ?? { width: 0, height: 0 }, open: !o.win.isDestroyed(), ...(o.showing ? { showing: o.showing } : {}) };
+    return { projectorId, displayId: o.config.displayId, displayLabel: d?.label ?? "Display", displayPixels: d?.pixels ?? { width: 0, height: 0 }, open: !o.win.isDestroyed(), ...(o.showing ? { showing: o.showing } : {}), ...(o.patternShown ? { patternShown: o.patternShown } : {}) };
   }),
   ...[...waiting.entries()].filter(([id]) => !outputs.has(id)).map(([projectorId, w]) => ({ projectorId, displayId: w.config.displayId, displayLabel: w.label, displayPixels: w.size, open: false, waiting: true })),
 ];
@@ -206,6 +206,9 @@ export const registerWindowIpc = (mode: string) => {
   ipcMain.on("output:frame", (e, info: Omit<OutputShowing, "at">) => {
     for (const o of outputs.values()) if (!o.win.isDestroyed() && o.win.webContents.id === e.sender.id) o.showing = { ...info, at: Date.now() };
   });
+  ipcMain.on("output:pattern", (e, pattern: TestPattern) => {
+    for (const o of outputs.values()) if (!o.win.isDestroyed() && o.win.webContents.id === e.sender.id) o.patternShown = { pattern, at: Date.now() };
+  });
 
   // A projector's display unplugged: its output waits and reopens when the display comes back
   // (matched by id, else by name and size, since Windows may renumber it).
@@ -234,21 +237,22 @@ export const registerWindowIpc = (mode: string) => {
     waiting.delete(config.projectorId);
     const d = findDisplay(config.displayId);
     const existing = outputs.get(config.projectorId);
+    // Automated tests: a small window in the corner instead of taking over a screen (the picture
+    // is still drawn at the projector's full size).
+    const windowed = !!process.env.BE_TEST_OUTPUT_WINDOWED;
+    const bounds = windowed ? { x: d.workArea.x + d.workArea.width - 336, y: d.workArea.y + d.workArea.height - 196, width: 320, height: 180 } : d.bounds;
     if (existing && !existing.win.isDestroyed()) {
       existing.config = config;
-      existing.win.setBounds(d.bounds);
-      existing.win.setFullScreen(true);
+      existing.win.setBounds(bounds);
+      if (!windowed) existing.win.setFullScreen(true);
       existing.win.webContents.send("sync:outputConfig", config);
       broadcastWindows();
       return outputStatus().find((o) => o.projectorId === config.projectorId);
     }
     const win = new BrowserWindow({
-      x: d.bounds.x,
-      y: d.bounds.y,
-      width: d.bounds.width,
-      height: d.bounds.height,
+      ...bounds,
       frame: false,
-      fullscreen: true,
+      fullscreen: !windowed,
       backgroundColor: "#000000",
       autoHideMenuBar: true,
       title: "Before Effects — Projector output",
