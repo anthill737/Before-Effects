@@ -343,9 +343,12 @@ progress { width: 100%; height: 12px; accent-color: var(--accent); }
 
 /* ---- Pop-out, projector output, identify ------------------------------------------------ */
 .popout { height: 100vh; display: flex; flex-direction: column; }
+/* The preview full-screen on a projector: the picture on black, nothing else. */
+.popout.clean, .preview-panel.clean { background: #000; }
+.preview-panel.clean .canvas-stage { box-shadow: none; border-radius: 0; }
 .window-wait { display: grid; place-items: center; height: 100vh; color: var(--muted); }
 .output-window { position: fixed; inset: 0; background: #000; overflow: hidden; }
-.output-window.cursor-hidden { cursor: none; }
+.output-window.cursor-hidden, .popout.cursor-hidden, .popout.cursor-hidden * { cursor: none !important; }
 .output-canvas { position: absolute; inset: 0; width: 100vw; height: 100vh; display: block; }
 .output-canvas.pattern { z-index: 2; }
 .output-status { position: absolute; inset: 0; display: grid; place-items: center; color: #666; font-size: 14px; }

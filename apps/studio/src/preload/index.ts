@@ -108,7 +108,7 @@ const api: BeApi = {
     identify: () => ipcRenderer.invoke("displays:identify"),
   },
   windows: {
-    openPreview: (displayId) => ipcRenderer.invoke("windows:openPreview", displayId),
+    openPreview: (displayId, onProjector) => ipcRenderer.invoke("windows:openPreview", displayId, onProjector),
     closePreview: () => ipcRenderer.invoke("windows:closePreview"),
     setPreviewView: (view) => ipcRenderer.send("windows:previewView", view),
     openOutput: (config) => ipcRenderer.invoke("windows:openOutput", config),
@@ -176,3 +176,5 @@ const api: BeApi = {
 contextBridge.exposeInMainWorld("be", api);
 // Display number for identification overlays.
 contextBridge.exposeInMainWorld("beDisplayNumber", Number(arg("be-display") ?? 0));
+// The preview full-screen on a projector: the picture only, no controls.
+contextBridge.exposeInMainWorld("beClean", arg("be-clean") === "1");

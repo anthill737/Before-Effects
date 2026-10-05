@@ -67,6 +67,7 @@ export const setAppMenu = () => {
         cmd("Show or hide the right panel", "toggle-right", "Ctrl+]"),
         cmd("Enlarge the preview", "enlarge", "`", true),
         cmd("Preview full screen", "fullscreen", "F11"),
+        cmd("Preview on the projector (on / off)", "preview-projector", "Ctrl+P"),
         sep,
         {
           label: "Preview size",

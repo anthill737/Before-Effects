@@ -10,6 +10,8 @@ import { log } from "./log.ts";
 
 let editor: BrowserWindow | null = null;
 let preview: BrowserWindow | null = null;
+/** The preview is full-screen on a projector (not a window of its own on the desktop). */
+let previewOnProjector = false;
 const outputs = new Map<string, { win: BrowserWindow; config: OutputConfig; showing?: { frame: number; fps: number; at: number } }>();
 /** Outputs whose display was disconnected, by projector: reopened when a matching display returns. */
 const waiting = new Map<string, { config: OutputConfig; label: string; size: { width: number; height: number } }>();
@@ -89,7 +91,7 @@ export const createEditor = (mode: "studio" | "spike" | "uitest"): BrowserWindow
 export const editorWindow = () => editor;
 
 const broadcastWindows = () => {
-  editor?.webContents.send("windows:changed", { preview: !!preview, outputs: outputStatus() });
+  editor?.webContents.send("windows:changed", { preview: !!preview, previewOnProjector: !!preview && previewOnProjector, outputs: outputStatus() });
 };
 
 const outputStatus = (): OutputStatus[] => [
@@ -125,9 +127,48 @@ export const registerWindowIpc = (mode: string) => {
     setTimeout(() => wins.forEach((w) => !w.isDestroyed() && w.close()), 4000);
   });
 
-  ipcMain.handle("windows:openPreview", (_e, displayId?: number) => {
+  ipcMain.handle("windows:openPreview", (_e, displayId?: number, onProjector = false) => {
     if (preview && !preview.isDestroyed()) {
-      preview.focus();
+      if (!onProjector && !previewOnProjector) {
+        preview.focus();
+        return;
+      }
+      // Moving the preview to (or between, or off) a projector: open it afresh there.
+      preview.removeAllListeners("closed");
+      preview.close();
+      preview = null;
+    }
+    previewOnProjector = onProjector;
+    if (onProjector) {
+      // The preview panel itself, full-screen on the projector: just the picture and what you're
+      // doing to it (outlines, selection), following the editor. Editing stays on the laptop.
+      const d = findDisplay(displayId ?? screen.getPrimaryDisplay().id);
+      const win = new BrowserWindow({
+        x: d.bounds.x,
+        y: d.bounds.y,
+        width: d.bounds.width,
+        height: d.bounds.height,
+        frame: false,
+        fullscreen: true,
+        backgroundColor: "#000000",
+        title: "Before Effects — Preview on the projector",
+        webPreferences: webPrefs("preview", mode, { additionalArguments: ["--be-kind=preview", `--be-mode=${mode}`, "--be-clean=1"] }),
+      });
+      win.removeMenu();
+      // Clicking it (pointing at the house) hands the keyboard straight back to the editor when
+      // it's on another screen; on the only screen it keeps focus, so Esc closes it.
+      win.on("focus", () => {
+        const ed = editorWindow();
+        if (ed && !ed.isDestroyed() && screen.getDisplayMatching(ed.getBounds()).id !== d.id) ed.focus();
+      });
+      load(win, "preview", mode);
+      preview = win;
+      win.on("closed", () => {
+        if (preview === win) preview = null;
+        broadcastWindows();
+      });
+      log(`preview opened on the projector: display ${d.id} (${d.bounds.width}×${d.bounds.height})`);
+      broadcastWindows();
       return;
     }
     const others = screen.getAllDisplays().filter((d) => d.id !== screen.getDisplayMatching(editor?.getBounds() ?? screen.getPrimaryDisplay().bounds).id);
@@ -145,8 +186,9 @@ export const registerWindowIpc = (mode: string) => {
     });
     preview.removeMenu();
     load(preview, "preview", mode);
+    const win = preview;
     preview.on("closed", () => {
-      preview = null;
+      if (preview === win) preview = null;
       broadcastWindows();
     });
     broadcastWindows();

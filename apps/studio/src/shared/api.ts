@@ -474,7 +474,8 @@ export interface BeApi {
     identify(): Promise<void>;
   };
   readonly windows: {
-    openPreview(displayId?: number): Promise<void>;
+    /** `onProjector`: full-screen on that display with only the picture (editing stays in the editor). */
+    openPreview(displayId?: number, onProjector?: boolean): Promise<void>;
     closePreview(): Promise<void>;
     setPreviewView(view: string): void;
     openOutput(config: OutputConfig): Promise<OutputStatus>;
@@ -483,7 +484,7 @@ export interface BeApi {
     /** Output windows: report the frame now showing (for sync and health checks). */
     reportOutputFrame(info: Omit<OutputShowing, "at">): void;
     outputs(): Promise<OutputStatus[]>;
-    onWindowsChanged(cb: (s: { preview: boolean; outputs: OutputStatus[] }) => void): () => void;
+    onWindowsChanged(cb: (s: { preview: boolean; previewOnProjector?: boolean; outputs: OutputStatus[] }) => void): () => void;
   };
   readonly assistant: {
     status(refresh?: boolean): Promise<AssistantProviderStatus[]>;

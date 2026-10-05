@@ -23,7 +23,8 @@ import { previewAudio } from "../studio/audioEngine.ts";
 import { followerClock, followersReady } from "./sync.ts";
 import { getMediaHost, getRenderer, venueReference } from "../studio/engineHost.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
-import { useCurrentProjector } from "../studio/projectors.ts";
+import { currentProjector, useCurrentProjector, useProjectorPick } from "../studio/projectors.ts";
+import { publishMirror } from "./mirror.ts";
 import { PreviewLoop, type PreviewSource, usePreviewStats } from "./loop.ts";
 import { venuePhotoUrl } from "../space/actions.ts";
 import { TracingLayer } from "../space/TracingLayer.tsx";
@@ -52,6 +53,8 @@ export interface PreviewPanelProps {
   readonly source: PreviewSource;
   /** Follower windows get the project and the venue reference from sync. */
   readonly projectOverride?: Project | null;
+  /** Full-screen on a projector: only the picture (and the outlines), no toolbar or transport. */
+  readonly clean?: boolean;
 }
 
 /** While a smoke or water simulation is being prepared, say so (and how far it is). */
@@ -66,7 +69,29 @@ const SimChip = () => {
   );
 };
 
-export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
+let previewOnProjectorNow = false;
+
+/**
+ * Put the preview on the projector (full-screen there, only the picture) while editing stays on this
+ * screen — or take it off again. It goes to the display the current projector was last shown on, else
+ * the biggest screen other than the main one.
+ */
+export const togglePreviewOnProjector = async (): Promise<void> => {
+  if (previewOnProjectorNow) return window.be.windows.closePreview();
+  const displays = await window.be.displays.list();
+  const others = displays.filter((d) => !d.primary);
+  if (!others.length) {
+    useStudio.getState().toast({ kind: "info", text: "Only this screen is connected. Plug in the projector and press Win+P → Extend, then try again." });
+    return;
+  }
+  const s = useStudio.getState();
+  const venue = s.project ? activeVenue({ project: s.project }) : undefined;
+  const saved = venue ? currentProjector(venue, useProjectorPick.getState().id)?.output.displayId : undefined;
+  const target = others.find((d) => String(d.id) === saved) ?? others.sort((a, b) => b.pixels.width * b.pixels.height - a.pixels.width * a.pixels.height)[0]!;
+  await window.be.windows.openPreview(target.id, true);
+};
+
+export const PreviewPanel = ({ role, source, clean = false }: PreviewPanelProps) => {
   const s = usePreview();
   const project = useStudio((st) => st.project);
   const compId = useStudio((st) => st.compId);
@@ -74,6 +99,7 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
   const venue = project ? activeVenue({ project }) : undefined;
   const projector = useCurrentProjector(venue);
   const [poppedOut, setPoppedOut] = useState(false);
+  const [onProjector, setOnProjector] = useState(false);
   const step = useStudio((st) => st.step);
   const photoOpacity = useTrace((t) => t.photoOpacity);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -95,8 +121,19 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
 
   useEffect(() => {
     if (role !== "editor") return;
-    return window.be.windows.onWindowsChanged((w) => setPoppedOut(w.preview));
+    return window.be.windows.onWindowsChanged((w) => {
+      // On a projector the laptop keeps its own preview; a pop-out window on the desktop replaces it.
+      setPoppedOut(w.preview && !w.previewOnProjector);
+      setOnProjector(!!w.previewOnProjector);
+      previewOnProjectorNow = !!w.previewOnProjector;
+    });
   }, [role]);
+
+  // While the preview is also open elsewhere, it follows this one's view, overlays and selection.
+  useEffect(() => {
+    if (role !== "editor" || !(poppedOut || onProjector)) return;
+    return publishMirror();
+  }, [role, poppedOut, onProjector]);
 
   // Create the render loop once per canvas.
   useEffect(() => {
@@ -214,15 +251,16 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
   const dpr = window.devicePixelRatio || 1;
   let stage: { w: number; h: number };
   if (s.view === "3d") stage = { w: Math.max(1, Math.floor(box.w)), h: Math.max(1, Math.floor(box.h)) };
-  else if (s.zoom === "fit") {
-    const w = Math.min(box.w - 16, (box.h - 16) * aspect);
+  else if (s.zoom === "fit" || clean) {
+    const pad = clean ? 0 : 16;
+    const w = Math.min(box.w - pad, (box.h - pad) * aspect);
     stage = { w: Math.max(1, Math.floor(w)), h: Math.max(1, Math.floor(w / aspect)) };
   } else stage = { w: Math.round((out.w * s.zoom) / dpr), h: Math.round((out.h * s.zoom) / dpr) };
 
   return (
-    <div className={`preview-panel ${s.view === "3d" ? "is-3d" : ""}`}>
-      <PreviewToolbar role={role} hasProjector={!!projector} onPopOut={() => void window.be.windows.openPreview()} />
-      <div className={`preview-scroll ${s.zoom !== "fit" && s.view !== "3d" ? "zoomed" : ""}`} ref={wrapRef} onClick={() => role === "editor" && useStudio.getState().selectRegions([])}>
+    <div className={`preview-panel ${s.view === "3d" ? "is-3d" : ""} ${clean ? "clean" : ""}`}>
+      {!clean && <PreviewToolbar role={role} hasProjector={!!projector} onProjector={onProjector} onPopOut={() => void window.be.windows.openPreview()} />}
+      <div className={`preview-scroll ${s.zoom !== "fit" && s.view !== "3d" && !clean ? "zoomed" : ""}`} ref={wrapRef} onClick={() => role === "editor" && useStudio.getState().selectRegions([])}>
         {poppedOut && role === "editor" && (
           <div className="popped-note">
             <p>The preview is open in its own window.</p>
@@ -276,8 +314,8 @@ export const PreviewPanel = ({ role, source }: PreviewPanelProps) => {
           {s.view === "projector" && !projector && <div className="canvas-note">Add a projector in “Areas” to see its output.</div>}
         </div>
       </div>
-      <TransportBar role={role} />
-      <StatusLine />
+      {!clean && <TransportBar role={role} />}
+      {!clean && <StatusLine />}
     </div>
   );
 };
@@ -320,7 +358,7 @@ const OrbitControls = () => {
   );
 };
 
-const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "popout"; hasProjector: boolean; onPopOut: () => void }) => {
+const PreviewToolbar = ({ role, hasProjector, onProjector, onPopOut }: { role: "editor" | "popout"; hasProjector: boolean; onProjector: boolean; onPopOut: () => void }) => {
   const s = usePreview();
   const stats = usePreviewStats();
   const [open, setOpen] = useState<"overlays" | "quality" | "preview" | null>(null);
@@ -422,6 +460,14 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
         <>
           <button className="ghost small-btn" onClick={() => s.set({ maximized: !s.maximized })} title={s.maximized ? "Back to the panels (`)" : "Enlarge the preview — keeps the timeline and controls (`)"} aria-label={s.maximized ? "Restore" : "Enlarge"} aria-pressed={s.maximized}>
             {s.maximized ? "⤡" : "⤢"}
+          </button>
+          <button
+            className={`ghost small-btn ${onProjector ? "on" : ""}`}
+            onClick={() => void togglePreviewOnProjector()}
+            title={onProjector ? "Take the preview off the projector" : "Show this preview full-screen on the projector, and keep editing here"}
+            aria-pressed={onProjector}
+          >
+            {onProjector ? "■ On projector" : "▶ On projector"}
           </button>
           <button className="ghost small-btn" onClick={onPopOut} title="Pop out: the preview in its own window, e.g. on another display" aria-label="Pop out">
             ⧉

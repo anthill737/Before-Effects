@@ -1,5 +1,5 @@
 /** What the menu bar's items do (main/menu.ts sends their commands to the editor window). */
-import { enterFullScreen, togglePlay } from "../preview/PreviewPanel.tsx";
+import { enterFullScreen, togglePlay, togglePreviewOnProjector } from "../preview/PreviewPanel.tsx";
 import { startPreparing, stopPreparing } from "../preview/prepare.ts";
 import { type ResolutionChoice, usePreview } from "../preview/settings.ts";
 import { useAssistant } from "./assistant/state.ts";
@@ -15,7 +15,7 @@ const SHORTCUTS = [
   "Ctrl+S — save · Ctrl+Shift+S — save as · Ctrl+O — open",
   "Ctrl+Z / Ctrl+Y — undo / redo · Ctrl+K — assistant",
   "Ctrl+1–4 — Areas, Content, Effects, Preview · Ctrl+E — export",
-  "Ctrl+[ / Ctrl+] — left / right panel · ` — enlarge the preview · F11 — full screen",
+  "Ctrl+[ / Ctrl+] — left / right panel · ` — enlarge the preview · F11 — full screen · Ctrl+P — preview on the projector",
 ];
 
 const fail = (e: unknown) => useStudio.getState().toast({ kind: "error", text: plainError(e) });
@@ -68,6 +68,8 @@ export const runMenuCommand = (command: string): void => {
       return p.set({ maximized: !p.maximized });
     case "fullscreen":
       return enterFullScreen();
+    case "preview-projector":
+      return void togglePreviewOnProjector().catch(fail);
     case "play":
       return inShow ? togglePlay() : undefined;
     case "start":
