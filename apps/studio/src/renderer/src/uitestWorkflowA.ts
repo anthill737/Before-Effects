@@ -326,7 +326,10 @@ export const WORKFLOW_A_STEPS: Record<string, () => Promise<{ ok: boolean; note?
     };
   },
   "wa-arrange-show": async () => {
-    click(byText(".scenes-bar button", "Show"));
+    // The show is assembled from the + Scene menu (the Show tab only opens one that exists).
+    click(byText(".scenes-bar button", "+ Scene"));
+    await until(() => !!byText(".scene-menu button", "Assemble a show from the scenes"), 2000);
+    click(byText(".scene-menu button", "Assemble a show from the scenes"));
     await until(() => !!document.querySelector(".show-arranger"), 3000);
     const show = currentComp(st())!;
     // 6 s each with a 1 s crossfade.

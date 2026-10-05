@@ -145,7 +145,8 @@ export const VIEWING_STEPS: Record<string, Step> = {
     await until(() => st().compId === show?.id, 2000);
     const opened = st().compId === show?.id;
     const navOnly = steps() === before + 1;
-    // Back as it was.
+    // Back as it was: the scene open, the show undone.
+    pickScene(scene);
     st().undo();
     await until(() => !showComp(), 2000);
     const ok = noTab && item && !!show && made && opened && navOnly && !showComp();
