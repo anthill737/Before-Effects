@@ -103,7 +103,6 @@ export const renderProjectorOutput = (
   let mask: GPUTexture;
   if (projector.outputMasks.length) {
     mask = raster.mask(projector.outputMasks, 0, { x: 0, y: 0, w: projector.output.width, h: projector.output.height, scale: width / projector.output.width }, "outmask");
-    gpu.defer(mask);
   } else {
     mask = blackTexture(gpu);
   }
@@ -111,7 +110,6 @@ export const renderProjectorOutput = (
   if (o.keepOff?.length) {
     const k = Math.min(1, 2048 / Math.max(contentSize.width, contentSize.height));
     keepOff = raster.mask(o.keepOff, 0, { x: 0, y: 0, w: contentSize.width, h: contentSize.height, scale: k }, "keepoff");
-    gpu.defer(keepOff);
   }
   gpu.pass(encoder, OUTPUT_WARP, out, [content.createView(), gpu.samplerLinear, { buffer: gpu.uniform(u) }, mask.createView(), keepOff.createView()]);
   return out;

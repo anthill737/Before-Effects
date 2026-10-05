@@ -90,11 +90,11 @@ export class FrameRenderer {
   }
 
   /** Imported media source (images, video frames). Set by the host app. */
-  setMedia(media: MediaProvider & { prepare?(project: Project, compId: Id, t: Flicks): Promise<void> }): void {
+  setMedia(media: MediaProvider & { prepare?(project: Project, compId: Id, t: Flicks, scale?: number): Promise<void> }): void {
     this.compositor.media = media;
     this.mediaPrepare = media.prepare?.bind(media) ?? null;
   }
-  private mediaPrepare: ((project: Project, compId: Id, t: Flicks) => Promise<void>) | null = null;
+  private mediaPrepare: ((project: Project, compId: Id, t: Flicks, scale?: number) => Promise<void>) | null = null;
 
   /** Smoke and water simulations: prepared frames are kept in `store` (set by the host app). */
   setSimStore(store: SimStore): SimEngine {
@@ -256,13 +256,14 @@ export class FrameRenderer {
 
   /** Render one exact frame to CPU pixels (for encoders and verification). Always full resolution and quality. */
   /**
-   * Wait until everything the frame at t needs is ready: every image and video frame (full size,
-   * which also serves smaller previews), every simulation frame (preparing the simulation first if
-   * needed), and 3D scenes' building photo and prepared physics motion. Exports and preview
-   * preparation call this; live previews may draw before media loads.
+   * Wait until everything the frame at t needs is ready: every image and video frame (at the size
+   * the frame is drawn at: `scale` 1 for exports, which also serves any smaller preview), every
+   * simulation frame (preparing the simulation first if needed), and 3D scenes' building photo and
+   * prepared physics motion. Exports and preview preparation call this; live previews may draw
+   * before media loads.
    */
-  async prepareAt(project: Project, compId: Id, t: Flicks): Promise<void> {
-    if (this.mediaPrepare) await this.mediaPrepare(project, compId, t);
+  async prepareAt(project: Project, compId: Id, t: Flicks, scale = 1): Promise<void> {
+    if (this.mediaPrepare) await this.mediaPrepare(project, compId, t, scale);
     for (const { sim, frame } of this.simsAt(project, compId, t)) {
       if (!this.compositor.sims) throw new Error("Simulations can't be rendered here.");
       await this.compositor.sims.ensure(sim, frame);

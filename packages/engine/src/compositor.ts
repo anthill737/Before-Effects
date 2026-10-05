@@ -191,7 +191,7 @@ export class Compositor {
     readonly gpu: Gpu,
     private readonly external?: ExternalSourceRenderer,
   ) {
-    this.raster = new CoverageRasterizer(gpu.device);
+    this.raster = new CoverageRasterizer(gpu.device, (t) => gpu.defer(t));
     const mk = (rgba: number[]) => {
       const t = gpu.device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       gpu.device.queue.writeTexture({ texture: t }, new Uint8Array(rgba), { bytesPerRow: 4 }, [1, 1]);
@@ -304,7 +304,6 @@ export class Compositor {
       case "solid": {
         const cov = this.raster.fill([rectPath({ x: 0, y: 0, w: s.width, h: s.height })], target, "solid");
         this.colorize(cov, toLinearPremul(s.color), tex, encoder);
-        gpu.defer(cov);
         break;
       }
       case "shape":
@@ -386,14 +385,12 @@ export class Compositor {
     if (sh.fill && sh.fill.opacity > 0 && sh.fill.color[3] > 0) {
       const cov = this.raster.fill(paths, target);
       this.colorize(cov, toLinearPremul(sh.fill.color, sh.fill.opacity), tex, encoder);
-      this.gpu.defer(cov);
     }
     if (sh.stroke && sh.stroke.opacity > 0 && sh.stroke.width > 0) {
       const visible = !sh.trim || Math.abs(sh.trim.end - sh.trim.start) > 1e-6;
       if (visible) {
         const cov = this.raster.stroke(paths, sh.stroke, target, sh.trim);
         this.colorize(cov, toLinearPremul(sh.stroke.color, sh.stroke.opacity), tex, encoder);
-        this.gpu.defer(cov);
       }
     }
   }
@@ -407,7 +404,6 @@ export class Compositor {
       if (m.mode === "none") continue;
       const paths = m.space === "comp" ? m.paths.map((p) => mapPath(p, toLayer)) : m.paths;
       const raw = this.raster.mask(paths, m.expansion, target, "mask");
-      gpu.defer(raw);
       // Feathered coverage comes from the pool; unfeathered coverage is the raster texture itself.
       const cov = m.feather > 0 ? gaussianBlur(gpu, encoder, raw, m.feather * target.scale) : raw;
       const next = gpu.acquire(tex.width, tex.height, "rgba8unorm", "mask-acc");

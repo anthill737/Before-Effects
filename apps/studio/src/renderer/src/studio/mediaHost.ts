@@ -6,7 +6,9 @@
  *               (lighter "proxy" sizes while previewing), cached on the GPU and prefetched ahead.
  *               How much graphics memory they may use is a preview setting ("Video frames").
  *   Exports     call prepare() before each frame. It waits for full-size frames, so the preview
- *               size never lowers export quality.
+ *               size never lowers export quality. Preparing preview frames at a smaller size waits
+ *               for frames at that size (decoding, moving and uploading a full-size frame for a
+ *               Quarter preview was most of the time spent on video), and starts the next few.
  */
 import { evaluateComp, type EvaluatedComp, type Flicks, type Id, type Project } from "@be/core";
 import type { FrameRenderer, MediaProvider } from "@be/engine";
@@ -81,9 +83,8 @@ export class MediaHost implements MediaProvider {
     }
     const srcW = asset.meta.width ?? 1920;
     const w = this.decodeWidth(srcW, maxWidth);
-    const key = `${assetId}|${frame}|${w}`;
-    // A full-size frame (what exports prepare) serves any smaller request, e.g. video drawn into a small area.
-    const e = this.frames.get(key) ?? this.frames.get(`${assetId}|${frame}|${srcW}`);
+    // A frame decoded at least this wide (exports prepare full size) serves the request.
+    const e = this.decoded(assetId, frame, w);
     // Not decoded yet: the renderer marks the frame incomplete (never cached) and redraws when it arrives.
     // Ask for this frame before the ones ahead, so the decoder reads them in order.
     if (!e) void this.loadFrame(assetId, frame, w);
@@ -95,6 +96,21 @@ export class MediaHost implements MediaProvider {
     }
     return null;
   }
+
+  /** A decoded video frame at least `width` wide (the smallest such), or undefined. */
+  private decoded(assetId: string, frame: number, width: number): Entry | undefined {
+    const exact = this.frames.get(`${assetId}|${frame}|${width}`);
+    if (exact) return exact;
+    let best: Entry | undefined;
+    for (const w of this.widths.get(`${assetId}|${frame}`) ?? []) {
+      if (w < width) continue;
+      const e = this.frames.get(`${assetId}|${frame}|${w}`);
+      if (e && (!best || e.tex.width < best.tex.width)) best = e;
+    }
+    return best;
+  }
+  /** Widths each video frame is decoded at (asset|frame → widths). */
+  private widths = new Map<string, Set<number>>();
 
   private store(map: Map<string, Entry>, key: string, tex: GPUTexture) {
     const bytes = tex.width * tex.height * 8;
@@ -113,6 +129,10 @@ export class MediaHost implements MediaProvider {
       this.renderer.gpu.defer(ent.tex);
       this.frames.delete(k);
       this.bytes -= ent.bytes;
+      const i = k.lastIndexOf("|");
+      const ws = this.widths.get(k.slice(0, i));
+      ws?.delete(Number(k.slice(i + 1)));
+      if (ws && !ws.size) this.widths.delete(k.slice(0, i));
     }
   }
 
@@ -152,6 +172,10 @@ export class MediaHost implements MediaProvider {
         const r = await window.be.media.decodeFrame(asset.path, frame, rate.num / rate.den, width, asset.meta.width ?? width, asset.meta.height ?? Math.round((width * 9) / 16));
         if (r) {
           this.store(this.frames, key, this.renderer.importPixels(r));
+          const wk = `${assetId}|${frame}`;
+          const ws = this.widths.get(wk) ?? new Set<number>();
+          ws.add(width);
+          this.widths.set(wk, ws);
           this.notify();
         }
       } catch (e) {
@@ -164,8 +188,12 @@ export class MediaHost implements MediaProvider {
     return p;
   }
 
-  /** Wait until every image and video frame needed at time t is loaded at full size (exports). */
-  async prepare(project: Project, compId: Id, t: Flicks): Promise<void> {
+  /**
+   * Wait until every image and video frame needed at time t is loaded: at full size for exports
+   * (`scale` 1), at the size it's drawn at for a smaller preview. The next few frames start decoding
+   * meanwhile, so preparing frame after frame doesn't wait on each one in turn.
+   */
+  async prepare(project: Project, compId: Id, t: Flicks, scale = 1): Promise<void> {
     this.project = project;
     const comp = project.compositions[compId];
     if (!comp) return;
@@ -184,7 +212,11 @@ export class MediaHost implements MediaProvider {
           if (s.still) {
             if (!this.images.has(s.assetId)) waits.push(this.loadImage(s.assetId, asset.path));
           } else {
-            waits.push(this.loadFrame(s.assetId, s.frame, asset.meta.width ?? 1920));
+            const srcW = asset.meta.width ?? 1920;
+            // The width the compositor will ask for (the layer's pixels at this size); full size for exports.
+            const w = scale >= 1 ? srcW : this.decodeWidth(srcW, Math.ceil(s.width * scale));
+            if (!this.decoded(s.assetId, s.frame, w)) waits.push(this.loadFrame(s.assetId, s.frame, w));
+            for (let k = 1; k <= 4; k++) void this.loadFrame(s.assetId, s.frame + k, w);
           }
         }
       }

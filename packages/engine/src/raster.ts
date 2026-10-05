@@ -95,11 +95,28 @@ export interface TextLayout {
   readonly lineH: number;
 }
 
+/**
+ * Coverage kept on the graphics card for reuse. Masks and shapes are mostly the same from one frame
+ * to the next (a building's areas), and drawing one with Canvas 2D and copying it up costs about a
+ * millisecond whatever the picture size — dozens a frame were most of a preview frame's time. Each is
+ * keyed by exactly what was drawn, how, and where (paths, style, area covered, pixels per unit), so a
+ * changed shape is drawn again and an unchanged one never is. Least recently used go first.
+ */
+const KEEP_BYTES = 512 * 1024 * 1024;
+
 export class CoverageRasterizer {
   private canvas: OffscreenCanvas;
   private ctx: OffscreenCanvasRenderingContext2D;
+  private kept = new Map<string, { tex: GPUTexture; bytes: number }>();
+  private keptBytes = 0;
+  /** Drawn and reused, for diagnostics. */
+  readonly counts = { drawn: 0, reused: 0 };
 
-  constructor(private readonly device: GPUDevice) {
+  /** `discard` frees a kept texture once the graphics card is done with it. */
+  constructor(
+    private readonly device: GPUDevice,
+    private readonly discard: (t: GPUTexture) => void = (t) => t.destroy(),
+  ) {
     this.canvas = new OffscreenCanvas(16, 16);
     const ctx = this.canvas.getContext("2d", { willReadFrequently: false, alpha: true });
     if (!ctx) throw new Error("Canvas 2D is unavailable");
@@ -139,6 +156,44 @@ export class CoverageRasterizer {
     if (path.closed) c.closePath();
   }
 
+  /** The kept coverage for `key`, or draw it (and keep it). Kept textures belong to the rasterizer: never free them. */
+  private reuse(key: string, draw: () => GPUTexture): GPUTexture {
+    const hit = this.kept.get(key);
+    if (hit) {
+      this.kept.delete(key);
+      this.kept.set(key, hit);
+      this.counts.reused++;
+      return hit.tex;
+    }
+    const tex = draw();
+    this.counts.drawn++;
+    const bytes = tex.width * tex.height * 4;
+    this.kept.set(key, { tex, bytes });
+    this.keptBytes += bytes;
+    for (const [k, v] of this.kept) {
+      if (this.keptBytes <= KEEP_BYTES || k === key) break;
+      this.kept.delete(k);
+      this.keptBytes -= v.bytes;
+      this.discard(v.tex);
+    }
+    return tex;
+  }
+
+  /** Free every kept coverage (e.g. when graphics memory is short). */
+  clearKept(): void {
+    for (const v of this.kept.values()) this.discard(v.tex);
+    this.kept.clear();
+    this.keptBytes = 0;
+  }
+
+  get keptMB(): number {
+    return Math.round(this.keptBytes / 1048576);
+  }
+
+  private static key(kind: string, paths: readonly PathData[], extra: unknown, t: RasterTarget): string {
+    return JSON.stringify([kind, t.x, t.y, t.w, t.h, t.scale, extra, paths.map((p) => [p.closed ? 1 : 0, p.vertices.map((v) => [v.p, v.in ?? 0, v.out ?? 0])])]);
+  }
+
   /** Upload the canvas into a fresh r8unorm-ish texture (rgba8 → only .r is read). */
   private upload(label: string): GPUTexture {
     const tex = this.device.createTexture({
@@ -151,7 +206,12 @@ export class CoverageRasterizer {
     return tex;
   }
 
+  /** Fill coverage (kept for reuse: don't free it). */
   fill(paths: readonly PathData[], target: RasterTarget, label = "fill"): GPUTexture {
+    return this.reuse(CoverageRasterizer.key("fill", paths, null, target), () => this.drawFill(paths, target, label));
+  }
+
+  private drawFill(paths: readonly PathData[], target: RasterTarget, label: string): GPUTexture {
     const c = this.begin(target);
     c.beginPath();
     for (const p of paths) this.traceBezier(c, p);
@@ -159,7 +219,12 @@ export class CoverageRasterizer {
     return this.upload(label);
   }
 
+  /** Stroke coverage (kept for reuse: don't free it). */
   stroke(paths: readonly PathData[], style: StrokeStyle, target: RasterTarget, trim?: TrimWindow, label = "stroke"): GPUTexture {
+    return this.reuse(CoverageRasterizer.key("stroke", paths, [style.width, style.cap, style.join, trim ? [trim.start, trim.end, trim.offset] : 0], target), () => this.drawStroke(paths, style, target, trim, label));
+  }
+
+  private drawStroke(paths: readonly PathData[], style: StrokeStyle, target: RasterTarget, trim: TrimWindow | undefined, label: string): GPUTexture {
     const c = this.begin(target);
     c.lineWidth = style.width;
     c.lineCap = style.cap;
@@ -220,8 +285,12 @@ export class CoverageRasterizer {
     return this.upload(label);
   }
 
-  /** Mask coverage with expansion (grow/shrink by stroking) — feather is applied on the GPU. */
+  /** Mask coverage with expansion (grow/shrink by stroking) — feather is applied on the GPU. Kept for reuse: don't free it. */
   mask(paths: readonly PathData[], expansion: number, target: RasterTarget, label = "mask"): GPUTexture {
+    return this.reuse(CoverageRasterizer.key("mask", paths, expansion, target), () => this.drawMask(paths, expansion, target, label));
+  }
+
+  private drawMask(paths: readonly PathData[], expansion: number, target: RasterTarget, label: string): GPUTexture {
     const c = this.begin(target);
     c.beginPath();
     for (const p of paths) this.traceBezier(c, p);
