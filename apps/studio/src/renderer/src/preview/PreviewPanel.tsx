@@ -69,6 +69,28 @@ const SimChip = () => {
   );
 };
 
+/**
+ * The hand tool: hold Space and drag the preview to move around it, as in Adobe's apps (the middle
+ * mouse button drags it too). A tap of Space, with no drag, still plays and pauses.
+ */
+export const handTool = {
+  held: false,
+  used: false,
+  press() {
+    this.held = true;
+    this.used = false;
+    document.body.classList.add("hand-tool");
+  },
+  /** Space let go: true when it was a tap (no drag), so Space plays / pauses. */
+  release(): boolean {
+    const tap = !this.used;
+    this.held = false;
+    this.used = false;
+    document.body.classList.remove("hand-tool");
+    return tap;
+  },
+};
+
 let previewOnProjectorNow = false;
 
 /**
@@ -187,6 +209,71 @@ export const PreviewPanel = ({ role, source, clean = false }: PreviewPanelProps)
     const t = setTimeout(() => loopRef.current?.cache.setBudget(s.cacheBudgetMB * 1024 * 1024), 300);
     return () => clearTimeout(t);
   }, [s.cacheBudgetMB]);
+
+  // The hand tool: Space+drag (or middle-drag) moves around a zoomed-in picture, or pans the 3D view.
+  // It takes the drag before anything in the picture (outlines, handles) sees it.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || clean) return;
+    let drag: { x: number; y: number } | null = null;
+    let swallowClick = false;
+    const stop = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const down = (e: PointerEvent) => {
+      if (!(handTool.held || e.button === 1)) return;
+      stop(e);
+      if (handTool.held) handTool.used = true;
+      drag = { x: e.clientX, y: e.clientY };
+      el.setPointerCapture(e.pointerId);
+      document.body.classList.add("hand-grabbing");
+    };
+    const move = (e: PointerEvent) => {
+      if (!drag) return;
+      stop(e);
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      drag = { x: e.clientX, y: e.clientY };
+      const st = usePreview.getState();
+      if (st.view === "3d") {
+        const o = st.orbit;
+        st.set({ orbit: { ...o, panX: o.panX - dx * 0.002 * o.distance, panY: o.panY + dy * 0.002 * o.distance } });
+      } else {
+        el.scrollLeft -= dx;
+        el.scrollTop -= dy;
+      }
+    };
+    const up = (e: PointerEvent) => {
+      if (!drag) return;
+      stop(e);
+      drag = null;
+      swallowClick = true;
+      setTimeout(() => (swallowClick = false), 0);
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      document.body.classList.remove("hand-grabbing");
+    };
+    const click = (e: MouseEvent) => {
+      if (swallowClick || handTool.held) stop(e);
+    };
+    // No Windows auto-scroll on the middle button.
+    const mouseDown = (e: MouseEvent) => e.button === 1 && e.preventDefault();
+    const opts = { capture: true };
+    el.addEventListener("pointerdown", down, opts);
+    el.addEventListener("pointermove", move, opts);
+    el.addEventListener("pointerup", up, opts);
+    el.addEventListener("pointercancel", up, opts);
+    el.addEventListener("click", click, opts);
+    el.addEventListener("mousedown", mouseDown, opts);
+    return () => {
+      el.removeEventListener("pointerdown", down, opts);
+      el.removeEventListener("pointermove", move, opts);
+      el.removeEventListener("pointerup", up, opts);
+      el.removeEventListener("pointercancel", up, opts);
+      el.removeEventListener("click", click, opts);
+      el.removeEventListener("mousedown", mouseDown, opts);
+    };
+  }, [clean]);
 
   // Ctrl+wheel zooms the picture around the pointer (display zoom only: never changes the rendered pixels).
   const zoomAnchor = useRef<{ fx: number; fy: number; cx: number; cy: number } | null>(null);

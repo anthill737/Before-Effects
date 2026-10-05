@@ -17,6 +17,7 @@
  * a moment, frames ahead of the playhead are cached in the background (stopping as soon as anything
  * happens, and not while a preparation job runs).
  */
+import { livePinVersion, withLivePin } from "./livePin.ts";
 import { type Affected, type Flicks, frameToTime, type Project, rateToFps, timeToFrame } from "@be/core";
 import type { FrameRenderer, PreviewView } from "@be/engine";
 import { create } from "zustand";
@@ -425,7 +426,7 @@ export class PreviewLoop {
       this.canvas.height = size.height;
       this.dirty = true;
     }
-    const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId ?? useProjectorPick.getState().id}|${cacheable}|${this.version}`;
+    const key = `${frame}|${fraction}|${quality}|${view}|${JSON.stringify(s.orbit)}|${s.ambient}|${s.overlays.grid}|${this.fixed?.projectorId ?? useProjectorPick.getState().id}|${cacheable}|${this.version}|${view === "projector" || this.fixed ? livePinVersion() : 0}`;
     // Frames that were too busy to save to disk earlier are saved now, one per tick (not while playing:
     // reading back and compressing frames then would compete with the playback).
     if (useDisk && !playing) this.disk.pump(this.cache);
@@ -468,7 +469,8 @@ export class PreviewLoop {
       else if (useDisk) this.disk.offer(project, compId, frame, fraction, quality, content);
     }
     const t0 = performance.now();
-    this.renderer.present(this.ctx.getCurrentTexture(), project, compId, content, {
+    // An alignment point being dragged warps the picture where it is now (the edit comes on letting go).
+    this.renderer.present(this.ctx.getCurrentTexture(), withLivePin(project), compId, content, {
       view,
       reference: this.reference,
       orbit: s.orbit,

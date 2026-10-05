@@ -16,7 +16,7 @@ import { Inspector } from "./Inspector.tsx";
 import { Library } from "./Library.tsx";
 import { openProjectFile, saveProject, startAutosave } from "./persistence.ts";
 import { SpacePanel } from "../space/SpacePanel.tsx";
-import { togglePlay } from "../preview/PreviewPanel.tsx";
+import { handTool, togglePlay } from "../preview/PreviewPanel.tsx";
 import { runMenuCommand } from "./menuCommands.ts";
 import { ContentPanel } from "./ContentPanel.tsx";
 import { PreviewSidePanel } from "./SidePanels.tsx";
@@ -87,9 +87,12 @@ const useShortcuts = () => {
         void openProjectFile();
       } else if (isTyping(e)) {
         return;
-      } else if (e.key === " " && !(e.target as HTMLElement)?.closest("button")) {
+      } else if (e.key === " ") {
+        // Hold Space and drag the preview to pan it (the hand tool); a tap plays / pauses, on release.
+        // Space always means this (as in Adobe's apps), even after clicking a button.
         e.preventDefault();
-        togglePlay();
+        (document.activeElement as HTMLElement | null)?.closest("button")?.blur();
+        if (!e.repeat) handTool.press();
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         s.stepFrames(e.shiftKey ? 10 : 1);
@@ -118,8 +121,21 @@ const useShortcuts = () => {
         }
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== " " || !handTool.held) return;
+      e.preventDefault();
+      if (handTool.release()) togglePlay();
+    };
+    // Switching away mid-press must not leave the hand tool stuck on.
+    const onBlur = () => handTool.held && handTool.release();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
   }, []);
 };
 

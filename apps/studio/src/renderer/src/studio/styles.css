@@ -311,6 +311,9 @@ progress { width: 100%; height: 12px; accent-color: var(--accent); }
 .disk-folder { overflow-wrap: anywhere; }
 .preview-scroll { flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; }
 .preview-scroll.zoomed { overflow: auto; align-items: flex-start; justify-content: flex-start; }
+/* The hand tool (hold Space): a hand over the preview, closed while dragging. */
+body.hand-tool .preview-scroll, body.hand-tool .preview-scroll * { cursor: grab !important; }
+body.hand-grabbing .preview-scroll, body.hand-grabbing .preview-scroll * { cursor: grabbing !important; }
 .preview-panel.is-3d .canvas-stage { box-shadow: none; }
 .orbit-layer { position: absolute; inset: 0; cursor: grab; touch-action: none; }
 .orbit-layer:active { cursor: grabbing; }

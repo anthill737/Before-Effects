@@ -4,8 +4,9 @@
  *   - safe-area guides
  *   - projector alignment points (projector view)
  */
+import { livePin, onLivePin, setLivePin } from "./livePin.ts";
 import type { PathData, Region } from "@be/core";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { applyEffect, applyRecipeToSelection, KIND_LABEL, previewRecipe, similarRegions, suggestedRecipes } from "../studio/actions.ts";
 import { animatePart, moveChoices } from "../studio/parts.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
@@ -182,8 +183,13 @@ export const CalibrationOverlay = ({ size }: { size: { w: number; h: number } })
   const projector = useCurrentProjector(venue);
   const [drag, setDrag] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  // The point being dragged, drawn where the mouse is (the edit is made on letting go).
+  const [, redraw] = useState(0);
+  useEffect(() => onLivePin(() => redraw((n) => n + 1)), []);
+  const frame = useRef(0);
   if (!venue || !projector) return null;
-  const cal = projector.calibration;
+  const pin = livePin();
+  const cal = pin && pin.projectorId === projector.id ? { ...projector.calibration, points: projector.calibration.points.map((p) => (p.id === pin.pointId ? { ...p, output: [pin.output[0], pin.output[1]] as [number, number] } : p)) } : projector.calibration;
   const s = size.w / projector.output.width;
   const toOutput = (e: React.PointerEvent): [number, number] => {
     const r = svgRef.current!.getBoundingClientRect();
@@ -199,13 +205,25 @@ export const CalibrationOverlay = ({ size }: { size: { w: number; h: number } })
       height={size.h}
       onPointerMove={(e) => {
         if (!drag) return;
-        useStudio.getState().apply(
-          { type: "calibration.movePoint", args: { venueId: venue.id, projectorId: projector.id, pointId: drag, output: toOutput(e) } },
-          { label: "Move alignment point", coalesceKey: `cal-${drag}`, quiet: true },
-        );
+        const output = toOutput(e);
+        // At most once per screen refresh: the previews and outputs warp the picture from it at once.
+        cancelAnimationFrame(frame.current);
+        frame.current = requestAnimationFrame(() => setLivePin({ venueId: venue.id, projectorId: projector.id, pointId: drag, output }));
       }}
-      onPointerUp={() => setDrag(null)}
-      onPointerLeave={() => setDrag(null)}
+      onPointerUp={(e) => {
+        if (!drag) return;
+        cancelAnimationFrame(frame.current);
+        const output = toOutput(e);
+        setDrag(null);
+        // One edit (and one undo step) for the whole drag.
+        useStudio.getState().apply({ type: "calibration.movePoint", args: { venueId: venue.id, projectorId: projector.id, pointId: drag, output } }, { label: "Move alignment point", coalesceKey: `cal-${drag}`, quiet: true });
+        setLivePin(null);
+      }}
+      onPointerCancel={() => {
+        cancelAnimationFrame(frame.current);
+        setDrag(null);
+        setLivePin(null);
+      }}
       onClick={(e) => e.stopPropagation()}
     >
       <polygon className="cal-quad" points={cal.points.map((p) => p.output.join(",")).join(" ")} />
