@@ -19,8 +19,8 @@ import {
   flattenPath,
   type Gray8,
   type Lens,
+  calibrationMapping,
   mapCameraToPhoto,
-  mapOutputToContent,
   mapPhotoToCamera,
   mat3Invert,
   type PatternPlan,
@@ -28,6 +28,7 @@ import {
   projectorPxPerPhotoPx,
   type Projector,
   type ReferencePair,
+  shiftAreaCalibration,
   referenceProblems,
   solveAlignment,
   solveHomography,
@@ -36,7 +37,10 @@ import {
 } from "@be/core";
 import { create } from "zustand";
 import type { PhoneStatus, TestPattern } from "../../../../shared/api.ts";
+import { venuePhoto } from "../../space/actions.ts";
 import { useStudio } from "../store.ts";
+import type { MatchResult } from "./autoMatch.ts";
+import type { OutlineCheck } from "./verify.ts";
 
 export type AlignPhase = "setup" | "capturing" | "points" | "review" | "applied";
 
@@ -71,13 +75,43 @@ export interface AlignEstimate {
   readonly summary: string;
 }
 
+/** A reference pair, with where it came from: "feature", an area id, or "hand:<area>". */
+export type AutoPair = ReferencePair & { readonly source?: string };
+
+export interface MatchSummary {
+  readonly ok: boolean;
+  readonly confidence: MatchResult["confidence"];
+  readonly reason: string;
+  readonly view: string | null;
+  readonly stats: MatchResult["stats"];
+  readonly areas: ReadonlyArray<{ id: string; name: string; status: string; note: string }>;
+  readonly pairs: number;
+  readonly ms: number;
+}
+
+export interface VerifyArea {
+  readonly id: string;
+  readonly name: string;
+  readonly status: OutlineCheck["status"];
+  /** How far the projected outline is from the building's edges, projector pixels (null: unverified). */
+  readonly offPx: number | null;
+  readonly shiftPx: Vec2 | null;
+  readonly note: string;
+}
+
+export interface VerifyRound {
+  readonly round: number;
+  readonly areas: readonly VerifyArea[];
+  readonly at: number;
+}
+
 export interface CheckResult {
   readonly at: number;
   /** How far the current alignment is from what the camera measures now, projector pixels. */
   readonly medianPx: number;
   readonly p95Px: number;
   readonly areas: ReadonlyArray<{ id: string; name: string; offPx: number | null }>;
-  readonly verdict: "aligned" | "moved" | "unknown";
+  readonly verdict: "aligned" | "moved" | "phone-moved" | "unknown";
   readonly message: string;
 }
 
@@ -90,6 +124,8 @@ interface AlignState {
   readonly busy: string | null;
   readonly progress: { readonly done: number; readonly total: number } | null;
   readonly qrSvg: string | null;
+  /** QR code for "Trust this computer" (install the local authority on the phone once). */
+  readonly trustQrSvg: string | null;
   readonly phone: PhoneStatus | null;
   readonly preview: { readonly url: string; readonly width: number; readonly height: number } | null;
   /** Pattern brightness 0–255 (lower if the house is very close or the camera overexposes). */
@@ -105,6 +141,13 @@ interface AlignState {
   readonly previousVersion: number | null;
   readonly error: string | null;
   readonly notes: readonly string[];
+  /** auto: points from automatic matching; manual: marked by hand. */
+  readonly mode: "auto" | "manual";
+  readonly match: MatchSummary | null;
+  /** Rounds of checking the projected outlines against the building (latest last). */
+  readonly verification: readonly VerifyRound[] | null;
+  /** What the automatic run is doing, or why it stopped. */
+  readonly autoStep: string | null;
 }
 
 const initial: AlignState = {
@@ -115,6 +158,7 @@ const initial: AlignState = {
   busy: null,
   progress: null,
   qrSvg: null,
+  trustQrSvg: null,
   phone: null,
   preview: null,
   level: 200,
@@ -127,6 +171,10 @@ const initial: AlignState = {
   previousVersion: null,
   error: null,
   notes: [],
+  mode: "manual",
+  match: null,
+  verification: null,
+  autoStep: null,
 };
 
 export const useAlign = create<AlignState>(() => initial);
@@ -139,6 +187,8 @@ let corr: Correspondence[] = [];
 let lens: Lens | null = null;
 let model: CameraToPhoto | null = null;
 let solution: AlignSolution | null = null;
+/** Held-out automatic matches: never fitted, used to measure the camera ↔ photo relation. */
+let validation: AutoPair[] = [];
 let cancelled = false;
 let offs: Array<() => void> = [];
 
@@ -206,13 +256,15 @@ const resetSession = () => {
   lens = null;
   model = null;
   solution = null;
-  set({ ...initial, open: useAlign.getState().open, qrSvg: useAlign.getState().qrSvg, phone: useAlign.getState().phone, preview: useAlign.getState().preview });
+  validation = [];
+  const k = useAlign.getState();
+  set({ ...initial, open: k.open, qrSvg: k.qrSvg, trustQrSvg: k.trustQrSvg, phone: k.phone, preview: k.preview });
 };
 
 export const connectPhone = async (): Promise<{ url: string | null; qrSvg: string }> => {
   try {
     const r = await window.be.phone.start();
-    set({ qrSvg: r.qrSvg, phone: r.status });
+    set({ qrSvg: r.qrSvg, trustQrSvg: r.trustQrSvg, phone: r.status });
     return { url: r.status.url, qrSvg: r.qrSvg };
   } catch (e) {
     set({ error: plain(e) });
@@ -457,7 +509,7 @@ export const solve = (): Promise<AlignEstimate> =>
     if (problems.length) throw new Error(problems.join(" "));
     const s = useAlign.getState();
     const areas = areasOf(venue);
-    const g = fitCameraToPhoto(s.pairs, lens, areas, { photo: venue.canvas });
+    const g = fitCameraToPhoto(s.pairs, lens, areas, { photo: venue.canvas, ...(s.pairs.length > 40 ? { smoothing: 1 } : {}) });
     if (!g) throw new Error("The marked points don't fit together (check that each pair marks the same spot in both pictures).");
     const opts = { output: projector.output, canvas: venue.canvas };
     const sol = solveAlignment(corr, g, opts);
@@ -473,17 +525,47 @@ export const solve = (): Promise<AlignEstimate> =>
 const estimateOf = (sol: AlignSolution, g: CameraToPhoto, areas: ReturnType<typeof areasOf>, opts: { output: { width: number; height: number }; canvas: { width: number; height: number } }): AlignEstimate => {
   const scale = projectorPxPerPhotoPx(sol.H, opts.canvas);
   const loo = g.looError.filter((x): x is number => x != null).map((x) => x * scale);
-  const referenceErrorPx = loo.length ? [...loo].sort((a, b) => a - b)[Math.floor(loo.length / 2)]! : null;
-  const reps = areaReports(areas, sol, g, opts);
+  // Automatic points: measured on the held-out matches (never fitted); hand-marked: leave-one-out.
+  const held = validation.map((v) => {
+    const q = mapCameraToPhoto(g, v.camera);
+    return Math.hypot(q[0] - v.photo[0], q[1] - v.photo[1]) * scale;
+  });
+  const errs = held.length >= 8 ? held : loo;
+  const sorted = [...errs].sort((a, b) => a - b);
+  const referenceErrorPx = sorted.length ? sorted[Math.floor(sorted.length / 2)]! : null;
+  const referenceP95 = sorted.length ? sorted[Math.floor(sorted.length * 0.95)]! : null;
+  // Per area, from held-out matches inside it (else the house-wide figure).
+  let measured: Record<string, number | null> | undefined;
+  if (held.length >= 8) {
+    measured = {};
+    for (const a of areas) {
+      const mine = validation.flatMap((v, i) => (v.source === a.id || inside(v.photo, a.polygon) ? [held[i]!] : [])).sort((x, y) => x - y);
+      measured[a.id] = mine.length ? mine[Math.floor(mine.length / 2)]! : referenceErrorPx;
+    }
+  }
+  const reps0 = areaReports(areas, sol, g, opts, measured);
+  // An area automatic matching couldn't place (ambiguous, too weak) and with no evidence of its own is
+  // not vouched for by the house-wide figure: it needs a look (and the smallest fix: one point, or a nudge).
+  const ms = useAlign.getState().match;
+  const reps = reps0.map((r) => {
+    const m = ms?.areas.find((a) => a.id === r.id);
+    const own = validation.some((v) => v.source === r.id) || g.pairs.some((p) => (p as AutoPair).source === `hand:${r.id}`);
+    if (!m || m.status === "matched" || m.status === "outside" || own || r.status === "not-covered") return r;
+    return { ...r, status: "check" as const, errorPx: null, note: `${m.note} Mark one point on it, or nudge it.` };
+  });
   const needsAttention = reps.filter((r) => r.status === "check").map((r) => `${r.name}: ${r.note}`);
   const worstPoint = g.looError.map((e, i) => ({ e: (e ?? 0) * scale, i })).sort((a, b) => b.e - a.e)[0];
   let confidence: AlignEstimate["confidence"] = "low";
-  if (referenceErrorPx !== null && referenceErrorPx <= 3 && sol.fit.p95 <= 3 && g.pairs.length >= 6) confidence = "high";
+  if (referenceErrorPx !== null && referenceErrorPx <= 3 && (referenceP95 ?? 99) <= 8 && sol.fit.p95 <= 3 && g.pairs.length >= 6) confidence = "high";
   else if (referenceErrorPx !== null && referenceErrorPx <= 8 && g.pairs.length >= 5) confidence = "medium";
   const parts = [
     `${confidence[0]!.toUpperCase()}${confidence.slice(1)} confidence.`,
-    referenceErrorPx === null ? "With 4 points the error can't be estimated — add 2 or more to check them against each other." : `Reference points agree to about ${referenceErrorPx.toFixed(1)} projector pixels.`,
-    worstPoint && worstPoint.e > 3 * Math.max(1, referenceErrorPx ?? 1) ? `Point ${worstPoint.i + 1} disagrees most (${worstPoint.e.toFixed(0)} px) — check it's on the same spot in both pictures.` : "",
+    referenceErrorPx === null
+      ? "With 4 points the error can't be estimated — add 2 or more to check them against each other."
+      : held.length >= 8
+        ? `Checked on ${held.length} held-out matches (not used for fitting): typically ${referenceErrorPx.toFixed(1)} projector pixels off (95%: ${referenceP95!.toFixed(1)}).`
+        : `Reference points agree to about ${referenceErrorPx.toFixed(1)} projector pixels.`,
+    !held.length && worstPoint && worstPoint.e > 3 * Math.max(1, referenceErrorPx ?? 1) ? `Point ${worstPoint.i + 1} disagrees most (${worstPoint.e.toFixed(0)} px) — check it's on the same spot in both pictures.` : "",
     `${Math.round(sol.fit.meshCoverage * 100)}% of the projector's picture was measured.`,
     needsAttention.length ? `${needsAttention.length} area${needsAttention.length === 1 ? "" : "s"} to check by eye.` : "",
   ].filter(Boolean);
@@ -562,6 +644,17 @@ export const checkAlignment = async (): Promise<CheckResult> => {
     set({ check: r });
     return r;
   }
+  // First: is the phone where it was? If not, its relation to the house photo is stale.
+  if (frames.length >= 2) {
+    const m = await phoneMoved();
+    if (m.verdict === "moved") {
+      model = null;
+      const r: CheckResult = { at: Date.now(), medianPx: Number.NaN, p95Px: Number.NaN, areas: [], verdict: "phone-moved", message: `${m.note} Its earlier matches no longer apply — Realign matches the house again automatically.` };
+      set({ check: r });
+      note(r.message);
+      return r;
+    }
+  }
   await capturePatterns({ keepPhase: true });
   const { venue, projector } = place();
   // After reopening: the points marked last time (the phone must still be where it was).
@@ -572,10 +665,8 @@ export const checkAlignment = async (): Promise<CheckResult> => {
     cal.points.map((p) => p.content),
     cal.points.map((p) => p.output),
   );
-  const Hinv = H && mat3Invert(H);
-  if (!H || !Hinv) throw new Error("The current alignment is degenerate.");
-  const mesh = cal.mode === "mesh" ? cal.mesh : undefined;
-  const W = projector.output.width, Ht = projector.output.height;
+  const used = calibrationMapping(projector, venue.regions);
+  if (!H || !used) throw new Error("The current alignment is degenerate.");
   const scale = projectorPxPerPhotoPx(H, venue.canvas);
   const errs: number[] = [];
   const byArea = new Map<string, number[]>();
@@ -583,7 +674,7 @@ export const checkAlignment = async (): Promise<CheckResult> => {
   for (const c of corr) {
     // Where the camera sees this projector block land, in the photo — and where the alignment in use puts it.
     const qSeen = mapCameraToPhoto(model, c.camera);
-    const qUsed = mapOutputToContent(Hinv, mesh, W, Ht, c.projector);
+    const qUsed = used.toContent(c.projector);
     const e = Math.hypot(qSeen[0] - qUsed[0], qSeen[1] - qUsed[1]) * scale;
     errs.push(e);
     const a = areas.find((x) => inside(qSeen, x.polygon));
@@ -611,8 +702,11 @@ export const checkAlignment = async (): Promise<CheckResult> => {
 
 /** Capture again and solve with the points already marked (the phone must not have moved). */
 export const realign = async (): Promise<AlignEstimate> => {
-  await capturePatterns({ keepPhase: true });
-  return solve();
+  // Everything measured again: the house matched afresh (no stale points), solved, applied, verified.
+  model = null;
+  const r = await autoAlign();
+  if (r.stoppedAt) throw new Error(r.stoppedAt);
+  return useAlign.getState().estimate!;
 };
 
 /** The camera's lens distortion found in the last capture (null before one). */
@@ -658,6 +752,263 @@ export const alignSnapshot = () => {
     previousVersion: s.previousVersion,
     cameraImage: s.cameraImage ? { path: s.cameraImage.path, width: s.cameraImage.width, height: s.cameraImage.height } : null,
     error: s.error,
+    mode: s.mode,
+    match: s.match,
+    verification: s.verification,
+    autoStep: s.autoStep,
     notes: s.notes.slice(-10),
   };
+};
+
+// =============================================================================================
+// Fully automatic: match, solve, apply, verify and refine (and the per-area fallbacks)
+
+let worker: Worker | null = null;
+let nextReq = 1;
+const waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+/** Computer vision in a worker (OpenCV.js is loaded there the first time). */
+const vision = <T>(type: "match" | "moved" | "verify" | "verifyPhoto", args: unknown[], transfer: Transferable[] = []): Promise<T> => {
+  if (!worker) {
+    worker = new Worker(new URL("./alignWorker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (e: MessageEvent<{ id: number; result?: unknown; error?: string }>) => {
+      const w = waiting.get(e.data.id);
+      if (!w) return;
+      waiting.delete(e.data.id);
+      if (e.data.error) w.reject(new Error(e.data.error));
+      else w.resolve(e.data.result);
+    };
+  }
+  const id = nextReq++;
+  return new Promise<T>((resolve, reject) => {
+    waiting.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    worker!.postMessage({ id, type, args }, transfer);
+  });
+};
+
+/** The house photo, greyscale, at the venue canvas's size (the coordinates the house areas use). */
+const photoGray = async (venue: Venue): Promise<Gray8> => {
+  const project = useStudio.getState().project!;
+  // The file's bytes (a page may not fetch blob: URLs under its content policy).
+  const blob = await venuePhoto(project);
+  if (!blob) throw new Error("This show has no house photo to match the camera to.");
+  const bmp = await createImageBitmap(blob);
+  const w = Math.round(venue.canvas.width), h = Math.round(venue.canvas.height);
+  const c = new OffscreenCanvas(w, h);
+  const g = c.getContext("2d", { willReadFrequently: true })!;
+  g.drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  const d = g.getImageData(0, 0, w, h).data;
+  const out = new Uint8Array(w * h);
+  for (let i = 0, j = 0; j < out.length; i += 4, j++) out[j] = (77 * d[i]! + 150 * d[i + 1]! + 29 * d[i + 2]!) >> 8;
+  return { width: w, height: h, data: out };
+};
+
+const copyGray = (g: Gray8): Gray8 => ({ width: g.width, height: g.height, data: g.data.slice() });
+
+/** Match the camera's view to the house photo automatically (needs a capture). */
+export const autoMatch = (): Promise<MatchSummary> =>
+  guard("Matching the camera's view to the house photo", async () => {
+    const { venue } = place();
+    if (frames.length < 2) throw new Error("Capture the patterns first.");
+    const photo = await photoGray(venue);
+    const black = frames[0]!, white = frames[1]!;
+    // The projector's light alone (the house as the projector lights it, without other light).
+    const diff: Gray8 = { width: white.width, height: white.height, data: white.data.map((v, i) => Math.max(0, v - black.data[i]!)) };
+    const views = [
+      { name: "lit by the projector", image: copyGray(white) },
+      { name: "projector off", image: copyGray(black) },
+      { name: "projector light only", image: diff },
+    ];
+    const r = await vision<MatchResult>("match", [photo, views, areasOf(venue)], [photo.data.buffer, ...views.map((v) => v.image.data.buffer)]);
+    validation = [...r.validation];
+    const summary: MatchSummary = {
+      ok: r.ok,
+      confidence: r.confidence,
+      reason: r.reason,
+      view: r.view,
+      stats: r.stats,
+      areas: r.areas.map((a) => ({ id: a.id, name: a.name, status: a.status, note: a.note })),
+      pairs: r.pairs.length,
+      ms: r.ms,
+    };
+    set({ match: summary });
+    note(r.ok ? `Matched automatically (${r.confidence}): ${r.reason}` : `Automatic matching failed: ${r.reason}`);
+    if (r.ok && r.confidence !== "low") {
+      // The automatic pairs replace earlier ones; points marked by hand on single areas are kept.
+      const manual = useAlign.getState().pairs.filter((p) => (p as AutoPair).source?.startsWith("hand:"));
+      setPairs([...r.pairs.map((p) => ({ camera: p.camera, photo: p.photo, source: p.source })), ...manual]);
+      set({ mode: "auto" });
+    }
+    return summary;
+  });
+
+/** Camera → projector, linearised near a camera point (from the measured spots around it). */
+const cameraToProjectorJacobian = (c: Vec2): [number, number, number, number] | null => {
+  const near = [...corr].sort((a, b) => (a.camera[0] - c[0]) ** 2 + (a.camera[1] - c[1]) ** 2 - ((b.camera[0] - c[0]) ** 2 + (b.camera[1] - c[1]) ** 2)).slice(0, 40);
+  if (near.length < 8) return null;
+  // Least squares p = A c + t.
+  const mx = near.reduce((s, x) => s + x.camera[0], 0) / near.length, my = near.reduce((s, x) => s + x.camera[1], 0) / near.length;
+  const px = near.reduce((s, x) => s + x.projector[0], 0) / near.length, py = near.reduce((s, x) => s + x.projector[1], 0) / near.length;
+  let sxx = 0, sxy = 0, syy = 0, axx = 0, axy = 0, ayx = 0, ayy = 0;
+  for (const n of near) {
+    const dx = n.camera[0] - mx, dy = n.camera[1] - my, ex = n.projector[0] - px, ey = n.projector[1] - py;
+    sxx += dx * dx;
+    sxy += dx * dy;
+    syy += dy * dy;
+    axx += ex * dx;
+    axy += ex * dy;
+    ayx += ey * dx;
+    ayy += ey * dy;
+  }
+  const det = sxx * syy - sxy * sxy;
+  if (Math.abs(det) < 1e-9) return null;
+  return [(axx * syy - axy * sxy) / det, (axy * sxx - axx * sxy) / det, (ayx * syy - ayy * sxy) / det, (ayy * sxx - ayx * sxy) / det];
+};
+
+/**
+ * Project the house-area outlines, photograph them and measure each area against the building's
+ * edges; correct areas that are measurably off; repeat (at most `rounds` times) until everything
+ * measurable is aligned or a correction stops helping. Points used for fitting play no part.
+ */
+export const verifyAndRefine = (rounds = 3): Promise<VerifyRound[]> =>
+  guard("Checking the alignment on the building", async () => {
+    const { venue, projector } = place();
+    if (!model) throw new Error("Solve the alignment first.");
+    await ensureOutput(venue, projector);
+    const level = useAlign.getState().level;
+    const history: VerifyRound[] = [];
+    let previous: Map<string, number> | null = null;
+    for (let round = 1; round <= rounds; round++) {
+      checkCancel();
+      set({ busy: `Checking the alignment on the building (round ${round})` });
+      let lit: Gray8, black: Gray8, lines: Gray8;
+      try {
+        await show(projector.id, `align:white:${level}`);
+        await sleep(900);
+        await window.be.phone.lock(true);
+        lit = await toGray((await window.be.phone.capture({ settleMs: 350 })).jpeg);
+        await show(projector.id, "align:black");
+        black = await toGray((await window.be.phone.capture({ settleMs: 350 })).jpeg);
+        // The house photo projected through the alignment (its texture vs the building's own).
+        await show(projector.id, "photo");
+        const cap = await window.be.phone.capture({ settleMs: 450 });
+        lines = await toGray(cap.jpeg);
+        const old = useAlign.getState().cameraImage?.url;
+        if (old) URL.revokeObjectURL(old);
+        set({ cameraImage: { url: URL.createObjectURL(new Blob([cap.jpeg as BlobPart], { type: "image/jpeg" })), width: cap.width, height: cap.height, path: cap.path } });
+      } finally {
+        await window.be.phone.lock(false).catch(() => {});
+        await window.be.windows.setOutputPattern(projector.id, "none").catch(() => {});
+      }
+      const areas = areasOnCamera().map((a) => ({ id: a.id, name: a.name, cameraPolygon: a.points }));
+      const v = await vision<{ areas: OutlineCheck[] }>("verifyPhoto", [{ lit, black, projected: lines, areas }], [lit.data.buffer, black.data.buffer, lines.data.buffer]);
+      // Camera-pixel shifts → projector pixels (local linearisation of where the projector's pixels land).
+      const areaResults: VerifyArea[] = v.areas.map((a) => {
+        const cam = areas.find((x) => x.id === a.id)?.cameraPolygon ?? [];
+        const c: Vec2 = cam.length ? [cam.reduce((t, p) => t + p[0], 0) / cam.length, cam.reduce((t, p) => t + p[1], 0) / cam.length] : [0, 0];
+        const J = a.shift ? cameraToProjectorJacobian(c) : null;
+        const shiftPx: Vec2 | null = a.shift && J ? [J[0] * a.shift[0] + J[1] * a.shift[1], J[2] * a.shift[0] + J[3] * a.shift[1]] : null;
+        return { id: a.id, name: a.name, status: a.status, offPx: shiftPx ? Math.hypot(shiftPx[0], shiftPx[1]) : null, shiftPx, note: a.note };
+      });
+      const r: VerifyRound = { round, areas: areaResults, at: Date.now() };
+      history.push(r);
+      set({ verification: [...history] });
+      const fix = areaResults.filter((a) => a.status === "off" && a.shiftPx && a.offPx! >= 1);
+      // Stop: everything measurable is aligned; or the last correction didn't help.
+      if (!fix.length) break;
+      if (previous && fix.every((a) => (previous!.get(a.id) ?? Infinity) <= a.offPx! + 0.2)) {
+        note("A correction didn't improve the measured fit; stopping.");
+        break;
+      }
+      if (round === rounds) break;
+      previous = new Map(fix.map((a) => [a.id, a.offPx!]));
+      // Correct each area by what was measured, one undoable step — on top of the alignment as it is
+      // now (earlier rounds' corrections included).
+      const now = place().projector;
+      let cur: Projector = now;
+      for (const a of fix) {
+        const next = shiftAreaCalibration(cur, venue.regions, a.id, a.shiftPx!);
+        if (next) cur = { ...cur, calibration: { ...cur.calibration, ...next } };
+      }
+      if (cur !== now) {
+        const m = cur.calibration.mesh!;
+        const tx = useStudio.getState().apply(
+          { type: "calibration.setPoints", args: { venueId: venue.id, projectorId: projector.id, mode: "mesh", points: cur.calibration.points.map((p) => ({ ...p, content: [p.content[0], p.content[1]], output: [p.output[0], p.output[1]] })), mesh: { cols: m.cols, rows: m.rows, offsets: m.offsets.map((o) => [o[0], o[1]]), labels: [...(m.labels ?? [])], surfaces: [...(m.surfaces ?? [])], base: (m.base ?? []).map((o) => [o[0], o[1]]) } } },
+          { label: `Refine ${projector.name} (measured on the building)`, coalesceKey: `refine-${projector.id}` },
+        );
+        if (!tx) break;
+        note(`Round ${round}: corrected ${fix.map((a) => `${a.name} ${a.offPx!.toFixed(1)} px`).join(", ")}.`);
+      }
+    }
+    return history;
+  });
+
+/**
+ * The fully automatic run: capture, match, solve, apply, verify and refine. Stops (and says why) at
+ * the first step that needs the person: the phone not connected, matching not confident (mark points),
+ * or nothing measurable.
+ */
+export const autoAlign = async (): Promise<{ stoppedAt: string | null; estimate: AlignEstimate | null; verification: VerifyRound[] }> => {
+  set({ autoStep: "capturing" });
+  try {
+    await capturePatterns({ keepPhase: true });
+    set({ autoStep: "matching" });
+    const m = await autoMatch();
+    if (!m.ok || m.confidence === "low") {
+      set({ phase: "points", autoStep: "needs points" });
+      return { stoppedAt: `Automatic matching wasn't confident enough (${m.reason}). Mark a few matching points.`, estimate: null, verification: [] };
+    }
+    set({ autoStep: "solving" });
+    const est = await solve();
+    set({ autoStep: "applying" });
+    applyAlignment();
+    set({ autoStep: "verifying" });
+    const v = await verifyAndRefine(3);
+    set({ autoStep: null, phase: "applied" });
+    return { stoppedAt: null, estimate: useAlign.getState().estimate ?? est, verification: v };
+  } catch (e) {
+    set({ autoStep: `stopped: ${plain(e)}` });
+    throw e;
+  }
+};
+
+/** Nudge one area's projection by (dx, dy) projector pixels — one undoable step per area (repeated nudges merge). */
+export const nudgeArea = (areaId: string, dx: number, dy: number): void => {
+  const { venue, projector } = place();
+  if (projector.calibration.locked) throw new Error("This projector's alignment is locked. Unlock it to touch it up.");
+  const next = shiftAreaCalibration(projector, venue.regions, areaId, [dx, dy]);
+  if (!next) throw new Error("That area can't be moved on its own (no outline, or outside the projector's picture).");
+  const m = next.mesh!;
+  const name = venue.regions[areaId]?.name ?? "area";
+  useStudio.getState().apply(
+    { type: "calibration.setPoints", args: { venueId: venue.id, projectorId: projector.id, mode: "mesh", points: next.points.map((p) => ({ ...p, content: [p.content[0], p.content[1]], output: [p.output[0], p.output[1]] })), mesh: { cols: m.cols, rows: m.rows, offsets: m.offsets.map((o) => [o[0], o[1]]), labels: [...(m.labels ?? [])], surfaces: [...(m.surfaces ?? [])], base: (m.base ?? []).map((o) => [o[0], o[1]]) } } },
+    { label: `Touch up ${name}`, coalesceKey: `nudge-${projector.id}-${areaId}` },
+  );
+};
+
+/**
+ * The smallest fix for one area that couldn't be matched: one spot marked on the photo and the camera
+ * picture inside it. It joins the automatic points and the alignment is recalculated.
+ */
+export const addAreaPoint = async (areaId: string, photo: Vec2, camera: Vec2): Promise<AlignEstimate> => {
+  const s = useAlign.getState();
+  setPairs([...s.pairs, { photo, camera, source: `hand:${areaId}` } as AutoPair]);
+  return solve();
+};
+
+/** Did the phone move since the house was matched? (Compares a fresh picture with the one matched.) */
+export const phoneMoved = async (): Promise<{ verdict: "still" | "moved" | "unknown"; shiftPx: number | null; note: string }> => {
+  const { venue, projector } = place();
+  if (frames.length < 2) return { verdict: "unknown", shiftPx: null, note: "Nothing captured yet to compare with." };
+  await ensureOutput(venue, projector);
+  const level = useAlign.getState().level;
+  let now: Gray8;
+  try {
+    await show(projector.id, `align:white:${level}`);
+    now = await toGray((await window.be.phone.capture({ settleMs: 600 })).jpeg);
+  } finally {
+    await window.be.windows.setOutputPattern(projector.id, "none").catch(() => {});
+  }
+  const before = copyGray(frames[1]!);
+  return vision("moved", [before, now], [before.data.buffer, now.data.buffer]);
 };

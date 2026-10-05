@@ -8,8 +8,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { venuePhotoUrl } from "../../space/actions.ts";
 import { useStudio } from "../store.ts";
 import {
+  addAreaPoint,
   applyAlignment,
   areasOnCamera,
+  autoAlign,
+  nudgeArea,
+  verifyAndRefine,
   cancelAlign,
   capturePatterns,
   checkAlignment,
@@ -78,17 +82,75 @@ export const AutoAlign = () => {
   );
 };
 
+const Troubleshoot = () => {
+  const p = useAlign((s) => s.phone);
+  const [open, setOpen] = useState(false);
+  if (!p?.running) return null;
+  return (
+    <details className="small align-trouble" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>The phone can't open the page?</summary>
+      <ul>
+        <li>Both must be on the same Wi-Fi — not a guest network (guest networks keep devices apart) and not mobile data.</li>
+        <li>
+          Try the computer's other address{p.alternatives.length === 1 ? "" : "es"}:{" "}
+          {p.alternatives.length ? (
+            p.alternatives.map((a) => (
+              <code key={a} className="align-url">
+                {a}
+              </code>
+            ))
+          ) : (
+            <span className="muted">none — this is the only one.</span>
+          )}
+        </li>
+        <li>
+          Windows Firewall may be blocking it:{" "}
+          <button className="ghost small-btn" onClick={() => void window.be.phone.openFirewallSettings()}>
+            Open allowed apps
+          </button>{" "}
+          — find Before Effects and tick <b>Private</b>.{" "}
+          <button className="ghost small-btn" onClick={() => void window.be.phone.recheckFirewall()}>
+            Check again
+          </button>
+        </li>
+        <li>
+          The page is at <code className="align-url">{p.url}</code>
+        </li>
+      </ul>
+    </details>
+  );
+};
+
 const PhoneState = () => {
   const p = useAlign((s) => s.phone);
   if (!p?.running) return <p className="muted">Starting the phone connection…</p>;
-  if (!p.connected) return <p className="warn">{p.message ?? "Waiting for the phone — scan the QR code with its camera app."}</p>;
+  const fw = p.firewall === "blocked" && (
+    <p className="warn">
+      Windows Firewall is blocking Before Effects, so the phone can't reach it.{" "}
+      <button className="ghost small-btn" onClick={() => void window.be.phone.openFirewallSettings()}>
+        Open allowed apps
+      </button>{" "}
+      and tick <b>Private</b> for Before Effects.
+    </p>
+  );
+  if (!p.connected)
+    return (
+      <>
+        {fw}
+        <p className="warn">{p.message ?? "Waiting for the phone — scan the QR code with its camera app."}</p>
+      </>
+    );
   const c = p.controls;
   return (
     <div className="small">
+      {fw}
       <p className="ok-text">
         Connected: {p.device}
         {p.camera ? ` · camera ${p.camera.width}×${p.camera.height}` : ""}
+        {p.page?.camera ? ` · ${p.page.camera}` : ""}
       </p>
+      {p.page && !p.page.secure && <p className="warn">The phone's page isn't secure, so it can't use the camera — open the link from the QR code.</p>}
+      {p.page && p.page.cameras.length > 1 && <p className="muted">The phone has {p.page.cameras.length} cameras; it uses the main back one (you can pick another on the phone).</p>}
       {p.orientation === "portrait" && <p className="warn">Turn the phone sideways (landscape) so the whole house fits.</p>}
       {c && (
         <p className="muted">
@@ -119,7 +181,7 @@ const Setup = () => {
           <li>The phone must be on the same Wi-Fi as this computer.</li>
           <li>Scan the code with the phone's camera and open the link.</li>
           <li>
-            The phone warns the connection “isn't private” — this computer made its own certificate. Tap <b>Show details → visit this website</b> (iPhone) or <b>Advanced → Proceed</b> (Android).
+            If the phone warns the connection “isn't private”: tap <b>Show details → visit this website</b> (iPhone) or <b>Advanced → Proceed</b> (Android) — or trust this computer once (below) to stop the warning.
           </li>
           <li>
             Tap <b>Start camera</b> and allow the camera.
@@ -127,6 +189,15 @@ const Setup = () => {
           <li>If Windows asks whether Before Effects may use the network, allow it on private networks.</li>
         </ol>
         <PhoneState />
+        <Troubleshoot />
+        {s.trustQrSvg && (
+          <details className="small">
+            <summary>No more “not private” warnings: trust this computer once</summary>
+            <p>Scan this with the phone and follow the steps it shows (install a certificate made by this computer; it only works for local network addresses). After that the camera page opens directly.</p>
+            <div className="align-qr small-qr" dangerouslySetInnerHTML={{ __html: s.trustQrSvg }} />
+            {s.phone?.authority && <p className="muted">Fingerprint: {s.phone.authority.fingerprint.slice(0, 23)}…</p>}
+          </details>
+        )}
       </div>
       <div className="align-col grow">
         <h3>2. Place the phone</h3>
@@ -142,11 +213,16 @@ const Setup = () => {
             Pattern brightness
             <input type="range" min={60} max={255} value={s.level} onChange={(e) => useAlign.setState({ level: Number(e.target.value) })} />
           </label>
-          <button className="primary" disabled={!s.phone?.connected || !!s.busy} onClick={() => run(capturePatterns())}>
-            Start auto-align
+          <button className="primary" disabled={!s.phone?.connected || !!s.busy} onClick={() => run(autoAlign())} title="Capture, match the house, calculate, apply, then check it on the building and refine">
+            Auto-align
+          </button>
+          <button className="ghost" disabled={!s.phone?.connected || !!s.busy} onClick={() => run(capturePatterns())} title="Capture only, then mark matching points yourself">
+            Capture and mark points myself
           </button>
         </div>
         {s.busy && <p className="muted small">{s.busy}…</p>}
+        {s.progress && <progress max={s.progress.total} value={s.progress.done} />}
+        {s.autoStep?.startsWith("stopped") && <p className="warn small">Auto-align {s.autoStep}</p>}
         {s.view && <p className={s.view.ok ? "ok-text small" : "warn small"}>{s.view.message}</p>}
         <p className="muted small">
           Auto-align projects black and white stripes for about half a minute (a slow sequence, no rapid flashing), photographs each, and works out where every part of the projector's picture lands. Then you mark 4–10 matching spots on
@@ -208,7 +284,9 @@ const ZoomImage = ({
   lines,
   onPick,
   label,
+  focus,
 }: {
+  focus?: { x0: number; y0: number; x1: number; y1: number };
   url: string | null;
   size: { width: number; height: number };
   markers: readonly Marker[];
@@ -223,9 +301,10 @@ const ZoomImage = ({
   useEffect(() => {
     const el = box.current;
     if (!el) return;
-    const s = Math.min(el.clientWidth / size.width, el.clientHeight / size.height);
-    setView({ s, x: (el.clientWidth - size.width * s) / 2, y: (el.clientHeight - size.height * s) / 2 });
-  }, [size.width, size.height, url]);
+    const b = focus ?? { x0: 0, y0: 0, x1: size.width, y1: size.height };
+    const s = Math.min(el.clientWidth / (b.x1 - b.x0), el.clientHeight / (b.y1 - b.y0));
+    setView({ s, x: (el.clientWidth - (b.x1 - b.x0) * s) / 2 - b.x0 * s, y: (el.clientHeight - (b.y1 - b.y0) * s) / 2 - b.y0 * s });
+  }, [size.width, size.height, url, focus?.x0, focus?.y0, focus?.x1, focus?.y1]);
   const toImage = (e: { clientX: number; clientY: number }): Vec2 => {
     const r = box.current!.getBoundingClientRect();
     return [(e.clientX - r.left - view.x) / view.s, (e.clientY - r.top - view.y) / view.s];
@@ -317,8 +396,11 @@ const Points = () => {
     ...(pending[k] ? [{ n: s.pairs.length + 1, at: pending[k]!, pending: true }] : []),
   ];
   const problems = pointProblems();
+  const match = s.match;
   return (
     <div className="align-points">
+      {match && !match.ok && <p className="warn small">Automatic matching didn't work: {match.reason}</p>}
+      {match?.ok && match.confidence === "low" && <p className="warn small">Automatic matching wasn't confident enough ({match.reason}) — a few points by hand will settle it.</p>}
       <p className="small">
         Click a sharp, easy-to-find spot on the <b>house photo</b> (a window corner, the door's corner, the roof peak), then the <b>same spot</b> on the <b>camera picture</b>. Mark at least 4, spread over the whole house; then add one or two on
         anything that stands out or sits back (porch columns, a recessed door, a gable). Scroll to zoom, drag to move around.
@@ -372,35 +454,125 @@ const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math
 // ---------------------------------------------------------------------------------------------
 // Review and after
 
-const Estimate = () => {
+const verifiedOf = (id: string) => {
+  const v = useAlign.getState().verification;
+  return v?.length ? v[v.length - 1]!.areas.find((a) => a.id === id) : undefined;
+};
+
+const Estimate = ({ actions = false }: { actions?: boolean }) => {
   const e = useAlign((s) => s.estimate);
+  const match = useAlign((s) => s.match);
+  const verification = useAlign((s) => s.verification);
+  const busy = useAlign((s) => !!s.busy);
+  const [fixing, setFixing] = useState<string | null>(null);
   if (!e) return null;
+  const last = verification?.length ? verification[verification.length - 1]! : null;
+  const first = verification?.length ? verification[0]! : null;
   return (
     <div className="align-estimate">
       <p className={e.confidence === "high" ? "ok-text" : e.confidence === "medium" ? "" : "warn"}>{e.summary}</p>
       <p className="small muted">
         Measured spots fit to {e.fitPx.median.toFixed(1)} px (95%: {e.fitPx.p95.toFixed(1)} px) · {e.method}
+        {match?.ok ? ` · matched automatically (${match.confidence}, ${match.stats.inliers} feature matches, ${match.view})` : ""}
       </p>
+      {last && (
+        <p className="small">
+          Checked on the building ({verification!.length} round{verification!.length === 1 ? "" : "s"}): {last.areas.filter((a) => a.status === "aligned").length} areas aligned, {last.areas.filter((a) => a.status === "off").length} off, {last.areas.filter((a) => a.status === "unverified").length} couldn't be checked.
+        </p>
+      )}
       <table className="small align-areas">
         <thead>
           <tr>
             <th>Area</th>
-            <th>Seen by camera</th>
+            <th>Found</th>
+            <th>On the building</th>
             <th>Est. error</th>
-            <th />
+            {actions && <th>Touch up</th>}
           </tr>
         </thead>
         <tbody>
-          {e.areas.map((a) => (
-            <tr key={a.id} className={a.status === "good" ? "" : "warn"}>
-              <td>{a.name}</td>
-              <td>{Math.round(a.observed * 100)}%</td>
-              <td>{a.errorPx == null ? "—" : `${a.errorPx.toFixed(1)} px`}</td>
-              <td>{a.status === "good" ? "✓" : a.note}</td>
-            </tr>
-          ))}
+          {e.areas.map((a) => {
+            const m = match?.areas.find((x) => x.id === a.id);
+            const v = last?.areas.find((x) => x.id === a.id);
+            const v0 = first?.areas.find((x) => x.id === a.id);
+            const bad = a.status !== "good" || (m && m.status !== "matched") || v?.status === "off";
+            return (
+              <tr key={a.id} className={bad ? "warn" : ""} title={[m?.note, v?.note, a.note].filter(Boolean).join(" ")}>
+                <td>{a.name}</td>
+                <td>{m ? (m.status === "matched" ? "✓" : m.status) : Math.round(a.observed * 100) + "% seen"}</td>
+                <td>
+                  {!v ? "—" : v.status === "aligned" ? `✓ ${v.offPx?.toFixed(1) ?? ""} px` : v.status === "off" ? `${v.offPx?.toFixed(1)} px off` : "can't tell"}
+                  {v0 && v && v0 !== v && v0.offPx != null && v.offPx != null && v0.offPx - v.offPx > 0.5 ? ` (was ${v0.offPx.toFixed(1)})` : ""}
+                </td>
+                <td>{a.errorPx == null ? "—" : `${a.errorPx.toFixed(1)} px`}</td>
+                {actions && (
+                  <td className="nudge">
+                    {(["←", "→", "↑", "↓"] as const).map((k) => (
+                      <button key={k} className="ghost small-btn" disabled={busy} aria-label={`Move ${a.name} ${k}`} onClick={() => run(Promise.resolve().then(() => nudgeArea(a.id, k === "←" ? -1 : k === "→" ? 1 : 0, k === "↑" ? -1 : k === "↓" ? 1 : 0)))}>
+                        {k}
+                      </button>
+                    ))}
+                    {(bad || v?.status === "unverified") && (
+                      <button className="ghost small-btn" disabled={busy} onClick={() => setFixing(a.id)} title="Mark one spot of this area on the photo and the camera picture">
+                        Mark a point
+                      </button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      {actions && <p className="small muted">Arrows move one area by a projector pixel (each area is one undo step; Ctrl+Z undoes). The rest of the house stays put.</p>}
+      {fixing && <AreaPoint areaId={fixing} onClose={() => setFixing(null)} />}
+    </div>
+  );
+};
+
+/** One spot for one area, marked on the photo and the camera picture (the smallest fix when it couldn't be matched). */
+const AreaPoint = ({ areaId, onClose }: { areaId: string; onClose: () => void }) => {
+  const s = useAlign();
+  const project = useStudio((st) => st.project)!;
+  const venue = project.venues[s.venueId!]!;
+  const region = venue.regions[areaId];
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [pick, setPick] = useState<{ photo?: Vec2; camera?: Vec2 }>({});
+  useEffect(() => {
+    void venuePhotoUrl(project).then(setPhotoUrl);
+  }, [project.activeVenueId]);
+  const poly = useMemo(() => (region ? flattenPath(region.path, 8) : []), [region]);
+  const cam = useMemo(() => areasOnCamera().find((a) => a.id === areaId)?.points ?? [], [areaId, s.estimate]);
+  const box = (pts: readonly Vec2[], pad: number) => (pts.length ? { x0: Math.min(...pts.map((p) => p[0])) - pad, y0: Math.min(...pts.map((p) => p[1])) - pad, x1: Math.max(...pts.map((p) => p[0])) + pad, y1: Math.max(...pts.map((p) => p[1])) + pad } : undefined);
+  if (!region || !s.cameraImage) return null;
+  const done = pick.photo && pick.camera;
+  return (
+    <div className="align-areapoint" role="dialog" aria-label={`Mark a point for ${region.name}`}>
+      <p className="small">
+        <b>{region.name}</b>: click a sharp spot of it on the photo (left), then the same spot on the camera picture (right).
+      </p>
+      <div className="align-pair-views">
+        <ZoomImage url={photoUrl} size={venue.canvas} label="House photo" focus={box(poly, 60)} markers={pick.photo ? [{ n: 1, at: pick.photo, pending: !done }] : []} lines={[{ points: poly, color: "#ffc56b" }]} onPick={(p) => setPick({ ...pick, photo: p })} />
+        <ZoomImage url={s.cameraImage.url} size={s.cameraImage} label="Camera picture" focus={box(cam, 60)} markers={pick.camera ? [{ n: 1, at: pick.camera, pending: !done }] : []} lines={cam.length ? [{ points: cam, color: "#7fd4ff" }] : []} onPick={(p) => setPick({ ...pick, camera: p })} />
+      </div>
+      <div className="row gap">
+        <button className="ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          className="primary"
+          disabled={!done || !!s.busy}
+          onClick={() =>
+            run(
+              addAreaPoint(areaId, pick.photo!, pick.camera!)
+                .then(() => applyAlignment())
+                .then(onClose),
+            )
+          }
+        >
+          Use this point
+        </button>
+      </div>
     </div>
   );
 };
@@ -410,7 +582,9 @@ const CameraReview = () => {
   const pairs = useAlign((s) => s.pairs);
   const lines = useMemo(() => areasOnCamera().map((a) => ({ points: a.points, color: "#7fd4ff" })), [img, pairs]);
   if (!img) return null;
-  return <ZoomImage url={img.url} size={img} label="Camera picture with the house areas" markers={pairs.map((p, i) => ({ n: i + 1, at: p.camera }))} lines={lines} onPick={() => {}} />;
+  // Hand-marked points are numbered; hundreds of automatic matches would bury the picture.
+  const hand = pairs.flatMap((p, i) => (!(p as { source?: string }).source || (p as { source?: string }).source!.startsWith("hand:") ? [{ n: i + 1, at: p.camera }] : []));
+  return <ZoomImage url={img.url} size={img} label="Camera picture with the house areas" markers={hand.length < 60 ? hand : []} lines={lines} onPick={() => {}} />;
 };
 
 const Review = () => {
@@ -445,8 +619,11 @@ const Applied = () => {
         <CameraReview />
       </div>
       <div className="align-col">
-        <Estimate />
+        <Estimate actions />
         <div className="row gap wrap">
+          <button className="ghost" disabled={!!s.busy || !s.phone?.connected} onClick={() => run(verifyAndRefine(3))} title="Project the outlines, measure them against the building's edges and correct areas that are off">
+            Check on the building and refine
+          </button>
           <button
             className={`ghost ${outlines ? "on" : ""}`}
             aria-pressed={outlines}
@@ -477,7 +654,7 @@ const Applied = () => {
         {s.progress && <progress max={s.progress.total} value={s.progress.done} />}
         {s.check && <p className={s.check.verdict === "aligned" ? "ok-text small" : "warn small"}>{s.check.message}</p>}
         <p className="small muted">
-          For a small correction, drag the numbered corner points in the Projector view; the measured fine correction stays on top. Check alignment and Realign need the phone where it was when the points were marked.
+          Check alignment first tests whether the phone moved (then its earlier matches no longer count) and whether the picture moved. Realign measures and matches everything again. Nothing changes while a show plays unless you press these.
         </p>
       </div>
     </div>

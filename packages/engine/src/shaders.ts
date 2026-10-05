@@ -496,19 +496,56 @@ struct U {
   blend: vec4f,                    // x: other projectors (0 = no blending), y: curve
   others: array<mat3x3f, 7>,       // content px -> each other projector's output px
   otherSizes: array<vec4f, 7>,     // their output sizes (xy)
-  mesh: vec4f,                     // residual grid: columns, rows, on (1) / off (0)
+  mesh: vec4f,                     // residual grid: columns, rows, on (1) / off (0), surface labels on (1)
+  labelInfo: vec4f,                // surface label map: content px → label texel scale (xy), size (zw)
 };
 @group(0) @binding(0) var content: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var<uniform> u: U;
 @group(0) @binding(3) var outMask: texture_2d<f32>;
 @group(0) @binding(4) var keepOff: texture_2d<f32>;   // content-space "keep light off here" areas
-@group(0) @binding(5) var meshTex: texture_2d<f32>;   // residual grid over the output: content-px offsets (xy)
-// Camera-measured alignment: the offset from the homography at this output pixel (bilinear between grid points).
-fn meshOffset(op: vec2f) -> vec2f {
+@group(0) @binding(5) var meshTex: texture_2d<f32>;   // residual grid over the output: content-px offsets (xy), surface label (z)
+@group(0) @binding(6) var labelTex: texture_2d<f32>;  // content space: which surface (house area) each point is on (r × 255)
+@group(0) @binding(7) var meshBase: texture_2d<f32>;  // with labels: the main wall's correction at every grid point (xy)
+fn contentLabel(cp: vec2f) -> f32 {
+  let p = clamp(vec2i(floor(cp * u.labelInfo.xy)), vec2i(0), vec2i(u.labelInfo.zw) - 1);
+  return round(textureLoad(labelTex, p, 0).r * 255.0);
+}
+// Camera-measured alignment: the offset from the homography at this output pixel, bilinear between the
+// grid points around it — with surface labels, only those of the surface the point falls on, so a
+// correction stops at a depth edge (door, column, roof edge) instead of bleeding across it.
+// Mirrors core autoAlign.ts meshOffsetAt.
+fn meshOffset(op: vec2f, base: vec2f) -> vec2f {
   if (u.mesh.z < 0.5) { return vec2f(0.0); }
-  let g = clamp(op / u.outputSize * (u.mesh.xy - 1.0), vec2f(0.0), u.mesh.xy - 1.0);
-  return textureSampleLevel(meshTex, samp, (g + 0.5) / u.mesh.xy, 0.0).xy;
+  let n = u.mesh.xy;
+  let g = clamp(op / u.outputSize * (n - 1.0), vec2f(0.0), n - 1.0);
+  let i0 = vec2i(min(floor(g), n - 2.0));
+  let t = g - vec2f(i0);
+  var acc = vec3f(0.0);
+  var nearest = vec2f(0.0);
+  var nw = -1.0;
+  for (var k = 0; k < 4; k++) {
+    let d = vec2i(k & 1, k >> 1u);
+    let v = textureLoad(meshTex, i0 + d, 0);
+    let w = select(1.0 - t.x, t.x, d.x == 1) * select(1.0 - t.y, t.y, d.y == 1);
+    if (w > nw) { nw = w; nearest = v.xy; }
+    if (u.mesh.w > 0.5 && contentLabel(base + v.xy) != round(v.z)) { continue; }
+    acc += vec3f(v.xy * w, w);
+  }
+  if (acc.z > 1e-6) { return acc.xy / acc.z; }
+  // None of the four is on this pixel's surface: the main wall's layer, where the pixel is on the wall.
+  if (u.mesh.w > 0.5) {
+    var accB = vec3f(0.0);
+    for (var k = 0; k < 4; k++) {
+      let d = vec2i(k & 1, k >> 1u);
+      let b = textureLoad(meshBase, i0 + d, 0).xy;
+      let w = select(1.0 - t.x, t.x, d.x == 1) * select(1.0 - t.y, t.y, d.y == 1);
+      if (contentLabel(base + b) != 0.0) { continue; }
+      accB += vec3f(b * w, w);
+    }
+    if (accB.z > 1e-6) { return accB.xy / accB.z; }
+  }
+  return nearest;
 }
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> VOut { return fullscreen(vi); }
 // How far inside a projector's frame a point is (0 at the edge): side and top/bottom distances multiplied.
@@ -520,7 +557,7 @@ fn shaped(e: f32) -> f32 { return select(0.0, pow(e, max(u.blend.y, 0.25)), e > 
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let op = i.uv * u.outputSize;
   let h = u.hinv * vec3f(op, 1.0);
-  let cp = h.xy / h.z + meshOffset(op);
+  let cp = h.xy / h.z + meshOffset(op, h.xy / h.z);
   var c = vec4f(0.0);
   if (h.z > 0.0 && all(cp >= vec2f(0.0)) && all(cp <= u.contentSize)) {
     c = textureSampleLevel(content, samp, cp / u.contentSize, 0.0);

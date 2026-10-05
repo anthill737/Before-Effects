@@ -18,7 +18,8 @@
  *     where it actually lands.
  */
 import { applyHomography, homographyResiduals, mat3Invert, type Mat3, solveHomography, solveLinear } from "./geometry.ts";
-import type { Calibration, CalibrationPoint, Vec2 } from "./model.ts";
+import type { Calibration, CalibrationPoint, PathData, Vec2 } from "./model.ts";
+import { flattenPath } from "./pathmath.ts";
 
 const percentile = (xs: number[], q: number) => {
   if (!xs.length) return Number.NaN;
@@ -694,8 +695,10 @@ export const fitCameraToPhoto = (
   const input: FitInput = { pairs, surfaces, threshold: o.threshold ?? Math.max(3, 0.004 * extent), smoothing: o.smoothing ?? 0.02, mainAreaLimit: 0.2 * photoArea };
   const m = fitModel(input);
   if (!m) return null;
+  // Leave-one-out needs a refit per point: for hand-marked points (few). Automatic matches (many) are
+  // checked on held-out points instead.
   const looError = pairs.map((p, i) => {
-    if (pairs.length < 5) return null;
+    if (pairs.length < 5 || pairs.length > 40) return null;
     const mm = fitModel({ ...input, pairs: pairs.filter((_, j) => j !== i) });
     if (!mm) return null;
     const q = mapUndistorted(mm, p.camera);
@@ -784,8 +787,35 @@ export interface AlignSolution {
   readonly fit: { readonly median: number; readonly p95: number; readonly used: number; readonly inlierShare: number; readonly meshCoverage: number };
   /** Grid vertices with observations behind them (1) or filled in (0). */
   readonly observed: Uint8Array;
+  /** Which surface a photo point is on (0: the main wall; k: calibration.mesh.surfaces[k − 1]). */
+  readonly labelOf: (q: Vec2) => number;
 }
 
+
+/** A residual grid: offsets (photo px) at vertices over the projector's picture, optionally per surface. */
+export interface MeshLike {
+  readonly cols: number;
+  readonly rows: number;
+  readonly offsets: ArrayLike<number> | readonly Vec2[];
+  /**
+   * Surface label of each vertex: 0 = the main wall, k = surfaces[k − 1]. Where a grid cell spans a
+   * depth edge, only vertices of the surface the point actually falls on are used, so a door's
+   * correction stops at the door's outline instead of bleeding across it.
+   */
+  readonly labels?: ArrayLike<number>;
+  /** With labels: the main wall's correction at every grid point (used where a pixel's own surface has none near). */
+  readonly base?: ArrayLike<number> | readonly Vec2[];
+}
+
+/** Which surface a photo point is on: the smallest of the given outlines containing it (label k + 1), else 0. */
+export const surfaceLabeler = (outlines: ReadonlyArray<readonly Vec2[]>): ((q: Vec2) => number) => {
+  const order = outlines.map((p, i) => ({ p, i, a: Math.abs(polygonArea(p)) })).sort((a, b) => a.a - b.a);
+  const boxes = order.map((o) => ({ ...o, x0: Math.min(...o.p.map((v) => v[0])), x1: Math.max(...o.p.map((v) => v[0])), y0: Math.min(...o.p.map((v) => v[1])), y1: Math.max(...o.p.map((v) => v[1])) }));
+  return (q) => {
+    for (const b of boxes) if (q[0] >= b.x0 && q[0] <= b.x1 && q[1] >= b.y0 && q[1] <= b.y1 && pointInPolygon(q, b.p)) return b.i + 1;
+    return 0;
+  };
+};
 
 /**
  * Fit the projector alignment from projector↔camera correspondences and the camera→photo map.
@@ -793,12 +823,22 @@ export interface AlignSolution {
  */
 export const solveAlignment = (corr: readonly Correspondence[], g: Pick<CameraToPhoto, "H" | "tps" | "lens" | "surfaces">, o: AlignSolveOptions): AlignSolution | null => {
   const { width: W, height: H0 } = o.output;
-  const pairs = corr.map((c) => ({ p: c.projector, q: mapCameraToPhoto(g, c.camera) })).filter((x) => Number.isFinite(x.q[0]) && Number.isFinite(x.q[1]));
+  // Surfaces corrected on their own get labels; each projector block is labelled by where it lands.
+  const surfaces = g.surfaces.map((s) => ({ id: s.id, polygon: s.polygon }));
+  const labelOf = surfaceLabeler(surfaces.map((s) => s.polygon));
+  const pairs = corr
+    .map((c) => {
+      const q = mapCameraToPhoto(g, c.camera);
+      return { p: c.projector, q, l: labelOf(q) };
+    })
+    .filter((x) => Number.isFinite(x.q[0]) && Number.isFinite(x.q[1]));
   if (pairs.length < 12) return null;
   // Homography photo → projector, robust to misreads; the threshold allows for depth off the main plane.
+  const main = pairs.filter((x) => x.l === 0);
+  const basis = main.length >= 12 ? main : pairs;
   const r = ransacHomography(
-    pairs.map((x) => x.q),
-    pairs.map((x) => x.p),
+    basis.map((x) => x.q),
+    basis.map((x) => x.p),
     Math.max(6, 0.02 * Math.max(W, H0)),
     400,
   );
@@ -806,52 +846,73 @@ export const solveAlignment = (corr: readonly Correspondence[], g: Pick<CameraTo
   const Hp = r.H;
   const Hinv = mat3Invert(Hp);
   if (!Hinv) return null;
-  // Residuals in photo pixels at each observed projector block: what the homography alone gets wrong.
   const spacing = o.gridSpacing ?? 16;
   const cols = Math.ceil(W / spacing) + 1;
   const rows = Math.ceil(H0 / spacing) + 1;
   const sx = W / (cols - 1);
   const sy = H0 / (rows - 1);
-  const acc = new Float64Array(cols * rows * 3);
   const sigma = Math.max(sx, sy) * 0.75;
-  // Drop gross outliers (misread blocks) before spreading residuals: far from the local consensus.
+  // Residuals in photo pixels at each observed block: what the homography alone gets wrong.
   const resid = pairs.map((x) => {
     const c = applyHomography(Hinv, x.p);
     return [x.q[0] - c[0], x.q[1] - c[1]] as Vec2;
   });
-  const keep = robustNeighbourFilter(
-    pairs.map((x) => x.p),
-    resid,
-    Math.max(sx, sy) * 3,
-  );
+  // Drop misread blocks: far from the local consensus of the same surface.
+  const keep = new Array<boolean>(pairs.length).fill(false);
+  const nLabels = surfaces.length + 1;
+  for (let l = 0; l < nLabels; l++) {
+    const idx = pairs.flatMap((x, i) => (x.l === l ? [i] : []));
+    if (!idx.length) continue;
+    const k = robustNeighbourFilter(
+      idx.map((i) => pairs[i]!.p),
+      idx.map((i) => resid[i]!),
+      Math.max(sx, sy) * 3,
+    );
+    idx.forEach((i, j) => (keep[i] = k[j]!));
+  }
+  // Spread residuals to nearby vertices, per surface: weight per (vertex, label).
+  const acc = new Map<number, Float64Array>(); // key: vertex * 256 + label → [x, y, w]
   let used = 0;
   for (let k = 0; k < pairs.length; k++) {
     if (!keep[k]) continue;
     used++;
-    const [px, py] = pairs[k]!.p;
-    const gi = px / sx;
-    const gj = py / sy;
+    const { p, l } = pairs[k]!;
+    const gi = p[0] / sx, gj = p[1] / sy;
     for (let j = Math.max(0, Math.floor(gj - 2)); j <= Math.min(rows - 1, Math.ceil(gj + 2)); j++)
       for (let i = Math.max(0, Math.floor(gi - 2)); i <= Math.min(cols - 1, Math.ceil(gi + 2)); i++) {
-        const d2 = (i * sx - px) ** 2 + (j * sy - py) ** 2;
+        const d2 = (i * sx - p[0]) ** 2 + (j * sy - p[1]) ** 2;
         const wgt = Math.exp(-d2 / (2 * sigma * sigma));
         if (wgt < 1e-3) continue;
-        const v = (j * cols + i) * 3;
-        acc[v]! += wgt * resid[k]![0];
-        acc[v + 1]! += wgt * resid[k]![1];
-        acc[v + 2]! += wgt;
+        const key = (j * cols + i) * 256 + l;
+        let a = acc.get(key);
+        if (!a) acc.set(key, (a = new Float64Array(3)));
+        a[0]! += wgt * resid[k]![0];
+        a[1]! += wgt * resid[k]![1];
+        a[2]! += wgt;
       }
   }
   const off = new Float64Array(cols * rows * 2);
+  const labels = new Uint8Array(cols * rows);
   const observed = new Uint8Array(cols * rows);
-  for (let v = 0; v < cols * rows; v++) {
-    if (acc[v * 3 + 2]! > 0.05) {
-      off[v * 2] = acc[v * 3]! / acc[v * 3 + 2]!;
-      off[v * 2 + 1] = acc[v * 3 + 1]! / acc[v * 3 + 2]!;
+  const best = new Float64Array(cols * rows);
+  for (const [key, a] of acc) {
+    const v = Math.floor(key / 256), l = key % 256;
+    // The vertex belongs to the surface with the most support around it.
+    if (a[2]! > 0.05 && a[2]! > best[v]!) {
+      best[v] = a[2]!;
+      labels[v] = l;
+      off[v * 2] = a[0]! / a[2]!;
+      off[v * 2 + 1] = a[1]! / a[2]!;
       observed[v] = 1;
     }
   }
-  // Fill vertices nobody observed: relax towards their neighbours, and towards no correction far from data.
+  // Unobserved vertices: the surface their point of the photo is on; offsets filled from neighbours of
+  // the same surface (and towards no correction far from any data).
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      const v = j * cols + i;
+      if (!observed[v]) labels[v] = labelOf(applyHomography(Hinv, [i * sx, j * sy]));
+    }
   for (let it = 0; it < 300; it++)
     for (let j = 0; j < rows; j++)
       for (let i = 0; i < cols; i++) {
@@ -861,19 +922,50 @@ export const solveAlignment = (corr: readonly Correspondence[], g: Pick<CameraTo
         for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
           const a = i + di, b = j + dj;
           if (a < 0 || b < 0 || a >= cols || b >= rows) continue;
-          x += off[(b * cols + a) * 2]!;
-          y += off[(b * cols + a) * 2 + 1]!;
+          const u = b * cols + a;
+          if (labels[u] !== labels[v]) continue;
+          x += off[u * 2]!;
+          y += off[u * 2 + 1]!;
           c++;
         }
+        if (!c) continue;
         off[v * 2] = (0.98 * x) / c;
         off[v * 2 + 1] = (0.98 * y) / c;
       }
+  // The main wall's layer: from main-wall blocks only, filled everywhere.
+  const baseOff = new Float64Array(cols * rows * 2);
+  const baseSeen = new Uint8Array(cols * rows);
+  for (const [key, a] of acc) {
+    if (key % 256 !== 0 || a[2]! <= 0.05) continue;
+    const v = Math.floor(key / 256);
+    baseOff[v * 2] = a[0]! / a[2]!;
+    baseOff[v * 2 + 1] = a[1]! / a[2]!;
+    baseSeen[v] = 1;
+  }
+  if (surfaces.length)
+    for (let it = 0; it < 300; it++)
+      for (let j = 0; j < rows; j++)
+        for (let i = 0; i < cols; i++) {
+          const v = j * cols + i;
+          if (baseSeen[v]) continue;
+          let x = 0, y = 0, c = 0;
+          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+            const a = i + di, b = j + dj;
+            if (a < 0 || b < 0 || a >= cols || b >= rows) continue;
+            x += baseOff[(b * cols + a) * 2]!;
+            y += baseOff[(b * cols + a) * 2 + 1]!;
+            c++;
+          }
+          baseOff[v * 2] = (0.98 * x) / c;
+          baseOff[v * 2 + 1] = (0.98 * y) / c;
+        }
+  const mesh: MeshLike = { cols, rows, offsets: off, labels, ...(surfaces.length ? { base: baseOff } : {}) };
   // Fit quality: how far each correspondence lands from where the final mapping puts it, in projector px.
   const scale = projectorPxPerPhotoPx(Hp, o.canvas);
   const errs: number[] = [];
   for (let k = 0; k < pairs.length; k++) {
     if (!keep[k]) continue;
-    const q = mapOutputToContent(Hinv, { cols, rows, offsets: off }, W, H0, pairs[k]!.p);
+    const q = mapOutputToContent(Hinv, mesh, W, H0, pairs[k]!.p, labelOf);
     errs.push(Math.hypot(q[0] - pairs[k]!.q[0], q[1] - pairs[k]!.q[1]) * scale);
   }
   const corners: Vec2[] = [
@@ -889,10 +981,22 @@ export const solveAlignment = (corr: readonly Correspondence[], g: Pick<CameraTo
   const offsets: Vec2[] = [];
   for (let v = 0; v < cols * rows; v++) offsets.push([round2(off[v * 2]!), round2(off[v * 2 + 1]!)]);
   return {
-    calibration: { mode: "mesh", points, mesh: { cols, rows, offsets } },
+    calibration: {
+      mode: "mesh",
+      points,
+      mesh: {
+        cols,
+        rows,
+        offsets,
+        ...(surfaces.length
+          ? { labels: Array.from(labels), surfaces: surfaces.map((s) => s.id), base: Array.from({ length: cols * rows }, (_, v) => [round2(baseOff[v * 2]!), round2(baseOff[v * 2 + 1]!)] as Vec2) }
+          : {}),
+      },
+    },
     H: Hp,
-    fit: { median: percentile(errs, 0.5), p95: percentile(errs, 0.95), used, inlierShare: r.inliers.filter(Boolean).length / pairs.length, meshCoverage: observed.reduce((s, v) => s + v, 0) / observed.length },
+    fit: { median: percentile(errs, 0.5), p95: percentile(errs, 0.95), used, inlierShare: r.inliers.filter(Boolean).length / basis.length, meshCoverage: observed.reduce((s, v) => s + v, 0) / observed.length },
     observed,
+    labelOf,
   };
 };
 
@@ -907,38 +1011,83 @@ export const projectorPxPerPhotoPx = (Hp: Mat3, canvas: { width: number; height:
   return (Math.hypot(b[0] - a[0], b[1] - a[1]) + Math.hypot(d[0] - a[0], d[1] - a[1])) / 20;
 };
 
-/** Residual grid lookup (bilinear), as the output shader does. */
-export const meshOffsetAt = (mesh: { cols: number; rows: number; offsets: ArrayLike<number> | readonly Vec2[] }, W: number, H: number, p: Vec2): Vec2 => {
+const offsetOf = (mesh: MeshLike, v: number, k: 0 | 1): number => {
+  const o = mesh.offsets as ArrayLike<number> & readonly Vec2[];
+  return typeof o[0] === "number" ? (o as ArrayLike<number>)[v * 2 + k]! : (o as readonly Vec2[])[v]![k];
+};
+
+/**
+ * Residual at a projector pixel, as the output shader computes it: bilinear between the four grid
+ * points around it — but with surface labels, only the points whose surface is the one the pixel's
+ * photo point falls on (else the nearest point).
+ */
+export const meshOffsetAt = (mesh: MeshLike, W: number, H: number, p: Vec2, base?: Vec2, labelOf?: (q: Vec2) => number): Vec2 => {
   const fx = Math.min(Math.max((p[0] / W) * (mesh.cols - 1), 0), mesh.cols - 1);
   const fy = Math.min(Math.max((p[1] / H) * (mesh.rows - 1), 0), mesh.rows - 1);
   const i0 = Math.min(Math.floor(fx), mesh.cols - 2), j0 = Math.min(Math.floor(fy), mesh.rows - 2);
   const tx = fx - i0, ty = fy - j0;
-  const get = (i: number, j: number, k: 0 | 1) => {
-    const o = mesh.offsets as ArrayLike<number> & readonly Vec2[];
+  const corners = [
+    [i0, j0, (1 - tx) * (1 - ty)],
+    [i0 + 1, j0, tx * (1 - ty)],
+    [i0, j0 + 1, (1 - tx) * ty],
+    [i0 + 1, j0 + 1, tx * ty],
+  ] as const;
+  let x = 0, y = 0, w = 0, nx = 0, ny = 0, nw = -1;
+  for (const [i, j, wt] of corners) {
     const v = j * mesh.cols + i;
-    return typeof o[0] === "number" ? (o as ArrayLike<number>)[v * 2 + k]! : (o as readonly Vec2[])[v]![k];
-  };
-  const lerp = (k: 0 | 1) => (get(i0, j0, k) * (1 - tx) + get(i0 + 1, j0, k) * tx) * (1 - ty) + (get(i0, j0 + 1, k) * (1 - tx) + get(i0 + 1, j0 + 1, k) * tx) * ty;
-  return [lerp(0), lerp(1)];
+    const ox = offsetOf(mesh, v, 0), oy = offsetOf(mesh, v, 1);
+    if (wt > nw) {
+      nw = wt;
+      nx = ox;
+      ny = oy;
+    }
+    if (mesh.labels && labelOf && base && labelOf([base[0] + ox, base[1] + oy]) !== mesh.labels[v]) continue;
+    x += wt * ox;
+    y += wt * oy;
+    w += wt;
+  }
+  if (w > 1e-9) return [x / w, y / w];
+  // None of the four is on this pixel's surface: the main wall's layer, where the pixel is on the wall.
+  if (mesh.base && labelOf && base) {
+    const b = { offsets: mesh.base } as MeshLike;
+    for (const [i, j, wt] of corners) {
+      const v = j * mesh.cols + i;
+      const ox = offsetOf(b, v, 0), oy = offsetOf(b, v, 1);
+      if (labelOf([base[0] + ox, base[1] + oy]) !== 0) continue;
+      x += wt * ox;
+      y += wt * oy;
+      w += wt;
+    }
+    if (w > 1e-9) return [x / w, y / w];
+  }
+  return [nx, ny];
 };
 
 /** Projector pixel → content (photo) pixel through a calibration's homography and residual grid. */
-export const mapOutputToContent = (Hinv: Mat3, mesh: { cols: number; rows: number; offsets: ArrayLike<number> | readonly Vec2[] } | undefined, W: number, H: number, p: Vec2): Vec2 => {
+export const mapOutputToContent = (Hinv: Mat3, mesh: MeshLike | undefined, W: number, H: number, p: Vec2, labelOf?: (q: Vec2) => number): Vec2 => {
   const c = applyHomography(Hinv, p);
   if (!mesh || mesh.cols < 2 || mesh.rows < 2) return c;
-  const o = meshOffsetAt(mesh, W, H, p);
+  const o = meshOffsetAt(mesh, W, H, p, c, labelOf);
   return [c[0] + o[0], c[1] + o[1]];
 };
 
-/** Content (photo) pixel → projector pixel: the homography, then fixed-point steps through the residual grid. */
-export const mapContentToOutput = (Hp: Mat3, mesh: { cols: number; rows: number; offsets: ArrayLike<number> | readonly Vec2[] } | undefined, W: number, H: number, q: Vec2): Vec2 => {
+/**
+ * Content (photo) pixel → projector pixel: invert the mapping above by fixed-point steps (and, near a
+ * depth edge where those can cycle, a small search for the closest pixel).
+ */
+export const mapContentToOutput = (Hp: Mat3, mesh: MeshLike | undefined, W: number, H: number, q: Vec2, labelOf?: (q: Vec2) => number): Vec2 => {
   let p = applyHomography(Hp, q);
   if (!mesh || mesh.cols < 2) return p;
-  for (let k = 0; k < 10; k++) {
-    const o = meshOffsetAt(mesh, W, H, p);
-    const next = applyHomography(Hp, [q[0] - o[0], q[1] - o[1]]);
-    if (Math.hypot(next[0] - p[0], next[1] - p[1]) < 0.02) return next;
-    p = next;
+  const Hinv = mat3Invert(Hp);
+  if (!Hinv) return p;
+  for (let k = 0; k < 12; k++) {
+    const c = mapOutputToContent(Hinv, mesh, W, H, p, labelOf);
+    const e: Vec2 = [q[0] - c[0], q[1] - c[1]];
+    if (Math.hypot(e[0], e[1]) < 0.02) return p;
+    // Step in projector space by the local homography's Jacobian applied to the photo-space error.
+    const a = applyHomography(Hp, c);
+    const b = applyHomography(Hp, [c[0] + e[0], c[1] + e[1]]);
+    p = [p[0] + (b[0] - a[0]), p[1] + (b[1] - a[1])];
   }
   return p;
 };
@@ -1022,6 +1171,8 @@ export const areaReports = (
   sol: AlignSolution,
   g: CameraToPhoto,
   o: AlignSolveOptions,
+  /** Errors measured otherwise (e.g. on held-out automatic matches), projector px, by area id. */
+  measured?: Readonly<Record<string, number | null>>,
 ): AreaReport[] => {
   const W = o.output.width, H = o.output.height;
   const mesh = sol.calibration.mesh!;
@@ -1039,7 +1190,7 @@ export const areaReports = (
         const q: Vec2 = [x0 + ((i + 0.5) / 12) * (x1 - x0), y0 + ((j + 0.5) / 12) * (y1 - y0)];
         if (!pointInPolygon(q, a.polygon)) continue;
         n++;
-        const p = mapContentToOutput(sol.H, mesh, W, H, q);
+        const p = mapContentToOutput(sol.H, mesh, W, H, q, sol.labelOf);
         if (p[0] >= 0 && p[1] >= 0 && p[0] <= W && p[1] <= H) {
           inPic++;
           if (observedAt(p)) seen++;
@@ -1058,7 +1209,7 @@ export const areaReports = (
       we += wgt * e;
       wsum += wgt;
     });
-    const errorPx = wsum > 0 ? (we / wsum) * scale : null;
+    const errorPx = measured && measured[a.id] != null ? measured[a.id]! : wsum > 0 ? (we / wsum) * scale : null;
     let status: AreaReport["status"] = "good";
     let note = "Aligned.";
     if (inPicture < 0.5) {
@@ -1076,4 +1227,102 @@ export const areaReports = (
     }
     return { id: a.id, name: a.name, observed, inPicture, errorPx, status, note };
   });
+};
+
+/**
+ * A projector's alignment as functions (what the output shader does, on the CPU): photo → projector
+ * pixels and back, with the residual grid and its surface labels. `regions`: the venue's house areas.
+ */
+export const calibrationMapping = (
+  projector: { readonly output: { readonly width: number; readonly height: number }; readonly calibration: Calibration },
+  regions: Readonly<Record<string, { readonly path: PathData }>> = {},
+): { toOutput: (q: Vec2) => Vec2; toContent: (p: Vec2) => Vec2; labelOf: (q: Vec2) => number } | null => {
+  const cal = projector.calibration;
+  const H = solveHomography(
+    cal.points.map((x) => x.content),
+    cal.points.map((x) => x.output),
+  );
+  const Hinv = H && mat3Invert(H);
+  if (!H || !Hinv) return null;
+  const mesh = cal.mode === "mesh" ? cal.mesh : undefined;
+  const labelOf = mesh?.surfaces?.length && mesh.labels ? surfaceLabeler(mesh.surfaces.map((id) => (regions[id] ? flattenPath(regions[id]!.path, 8) : []))) : undefined;
+  const W = projector.output.width, Ht = projector.output.height;
+  return {
+    toOutput: (q) => mapContentToOutput(H, mesh, W, Ht, q, labelOf),
+    toContent: (p) => mapOutputToContent(Hinv, mesh, W, Ht, p, labelOf),
+    labelOf: labelOf ?? (() => 0),
+  };
+};
+
+/**
+ * Move one house area's projection by `delta` projector pixels — the per-area touch-up, and how a
+ * measured residual is corrected. Only that area moves: it becomes a surface of its own in the
+ * residual grid (labelled), so neighbouring areas and the wall around it keep their alignment.
+ * Returns the new calibration fields (mode "mesh", points unchanged, mesh with labels).
+ */
+export const shiftAreaCalibration = (
+  projector: { readonly output: { readonly width: number; readonly height: number }; readonly calibration: Calibration },
+  regions: Readonly<Record<string, { readonly path: PathData }>>,
+  areaId: string,
+  delta: Vec2,
+  gridSpacing = 16,
+): Pick<Calibration, "mode" | "points" | "mesh"> | null => {
+  const region = regions[areaId];
+  if (!region) return null;
+  const poly = flattenPath(region.path, 8);
+  if (poly.length < 3) return null;
+  const cal = projector.calibration;
+  const map = calibrationMapping(projector, regions);
+  const H = solveHomography(
+    cal.points.map((x) => x.content),
+    cal.points.map((x) => x.output),
+  );
+  const Hinv = H && mat3Invert(H);
+  if (!map || !Hinv) return null;
+  const W = projector.output.width, Ht = projector.output.height;
+  // The grid (made, all zero, if this alignment had none).
+  const old = cal.mode === "mesh" && cal.mesh && cal.mesh.offsets.length === cal.mesh.cols * cal.mesh.rows ? cal.mesh : null;
+  const cols = old?.cols ?? Math.ceil(W / gridSpacing) + 1;
+  const rows = old?.rows ?? Math.ceil(Ht / gridSpacing) + 1;
+  const offsets: Vec2[] = old ? old.offsets.map((o) => [o[0], o[1]]) : Array.from({ length: cols * rows }, () => [0, 0]);
+  const labels: number[] = old?.labels && old.labels.length === cols * rows ? [...old.labels] : new Array(cols * rows).fill(0);
+  const surfaces: string[] = [...(old?.surfaces ?? [])];
+  // The main wall's layer: kept, or (first time) the grid as it is where it was main wall.
+  const baseLayer: Vec2[] = old?.base && old.base.length === cols * rows ? old.base.map((o) => [o[0], o[1]]) : offsets.map((o) => [o[0], o[1]]);
+  let label = surfaces.indexOf(areaId) + 1;
+  if (!label) {
+    surfaces.push(areaId);
+    label = surfaces.length;
+    if (label > 255) return null;
+  }
+  // Grid points whose (shifted) photo point is in the area, or within a cell and a half of its edge
+  // (so pixels just inside the edge have grid points of their own surface).
+  const sx = W / (cols - 1), sy = Ht / (rows - 1);
+  const scale = projectorPxPerPhotoPx(H, { width: 2 * Math.max(...poly.map((p) => p[0])), height: 2 * Math.max(...poly.map((p) => p[1])) });
+  const margin = (1.5 * Math.max(sx, sy)) / Math.max(1e-6, scale);
+  const near = (q: Vec2) => {
+    if (pointInPolygon(q, poly)) return true;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[j]!, b = poly[i]!;
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      if (Math.hypot(q[0] - a[0] - t * dx, q[1] - a[1] - t * dy) < margin) return true;
+    }
+    return false;
+  };
+  let changed = 0;
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      const v = j * cols + i;
+      const p: Vec2 = [i * sx, j * sy];
+      // Where this grid point should now take its picture from: where the point delta before it did.
+      const from = map.toContent([p[0] - delta[0], p[1] - delta[1]]);
+      if (labels[v] !== label && !near(from)) continue;
+      const base = applyHomography(Hinv, p);
+      offsets[v] = [round2(from[0] - base[0]), round2(from[1] - base[1])];
+      labels[v] = label;
+      changed++;
+    }
+  if (!changed) return null;
+  return { mode: "mesh", points: cal.points, mesh: { cols, rows, offsets, labels, surfaces, base: baseLayer } };
 };

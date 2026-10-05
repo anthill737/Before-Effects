@@ -293,7 +293,7 @@ export interface OutputShowing {
  * alignment (to check it on the building). `align:…`: camera-alignment patterns — `align:black`,
  * `align:white:<level>`, `align:<x|y>:<bit>:<0|1 inverse>:<block px>:<level>` (level 0–255).
  */
-export type TestPattern = "none" | "identify" | "grid" | "checker" | "white" | "black" | "colors" | "outlines" | `align:${string}`;
+export type TestPattern = "none" | "identify" | "grid" | "checker" | "white" | "black" | "colors" | "outlines" | "outlines:plain" | "photo" | `align:${string}`;
 
 export interface OutputConfig {
   readonly venueId: string;
@@ -308,6 +308,13 @@ export interface PhoneStatus {
   readonly running: boolean;
   /** The page's address, with its private token. */
   readonly url: string | null;
+  /** The same page on the computer's other network addresses (if the first doesn't open on the phone). */
+  readonly alternatives: readonly string[];
+  /** "Trust this computer" (plain http): installs the local authority so the page opens without warnings. */
+  readonly trustUrl: string | null;
+  readonly authority: { readonly name: string; readonly fingerprint: string } | null;
+  /** Windows Firewall rule for this program: blocked means the phone can't reach the page. */
+  readonly firewall: "allowed" | "blocked" | "unknown";
   readonly connected: boolean;
   /** e.g. "Android, Chrome". */
   readonly device: string | null;
@@ -316,6 +323,8 @@ export interface PhoneStatus {
   /** Whether the phone could hold its exposure, focus and white balance during the alignment. */
   readonly controls: { readonly exposure?: string; readonly focus?: string; readonly whiteBalance?: string } | null;
   readonly wakeLock: "on" | "off" | "unsupported" | null;
+  /** What the phone's page reports: secure context, the cameras it has, the one in use, zoom. */
+  readonly page: { readonly secure: boolean; readonly cameras: readonly string[]; readonly camera: string | null; readonly zoom: number | null } | null;
   readonly lastSeen: number | null;
   readonly lastFrame: { readonly width: number; readonly height: number; readonly at: number } | null;
   /** What's wrong, in plain words (camera refused, disconnected, …). */
@@ -508,7 +517,9 @@ export interface BeApi {
   };
   readonly phone: {
     /** Serve the phone page; returns its status and a QR code (SVG) for its address. */
-    start(): Promise<{ status: PhoneStatus; qrSvg: string }>;
+    start(): Promise<{ status: PhoneStatus; qrSvg: string; trustQrSvg: string | null }>;
+    recheckFirewall(): Promise<PhoneStatus["firewall"]>;
+    openFirewallSettings(): Promise<void>;
     stop(): Promise<void>;
     status(): Promise<PhoneStatus>;
     /** A full-size camera frame taken at least `settleMs` after asking. */

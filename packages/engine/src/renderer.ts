@@ -182,6 +182,7 @@ export class FrameRenderer {
           format: "rgba8",
           size: { width: target.width, height: target.height },
           keepOff: keepOffPaths(venue),
+          regions: venue.regions,
           ...blendFor(venue, projector.id),
           ...(o.showGrid ? { showGrid: true } : {}),
         });
@@ -245,6 +246,7 @@ export class FrameRenderer {
       out = renderProjectorOutput(gpu, compositor.raster, encoder, content, { width: comp.width, height: comp.height }, projector, {
         format,
         keepOff: keepOffPaths(project.venues[target.venueId]),
+        regions: project.venues[target.venueId]!.regions,
         ...blendFor(project.venues[target.venueId]!, projector.id),
         ...(target.showGrid ? { showGrid: true } : {}),
       });

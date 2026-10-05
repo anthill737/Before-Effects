@@ -420,7 +420,12 @@ export interface Calibration {
   /** corner-pin: projective (homography) from >= 4 points; mesh adds a residual grid warp. */
   readonly mode: "corner-pin" | "mesh";
   readonly points: readonly CalibrationPoint[];
-  readonly mesh?: { readonly cols: number; readonly rows: number; readonly offsets: readonly Vec2[] };
+  /**
+   * Residual grid over the projector's picture: offsets in content pixels at cols × rows points. With
+   * `labels` (per point: 0 = main wall, k = the house area surfaces[k − 1]), corrections stay on their own
+   * surface across depth edges (camera-measured alignment, core autoAlign.ts).
+   */
+  readonly mesh?: { readonly cols: number; readonly rows: number; readonly offsets: readonly Vec2[]; readonly labels?: readonly number[]; readonly surfaces?: readonly Id[]; readonly base?: readonly Vec2[] };
   readonly savedAt?: string;
   readonly note?: string;
 }

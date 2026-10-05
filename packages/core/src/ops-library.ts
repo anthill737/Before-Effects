@@ -736,7 +736,7 @@ export const calibrationSetPoints = defineOp({
     projectorId: id,
     mode: z.enum(["corner-pin", "mesh"]),
     points: z.array(z.object({ id, label: z.string(), content: vec2, output: vec2 })).min(4),
-    mesh: z.object({ cols: z.number().int().min(2), rows: z.number().int().min(2), offsets: z.array(vec2) }).optional(),
+    mesh: z.object({ cols: z.number().int().min(2), rows: z.number().int().min(2), offsets: z.array(vec2), labels: z.array(z.number().int().min(0).max(255)).optional(), surfaces: z.array(id).optional(), base: z.array(vec2).optional() }).optional(),
   }),
   apply: (d, a) => {
     const p = projectorOf(d, a.venueId, a.projectorId);

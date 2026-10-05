@@ -5,7 +5,7 @@ import { defineConfig } from "electron-vite";
 // Workspace packages ship TypeScript sources, so they are bundled rather than externalised.
 // The phone connection's certificate and QR code libraries are plain JavaScript: bundled too, so the
 // packaged app needs nothing extra installed.
-const bundled = ["@be/core", "@be/engine", "@be/media", "libheif-js", "selfsigned", "qrcode"];
+const bundled = ["@be/core", "@be/engine", "@be/media", "libheif-js", "@peculiar/x509", "qrcode"];
 
 export default defineConfig({
   main: {

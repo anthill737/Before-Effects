@@ -1419,16 +1419,25 @@
     None.
   dependencies: [map.calibration-3d, out.projector-output, out.residual-warp]
   implementation: >-
-    The OpenCV structured_light module (GrayCodePattern; opencv-contrib-python) in the vision sidecar decodes
-    projector↔camera correspondences. The camera is calibrated with a checkerboard (calibrateCamera). With a venue
-    model, correspondences feed map.calibration-3d; otherwise they produce a dense residual warp valid for the camera
-    viewpoint. Patterns are shown through out.projector-output, and capture uses getUserMedia or a folder of photos.
+    "Auto-align with phone" (core autoAlign.ts; studio/align; main phone.ts). A phone browser streams its camera over
+    HTTPS on the local network (certificate from a name-constrained local authority, QR pairing). Gray-code stripes
+    with inverses (Inokuchi; Salvi et al. 2004) give dense projector↔camera correspondences; the camera's radial
+    distortion is estimated from them (division model, Fitzgibbon 2001). The camera view is matched to the house
+    photo automatically with OpenCV.js (AKAZE + ORB, ratio test, MAGSAC++ homography; per-area structure template
+    matching + ECC), or with hand-marked points as a fallback. Camera→photo: homography + thin-plate-spline residual
+    on the main wall, separate homography/affine/shift per house area that stands out or sits back. The projector
+    calibration is a homography plus a residual grid with per-surface labels and a main-wall layer, applied in the
+    output shader, so corrections stop at depth edges. Verification projects the area outlines and measures them
+    against the building's edges (chamfer on Canny distance transform), refining per area; check detects phone
+    and projector movement; per-area touch-up (nudge, single-point fix) with undo. No venue model needed; a model
+    route (map.calibration-3d) is separate.
   io: >-
-    Captured images are saved for re-decoding.
+    Captured frames saved per session; alignment saved with the projector (mode mesh).
   limitations: >-
-    Needs a camera, darkness and a stable setup. A single camera is correct only for its own viewpoint unless combined
-    with a 3D model. Results need separate hardware and mathematical validation, and the app never implies automatic
-    calibration from a single photograph.
+    Simulated and benchmark-tested only so far (no physical house measurement). One projector, a stationary phone,
+    an explicit Check/Realign (never during a show). Matching depends on the house looking like its photo (sheets or
+    decorations can defeat it — then points by hand). A single camera measures only what it sees; unseen or
+    ambiguous areas are reported, not claimed.
   disposition: required-integration
   superseded_by: null
   exclusion_reason: null

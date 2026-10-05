@@ -19,11 +19,12 @@
     "@be/engine": "workspace:*",
     "@be/media": "workspace:*",
     "@huggingface/transformers": "4.3.0",
+    "@peculiar/x509": "^1.14.3",
+    "@techstark/opencv-js": "4.12.0-release.1",
     "libheif-js": "1.23.2",
     "qrcode": "^1.5.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "selfsigned": "^5.5.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

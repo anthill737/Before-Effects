@@ -4,22 +4,25 @@
  * when the alignment asks for one.
  *
  * Phone browsers only allow the camera on secure pages (getUserMedia needs a secure context), so the
- * page is served over HTTPS with a certificate made on this computer for its own network address. It
- * isn't from a certificate authority, so the phone warns once ("not private") and the person taps
- * through. The link carries a random token: nobody else on the network can open the page or send frames.
- * Everything stays on the local network.
+ * page is HTTPS, with a certificate from this computer's own local authority (phoneCert.ts). Install
+ * the authority on the phone once ("Trust this computer", served over plain HTTP on the next port) and
+ * the page opens without warnings; otherwise the phone warns and the person taps through.
+ * The link carries a random token kept between runs: nobody else on the network can open the page or
+ * send frames. Everything stays on the local network.
  */
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { ServerResponse } from "node:http";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { app, ipcMain } from "electron";
+import { app, ipcMain, shell } from "electron";
 import QRCode from "qrcode";
-import { generate } from "selfsigned";
 import type { PhoneCapture, PhoneStatus } from "../shared/api.ts";
 import { log } from "./log.ts";
+import { authority, mobileConfig, serverCertificate } from "./phoneCert.ts";
+import { PHONE_PAGE, STALE_LINK_PAGE, trustPage } from "./phonePage.ts";
 import { editorWindow } from "./windows.ts";
 
 const PORT = 47850;
@@ -31,9 +34,10 @@ interface Pending {
 }
 
 let server: Server | null = null;
+let trustServer: HttpServer | null = null;
 let token = "";
-let url = "";
-let ip = "";
+let ips: string[] = [];
+let port = PORT;
 let events: ServerResponse | null = null;
 let keepAlive: NodeJS.Timeout | null = null;
 let nextId = 1;
@@ -43,12 +47,17 @@ let session = "";
 const state: { -readonly [K in keyof PhoneStatus]: PhoneStatus[K] } = {
   running: false,
   url: null,
+  alternatives: [],
+  trustUrl: null,
+  authority: null,
+  firewall: "unknown",
   connected: false,
   device: null,
   camera: null,
   orientation: null,
   controls: null,
   wakeLock: null,
+  page: null,
   lastSeen: null,
   lastFrame: null,
   message: null,
@@ -62,50 +71,54 @@ const send = (channel: string, payload: unknown) => {
 };
 const changed = () => send("phone:status", { ...state });
 
-/** The laptop's address on the local network (Wi-Fi or Ethernet), preferring private ranges. */
-const lanAddress = (): string | null => {
+/**
+ * The laptop's addresses on local networks, best first: private ranges on real adapters (Wi-Fi,
+ * Ethernet) before virtual ones (WSL, Hyper-V, VPNs), which the phone usually can't reach.
+ */
+export const lanAddresses = (): string[] => {
   const all = Object.entries(networkInterfaces()).flatMap(([name, list]) => (list ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => ({ name, address: a.address })));
   const priv = (a: string) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a);
-  // Virtual adapters (WSL, Hyper-V, VPNs) are rarely what the phone can reach.
-  const virtual = (n: string) => /vEthernet|WSL|Hyper-V|VirtualBox|VMware|Loopback|Tailscale|ZeroTier/i.test(n);
-  return (all.find((a) => priv(a.address) && !virtual(a.name)) ?? all.find((a) => priv(a.address)) ?? all[0])?.address ?? null;
+  const virtual = (n: string) => /vEthernet|WSL|Hyper-V|VirtualBox|VMware|Loopback|Tailscale|ZeroTier|VPN|TAP/i.test(n);
+  const wifi = (n: string) => /Wi-?Fi|WLAN|Wireless/i.test(n);
+  const score = (a: { name: string; address: string }) => (priv(a.address) ? 4 : 0) + (virtual(a.name) ? 0 : 2) + (wifi(a.name) ? 1 : 0);
+  return all.sort((a, b) => score(b) - score(a)).map((a) => a.address);
+};
+
+/** A random token, kept between runs so a phone's saved link keeps working. */
+const persistentToken = (): string => {
+  const f = join(dir(), "phone-token");
+  try {
+    const t = readFileSync(f, "utf8").trim();
+    if (/^[0-9a-f]{24}$/.test(t)) return t;
+  } catch {
+    // made below
+  }
+  const t = randomBytes(12).toString("hex");
+  mkdirSync(dir(), { recursive: true });
+  writeFileSync(f, t);
+  return t;
 };
 
 /**
- * A certificate for this computer's address, kept between runs (the phone only warns again when the
- * address changes). SHA-256, a 2048-bit key, server use, the address in subjectAltName and under
- * 825 days: what iOS requires of TLS certificates.
+ * Windows Firewall: is there a rule blocking this program's incoming connections? (The first time it
+ * listens, Windows asks; "Cancel" or a non-admin answer leaves block rules.)
  */
-const certificateFor = async (address: string): Promise<{ key: string; cert: string }> => {
-  mkdirSync(dir(), { recursive: true });
-  const file = join(dir(), "phone-certificate.json");
-  if (existsSync(file)) {
-    try {
-      const c = JSON.parse(readFileSync(file, "utf8")) as { address: string; until: number; key: string; cert: string };
-      if (c.address === address && c.until > Date.now() + 7 * 864e5) return c;
-    } catch {
-      // made again below
-    }
-  }
-  const days = 800;
-  const pems = await generate([{ name: "commonName", value: `Before Effects ${address}` }], {
-    keySize: 2048,
-    algorithm: "sha256",
-    notBeforeDate: new Date(Date.now() - 864e5),
-    notAfterDate: new Date(Date.now() + days * 864e5),
-    extensions: [
-      { name: "basicConstraints", cA: false, critical: true },
-      { name: "keyUsage", digitalSignature: true, keyEncipherment: true, critical: true },
-      { name: "extKeyUsage", serverAuth: true },
-      { name: "subjectAltName", altNames: [{ type: 7, ip: address }] },
-    ],
+const checkFirewall = (): Promise<PhoneStatus["firewall"]> =>
+  new Promise((resolve) => {
+    if (process.platform !== "win32") return resolve("unknown");
+    execFile("netsh", ["advfirewall", "firewall", "show", "rule", "name=all", "dir=in", "verbose"], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, timeout: 15_000 }, (err, out) => {
+      if (err) return resolve("unknown");
+      const exe = process.execPath.toLowerCase();
+      const rules = out.split(/\r?\n\r?\n/).filter((b) => b.toLowerCase().includes(exe));
+      if (!rules.length) return resolve("unknown");
+      const enabled = rules.filter((b) => /Enabled:\s+Yes/i.test(b));
+      const blocks = enabled.filter((b) => /Action:\s+Block/i.test(b) && /(Private|Any)/i.test(b.match(/Profiles:\s+(.*)/i)?.[1] ?? "Any"));
+      const allows = enabled.filter((b) => /Action:\s+Allow/i.test(b));
+      resolve(blocks.length ? "blocked" : allows.length ? "allowed" : "unknown");
+    });
   });
-  const c = { address, until: Date.now() + days * 864e5, key: pems.private, cert: pems.cert };
-  writeFileSync(file, JSON.stringify(c));
-  return c;
-};
 
-const readBody = (req: import("node:http").IncomingMessage, limit = 24 * 1024 * 1024): Promise<Buffer> =>
+const readBody = (req: IncomingMessage, limit = 24 * 1024 * 1024): Promise<Buffer> =>
   new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let n = 0;
@@ -134,21 +147,25 @@ const disconnected = (why: string) => {
   changed();
 };
 
+const sameAddresses = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
 const start = async (): Promise<PhoneStatus> => {
-  const address = lanAddress();
-  if (!address) throw new Error("This computer isn't on a network the phone could reach (no Wi-Fi or Ethernet address).");
-  if (server && address === ip) return { ...state };
+  const addrs = lanAddresses();
+  if (!addrs.length) throw new Error("This computer isn't on a network the phone could reach (no Wi-Fi or Ethernet address). Connect to the same Wi-Fi as the phone.");
+  if (server && sameAddresses(addrs, ips)) return { ...state };
   stop();
-  ip = address;
-  token = randomBytes(12).toString("hex");
+  ips = addrs;
+  token = persistentToken();
   session = new Date().toISOString().replace(/[:.]/g, "-");
-  const { key, cert } = await certificateFor(address);
+  const { key, cert } = await serverCertificate(dir(), addrs);
+  const ca = await authority(dir());
   const base = `/p/${token}`;
   server = createServer({ key, cert }, (req, res) => {
     const u = new URL(req.url ?? "/", "https://x");
     res.setHeader("Cache-Control", "no-store");
     if (!u.pathname.startsWith(base)) {
-      res.writeHead(404).end();
+      // An old or mistyped link: say so on the phone instead of a bare error.
+      res.writeHead(u.pathname.startsWith("/p/") ? 410 : 404, { "Content-Type": "text/html; charset=utf-8" }).end(STALE_LINK_PAGE);
       return;
     }
     const sub = u.pathname.slice(base.length);
@@ -157,8 +174,11 @@ const start = async (): Promise<PhoneStatus> => {
       return;
     }
     if (req.method === "GET" && sub === "/events") {
-      // One phone at a time: a newer page takes over.
-      events?.end();
+      // One phone at a time: a newer page takes over and the older one is told.
+      if (events) {
+        events.write(`data: ${JSON.stringify({ type: "replaced" })}\n\n`);
+        events.end();
+      }
       res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "keep-alive" });
       res.write(`data: ${JSON.stringify({ type: "hello" })}\n\n`);
       events = res;
@@ -174,21 +194,25 @@ const start = async (): Promise<PhoneStatus> => {
       return;
     }
     if (req.method === "POST" && sub === "/status") {
-      void readBody(req, 64 * 1024).then((b) => {
-        try {
-          const s = JSON.parse(b.toString("utf8")) as Partial<PhoneStatus>;
-          state.camera = s.camera ?? state.camera;
-          state.orientation = s.orientation ?? state.orientation;
-          state.controls = s.controls ?? state.controls;
-          state.wakeLock = s.wakeLock ?? state.wakeLock;
-          state.message = s.message ?? null;
-          state.lastSeen = Date.now();
-          changed();
-        } catch {
-          // ignore a malformed report
-        }
-        res.writeHead(204).end();
-      }, () => res.writeHead(413).end());
+      void readBody(req, 64 * 1024).then(
+        (b) => {
+          try {
+            const s = JSON.parse(b.toString("utf8")) as Partial<PhoneStatus>;
+            if (s.camera !== undefined) state.camera = s.camera;
+            if (s.orientation !== undefined) state.orientation = s.orientation;
+            if (s.controls !== undefined) state.controls = s.controls;
+            if (s.wakeLock !== undefined) state.wakeLock = s.wakeLock;
+            if (s.page !== undefined) state.page = s.page;
+            state.message = s.message ?? null;
+            state.lastSeen = Date.now();
+            changed();
+          } catch {
+            // ignore a malformed report
+          }
+          res.writeHead(204).end();
+        },
+        () => res.writeHead(413).end(),
+      );
       return;
     }
     if (req.method === "POST" && sub === "/frame") {
@@ -223,25 +247,62 @@ const start = async (): Promise<PhoneStatus> => {
     }
     res.writeHead(404).end();
   });
-  await new Promise<void>((resolve, reject) => {
-    server!.once("error", reject);
-    server!.listen(PORT, "0.0.0.0", () => resolve());
-  }).catch(async (e: NodeJS.ErrnoException) => {
-    if (e.code !== "EADDRINUSE") throw e;
-    // Another program has the usual port: any free one.
-    await new Promise<void>((resolve) => server!.listen(0, "0.0.0.0", () => resolve()));
+  port = await listen(server, PORT);
+  // "Trust this computer": plain HTTP (it must open before the phone trusts anything), next port.
+  trustServer = createHttpServer((req, res) => {
+    const u = new URL(req.url ?? "/", "http://x");
+    res.setHeader("Cache-Control", "no-store");
+    if (u.pathname === "/ca.crt") {
+      res.writeHead(200, { "Content-Type": "application/x-x509-ca-cert", "Content-Disposition": 'attachment; filename="before-effects-local.crt"' }).end(ca.certDer);
+      return;
+    }
+    if (u.pathname === "/ca.mobileconfig") {
+      res.writeHead(200, { "Content-Type": "application/x-apple-aspen-config", "Content-Disposition": 'attachment; filename="before-effects.mobileconfig"' }).end(mobileConfig(ca));
+      return;
+    }
+    if (u.pathname === "/" || u.pathname === "/trust") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(trustPage({ name: ca.name, fingerprint: ca.fingerprint, cameraUrl: `https://${ips[0]}:${port}${base}`, ua: req.headers["user-agent"] ?? "" }));
+      return;
+    }
+    res.writeHead(404).end();
   });
-  const port = (server.address() as import("node:net").AddressInfo).port;
-  url = `https://${address}:${port}${base}`;
+  const trustPort = await listen(trustServer, port + 1).catch(() => 0);
   keepAlive = setInterval(() => {
     events?.write(": keep-alive\n\n");
-    if (state.connected && state.lastSeen && Date.now() - state.lastSeen > 20_000) disconnected("The phone stopped answering (screen off, or out of Wi-Fi?).");
+    if (state.connected && state.lastSeen && Date.now() - state.lastSeen > 20_000) disconnected("The phone stopped answering (screen off, the page in the background, or out of Wi-Fi?).");
   }, 5000);
-  Object.assign(state, { running: true, url, connected: false, message: null });
-  log(`phone: page at https://${address}:${port}/p/… (token hidden)`);
+  Object.assign(state, {
+    running: true,
+    url: `https://${addrs[0]}:${port}${base}`,
+    alternatives: addrs.slice(1).map((a) => `https://${a}:${port}${base}`),
+    trustUrl: trustPort ? `http://${addrs[0]}:${trustPort}/` : null,
+    authority: { name: ca.name, fingerprint: ca.fingerprint },
+    connected: false,
+    message: null,
+  });
+  log(`phone: page on ${addrs.join(", ")} port ${port} (token hidden); trust page port ${trustPort}`);
   changed();
+  void checkFirewall().then((f) => {
+    state.firewall = f;
+    if (f === "blocked") log("phone: Windows Firewall blocks incoming connections to this program");
+    changed();
+  });
   return { ...state };
 };
+
+/** Listen on a port, or any free one if it's taken. */
+const listen = (s: Server | HttpServer, want: number): Promise<number> =>
+  new Promise<number>((resolve, reject) => {
+    const onErr = (e: NodeJS.ErrnoException) => {
+      if (e.code !== "EADDRINUSE") return reject(e);
+      s.listen(0, "0.0.0.0", () => resolve((s.address() as import("node:net").AddressInfo).port));
+    };
+    s.once("error", onErr);
+    s.listen(want, "0.0.0.0", () => {
+      s.off("error", onErr);
+      resolve((s.address() as import("node:net").AddressInfo).port);
+    });
+  });
 
 const stop = () => {
   for (const [, p] of pending) {
@@ -249,14 +310,20 @@ const stop = () => {
     p.reject(new Error("The phone connection was closed."));
   }
   pending.clear();
-  events?.end();
+  if (events) {
+    events.write(`data: ${JSON.stringify({ type: "bye" })}\n\n`);
+    events.end();
+  }
   events = null;
   if (keepAlive) clearInterval(keepAlive);
   keepAlive = null;
-  server?.close();
-  server?.closeAllConnections?.();
+  for (const s of [server, trustServer]) {
+    s?.close();
+    s?.closeAllConnections?.();
+  }
   server = null;
-  Object.assign(state, { running: false, url: null, connected: false });
+  trustServer = null;
+  Object.assign(state, { running: false, url: null, alternatives: [], trustUrl: null, connected: false });
   changed();
 };
 
@@ -270,7 +337,7 @@ const capture = (o: { settleMs?: number; quality?: number } = {}): Promise<Phone
   return new Promise<PhoneCapture>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error("The phone didn't send the picture in time (is its screen on and the page open?)."));
+      reject(new Error("The phone didn't send the picture in time (is its screen on and the page open in front?)."));
     }, 15_000);
     pending.set(id, { resolve, reject, timer });
     events!.write(`data: ${JSON.stringify({ type: "capture", id, settleMs: o.settleMs ?? 250, quality: o.quality ?? 0.92 })}\n\n`);
@@ -284,132 +351,29 @@ const lock = (on: boolean) => {
 
 const summarizeAgent = (ua: string): string => {
   const os = /iPhone|iPad/.test(ua) ? "iPhone/iPad" : /Android/.test(ua) ? "Android" : /Windows|Macintosh|Linux/.test(ua) ? "computer" : "phone";
-  const br = /CriOS|Chrome/.test(ua) ? "Chrome" : /FxiOS|Firefox/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "browser";
+  const br = /CriOS|Chrome/.test(ua) ? "Chrome" : /FxiOS|Firefox/.test(ua) ? "Firefox" : /EdgA|EdgiOS/.test(ua) ? "Edge" : /SamsungBrowser/.test(ua) ? "Samsung Internet" : /Safari/.test(ua) ? "Safari" : "browser";
   return `${os}, ${br}`;
 };
 
 export const registerPhoneIpc = () => {
   ipcMain.handle("phone:start", async () => {
     const s = await start();
-    const qrSvg = await QRCode.toString(s.url!, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
-    return { status: s, qrSvg };
+    const qr = (u: string) => QRCode.toString(u, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
+    return { status: s, qrSvg: await qr(s.url!), trustQrSvg: s.trustUrl ? await qr(s.trustUrl) : null };
   });
   ipcMain.handle("phone:stop", () => stop());
   ipcMain.handle("phone:status", () => ({ ...state }));
   ipcMain.handle("phone:capture", (_e, o?: { settleMs?: number; quality?: number }) => capture(o));
   ipcMain.handle("phone:lock", (_e, on: boolean) => lock(on));
+  ipcMain.handle("phone:recheckFirewall", async () => {
+    state.firewall = await checkFirewall();
+    changed();
+    return state.firewall;
+  });
+  // Windows' list of apps allowed through the firewall (the person changes it there).
+  ipcMain.handle("phone:openFirewallSettings", () => {
+    if (process.platform === "win32") execFile("control.exe", ["/name", "Microsoft.WindowsFirewall", "/page", "pageConfigureApps"], { windowsHide: false });
+    else void shell.openExternal("https://support.apple.com/guide/mac-help/mh34041/mac");
+  });
   app.on("before-quit", stop);
 };
-
-// ---------------------------------------------------------------------------------------------
-// The phone's page
-
-const PHONE_PAGE = /* html */ `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Before Effects camera</title>
-<style>
-  html,body{margin:0;height:100%;background:#0b0d12;color:#e8eaf0;font:16px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
-  main{display:flex;flex-direction:column;height:100%}
-  video{flex:1;min-height:0;width:100%;object-fit:contain;background:#000}
-  .bar{padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  .state{font-weight:600}
-  .ok{color:#7ee2a8}.warn{color:#ffc56b}.bad{color:#ff8a8a}
-  button{font:inherit;padding:12px 18px;border-radius:10px;border:0;background:#3b82f6;color:#fff}
-  .hint{color:#aab;font-size:14px;padding:0 16px 12px}
-  .turn{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;background:#000c;font-size:22px;padding:24px}
-  @media (orientation:portrait){.turn.on{display:flex}}
-</style></head>
-<body><main>
-  <video id="v" playsinline muted autoplay></video>
-  <div class="bar"><span id="s" class="state warn">Not started</span><button id="go">Start camera</button></div>
-  <div class="hint" id="h">Put the phone on or right next to the projector, facing the house, and keep it still. Turn it sideways so the whole projected picture fits in view. Keep this page open with the screen on.</div>
-</main>
-<div class="turn" id="turn">Turn the phone sideways (landscape) so the house fits.</div>
-<script>
-(() => {
-  const base = location.pathname.replace(/\\/$/, "");
-  const v = document.getElementById("v"), s = document.getElementById("s"), go = document.getElementById("go"), turn = document.getElementById("turn");
-  const say = (t, c) => { s.textContent = t; s.className = "state " + (c || ""); };
-  let track = null, wake = null, busy = false, es = null, controls = {};
-  const post = (path, body, type) => fetch(base + path, { method: "POST", body, headers: type ? { "Content-Type": type } : {} }).catch(() => {});
-  const report = (message) => {
-    const st = track ? track.getSettings() : {};
-    const portrait = v.videoHeight > v.videoWidth;
-    turn.classList.toggle("on", portrait);
-    post("/status", JSON.stringify({
-      camera: v.videoWidth ? { width: v.videoWidth, height: v.videoHeight, facing: st.facingMode || null } : null,
-      orientation: v.videoWidth ? (portrait ? "portrait" : "landscape") : null,
-      controls, wakeLock: wake ? "on" : ("wakeLock" in navigator ? "off" : "unsupported"), message: message || null,
-    }), "application/json");
-  };
-  const keepAwake = async () => { try { if ("wakeLock" in navigator) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); } } catch { wake = null; } };
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && track && !wake) keepAwake(); });
-  // Hold exposure, focus and white balance during the alignment where the browser allows it.
-  const lock = async (on) => {
-    if (!track || !track.getCapabilities) { controls = { exposure: "unsupported", focus: "unsupported", whiteBalance: "unsupported" }; return report(); }
-    const caps = track.getCapabilities();
-    const out = {};
-    for (const [k, name] of [["exposureMode", "exposure"], ["focusMode", "focus"], ["whiteBalanceMode", "whiteBalance"]]) {
-      const modes = caps[k] || [];
-      const want = on ? "manual" : (modes.includes("continuous") ? "continuous" : null);
-      if (!want || !modes.includes(want)) { out[name] = modes.length ? "auto" : "unsupported"; continue; }
-      try { await track.applyConstraints({ advanced: [{ [k]: want }] }); out[name] = on ? "locked" : "auto"; } catch { out[name] = "auto"; }
-    }
-    controls = out; report();
-  };
-  const grab = (maxW, quality) => new Promise((res) => {
-    const w = v.videoWidth, h = v.videoHeight, k = Math.min(1, maxW / w);
-    const c = document.createElement("canvas"); c.width = Math.round(w * k); c.height = Math.round(h * k);
-    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-    c.toBlob((b) => res({ b, w: c.width, h: c.height }), "image/jpeg", quality);
-  });
-  // A frame captured after the settle time, from a video frame that arrived after it (not a stale one).
-  const freshFrame = (settleMs) => new Promise((res) => {
-    const after = performance.now() + settleMs;
-    const step = (now) => { if (now >= after) res(); else if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step); else setTimeout(() => step(performance.now()), 30); };
-    setTimeout(() => (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(step) : step(performance.now())), settleMs);
-  });
-  const connect = () => {
-    es && es.close();
-    es = new EventSource(base + "/events");
-    es.onopen = () => { say("Connected — leave the phone still", "ok"); report(); };
-    es.onerror = () => say("Connection lost — reconnecting…", "bad");
-    es.onmessage = async (e) => {
-      const m = JSON.parse(e.data);
-      if (m.type === "capture") {
-        busy = true;
-        say("Taking a picture…", "ok");
-        await freshFrame(m.settleMs || 250);
-        const f = await grab(4096, m.quality || 0.92);
-        await post("/frame?id=" + m.id + "&w=" + f.w + "&h=" + f.h, f.b, "image/jpeg");
-        busy = false;
-        say("Connected — leave the phone still", "ok");
-      } else if (m.type === "lock") lock(m.on);
-    };
-  };
-  const preview = async () => {
-    if (track && !busy && v.videoWidth && document.visibilityState === "visible") {
-      const f = await grab(640, 0.6);
-      await post("/frame?id=preview&w=" + f.w + "&h=" + f.h, f.b, "image/jpeg");
-    }
-    setTimeout(preview, 400);
-  };
-  go.onclick = async () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { say("This page can't use the camera (open it with the link from the QR code, over https).", "bad"); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
-      v.srcObject = stream; track = stream.getVideoTracks()[0];
-      await v.play().catch(() => {});
-      go.textContent = "Restart camera";
-      track.addEventListener("ended", () => { say("The camera stopped — tap Restart camera", "bad"); report("camera stopped"); });
-      await keepAwake();
-      v.addEventListener("resize", () => report());
-      connect(); preview(); setTimeout(() => report(), 800);
-    } catch (err) {
-      const denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
-      say(denied ? "Camera permission was refused — allow the camera for this page in the browser's settings, then tap again." : "Couldn't start the camera: " + (err && err.message || err), "bad");
-    }
-  };
-})();
-</script></body></html>`;

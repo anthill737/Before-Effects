@@ -657,3 +657,10 @@ body.file-drag::after { content: "Drop to import"; position: fixed; inset: 12px;
 .align-review-view .zoom-image { min-height: 360px; }
 .align-areas { width: 100%; border-collapse: collapse; }
 .align-areas td, .align-areas th { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.align-qr.small-qr { width: 170px; height: 170px; }
+.align-trouble ul { margin: 6px 0; padding-left: 18px; display: grid; gap: 4px; }
+.align-url { display: inline-block; font-size: 11px; word-break: break-all; margin-right: 6px; }
+.align-areas td.nudge { white-space: nowrap; }
+.align-areas td.nudge .small-btn { padding: 0 6px; min-width: 0; }
+.align-areapoint { position: fixed; inset: 40px; z-index: 70; background: var(--panel); border: 1px solid #3a4250; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px #000c; }
+.align-areapoint .align-pair-views { flex: 1; min-height: 0; }

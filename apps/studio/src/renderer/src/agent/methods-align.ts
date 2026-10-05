@@ -2,16 +2,24 @@
  * Agent methods for camera-assisted projector alignment: the same workflow as the "Auto-align with
  * phone" screen (studio/align/alignSession.ts), step by step.
  *
- *   align.open → (phone scans align.open's url) → align.phone.status until connected → align.checkView
- *   → align.start (capture runs in the background; align.status shows progress; align.cancel stops it)
- *   → align.points.set (≥ 4 camera↔photo pairs) → align.solve → align.apply → align.outlines / align.verify
- *   → later: align.check, align.realign, align.undo.
+ *   Automatic: align.open → (phone scans the url) → align.phone.status until connected → align.checkView
+ *   → align.auto (capture, match the house, solve, apply, check on the building and refine; runs in the
+ *   background — poll align.status; align.cancel stops it).
+ *   Step by step: align.start (capture) → align.match (or align.points.set by hand) → align.solve →
+ *   align.apply → align.refine. Fixes: align.nudge (one area by projector pixels), align.areaPoint (one
+ *   spot for an area that couldn't be matched). Later: align.check, align.realign, align.undo.
  */
-import { mapContentToOutput, solveHomography } from "@be/core";
+import { calibrationMapping } from "@be/core";
 import { z } from "zod";
 import {
+  addAreaPoint,
   alignSnapshot,
   applyAlignment,
+  autoAlign,
+  autoMatch,
+  nudgeArea,
+  phoneMoved,
+  verifyAndRefine,
   areasOnCamera,
   cancelAlign,
   capturePatterns,
@@ -224,7 +232,7 @@ method({
 
 method({
   name: "align.check",
-  summary: "Capture the patterns again and compare with the alignment in use: median/95% offset in projector pixels, per area, and a verdict (aligned / moved). Needs the phone where it was when the points were marked.",
+  summary: "Check: first whether the phone moved (verdict phone-moved: its matches are stale — realign), then capture the patterns and compare with the alignment in use: median/95% offset in projector pixels, per area, verdict aligned / moved.",
   params: z.object({}),
   long: true,
   run: () =>
@@ -236,7 +244,7 @@ method({
 
 method({
   name: "align.realign",
-  summary: "Capture again and solve with the reference points already marked (after the projector moved; the phone must not have). Then align.apply.",
+  summary: "Realign from scratch: capture, match the house again automatically (no stale points), solve, apply, check on the building and refine.",
   params: z.object({}),
   long: true,
   run: () =>
@@ -252,13 +260,86 @@ method({
   params: z.object({ projector: z.string(), photo: z.array(vec).max(10000) }),
   run: (p) => {
     const pr = projectorRef(p.projector);
-    const cal = pr.calibration;
-    const H = solveHomography(
-      cal.points.map((x) => x.content),
-      cal.points.map((x) => x.output),
-    );
-    if (!H) throw new AgentError("failed", "This projector's alignment points are degenerate.");
-    const mesh = cal.mode === "mesh" ? cal.mesh : undefined;
-    return { mode: cal.mode, output: p.photo.map((q) => mapContentToOutput(H, mesh, pr.output.width, pr.output.height, q)) };
+    const v = activeVenue({ project: useStudio.getState().project! });
+    const m = calibrationMapping(pr, v?.regions);
+    if (!m) throw new AgentError("failed", "This projector's alignment points are degenerate.");
+    return { mode: pr.calibration.mode, surfaces: pr.calibration.mesh?.surfaces ?? [], output: p.photo.map((q) => m.toOutput(q)) };
   },
+});
+
+method({
+  name: "align.auto",
+  summary:
+    "The fully automatic run, in the background: capture the patterns, match the camera's view to the house photo, calculate, apply, then project the area outlines, measure them against the building's edges and refine (up to 3 rounds). Poll align.status (autoStep, match, estimate, verification). If matching isn't confident it stops at phase \"points\" for points by hand.",
+  params: z.object({ brightness: z.number().int().min(40).max(255).optional() }),
+  run: (p) => {
+    needOpen();
+    if (useAlign.getState().busy) throw new AgentError("busy", `Busy: ${useAlign.getState().busy}`);
+    if (p.brightness) useAlign.setState({ level: p.brightness });
+    void autoAlign().catch(() => {});
+    return { started: true };
+  },
+});
+
+method({
+  name: "align.match",
+  summary: "Match the camera's view (from the last capture) to the house photo automatically: confidence, feature matches, and per house area found / ambiguous (repeated windows) / weak / outside. Confident matches become the reference points.",
+  params: z.object({}),
+  long: true,
+  run: () =>
+    wrap(() => {
+      needOpen();
+      return autoMatch();
+    }),
+});
+
+method({
+  name: "align.refine",
+  summary: "Project the area outlines, photograph them, measure each area against the building's edges (projector pixels; areas without visible edges are 'unverified') and correct areas that are off; repeats up to `rounds` times (1 = measure and correct once). Uses none of the fitted points.",
+  params: z.object({ rounds: z.number().int().min(1).max(5).optional() }),
+  long: true,
+  run: (p) =>
+    wrap(() => {
+      needOpen();
+      return verifyAndRefine(p.rounds ?? 3);
+    }),
+});
+
+method({
+  name: "align.nudge",
+  summary: "Move one house area's projection by dx, dy projector pixels (only that area moves; repeated nudges of an area merge into one undo step).",
+  params: z.object({ area: z.string().describe("house area id or name"), dx: z.number().min(-200).max(200), dy: z.number().min(-200).max(200) }),
+  mutates: true,
+  run: (p, ctx) => {
+    needOpen();
+    const v = activeVenue({ project: useStudio.getState().project! })!;
+    const id = v.regions[p.area] ? p.area : Object.values(v.regions).find((r) => r.name.toLowerCase() === p.area.toLowerCase())?.id;
+    if (!id) throw new AgentError("not_found", `No house area "${p.area}".`);
+    ctx.edit(() => nudgeArea(id, p.dx, p.dy));
+    return { moved: id };
+  },
+});
+
+method({
+  name: "align.areaPoint",
+  summary: "Add one matching spot for a single house area (photo pixels ↔ camera pixels) — the fix for an area automatic matching couldn't place — and recalculate (then align.apply).",
+  params: z.object({ area: z.string(), photo: vec, camera: vec }),
+  long: true,
+  run: (p) =>
+    wrap(() => {
+      needOpen();
+      return addAreaPoint(p.area, p.photo, p.camera);
+    }),
+});
+
+method({
+  name: "align.phoneMoved",
+  summary: "Whether the phone moved since the house was matched (a fresh picture compared with the matched one): still / moved / unknown, with the shift in camera pixels.",
+  params: z.object({}),
+  long: true,
+  run: () =>
+    wrap(() => {
+      needOpen();
+      return phoneMoved();
+    }),
 });

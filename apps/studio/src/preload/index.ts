@@ -109,6 +109,8 @@ const api: BeApi = {
     status: () => ipcRenderer.invoke("phone:status"),
     capture: (o) => ipcRenderer.invoke("phone:capture", o),
     lock: (on) => ipcRenderer.invoke("phone:lock", on),
+    recheckFirewall: () => ipcRenderer.invoke("phone:recheckFirewall"),
+    openFirewallSettings: () => ipcRenderer.invoke("phone:openFirewallSettings"),
     onStatus: (cb) => on("phone:status", cb),
     onPreview: (cb) => on("phone:preview", cb),
   },

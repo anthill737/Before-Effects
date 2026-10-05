@@ -7,13 +7,14 @@
  */
 import { useEffect, useRef, useState } from "react";
 import "../studio/styles.css";
-import { flattenPath, mapContentToOutput, mat3Invert, solveHomography, stripeLit, type Projector, type Vec2, type Venue } from "@be/core";
+import { calibrationMapping, flattenPath, stripeLit, type Projector, type Vec2, type Venue } from "@be/core";
 import type { OutputConfig, TestPattern } from "../../../shared/api.ts";
 import { PreviewLoop, usePreviewStats } from "../preview/loop.ts";
 import { usePreview } from "../preview/settings.ts";
 import { editorSource } from "../preview/PreviewPanel.tsx";
 import { followerClockError, startFollowerSync } from "../preview/sync.ts";
 import { getMediaHost, getRenderer } from "../studio/engineHost.ts";
+import { venuePhoto } from "../space/actions.ts";
 import { useStudio } from "../studio/store.ts";
 import { onSimFrame } from "../studio/simHost.ts";
 
@@ -51,20 +52,15 @@ const drawAlign = (g: CanvasRenderingContext2D, pattern: string, w: number, h: n
 };
 
 /** The house areas drawn through the projector's current alignment, to check it on the building. */
-const drawOutlines = (g: CanvasRenderingContext2D, venue: Venue, projector: Projector, w: number, h: number) => {
+const drawOutlines = (g: CanvasRenderingContext2D, venue: Venue, projector: Projector, w: number, h: number, names = true) => {
   g.fillStyle = "#000";
   g.fillRect(0, 0, w, h);
-  const cal = projector.calibration;
-  const H = solveHomography(
-    cal.points.map((x) => x.content),
-    cal.points.map((x) => x.output),
-  );
-  if (!H || !mat3Invert(H)) return;
-  const mesh = cal.mode === "mesh" ? cal.mesh : undefined;
+  const m = calibrationMapping(projector, venue.regions);
+  if (!m) return;
   const sx = w / projector.output.width;
   const sy = h / projector.output.height;
   const toOut = (q: Vec2): Vec2 => {
-    const p = mapContentToOutput(H, mesh, projector.output.width, projector.output.height, q);
+    const p = m.toOutput(q);
     return [p[0] * sx, p[1] * sy];
   };
   g.lineWidth = Math.max(2, Math.round(w / 640));
@@ -91,19 +87,86 @@ const drawOutlines = (g: CanvasRenderingContext2D, venue: Venue, projector: Proj
     const cy = pts.reduce((t, p) => t + p[1], 0) / pts.length;
     const c = toOut([cx, cy]);
     g.fillStyle = "#ffffff";
-    g.fillText(r.name, c[0], c[1]);
+    if (names) g.fillText(r.name, c[0], c[1]);
   }
 };
 
-const drawPattern = (c: HTMLCanvasElement, pattern: TestPattern, label: string, w: number, h: number, place?: { venue: Venue; projector: Projector }) => {
+/**
+ * The house photo projected through the alignment (to check it with the camera: projected texture vs
+ * the building's own). Mapped per 4-pixel block and interpolated inside — plenty for measuring.
+ */
+const drawPhoto = (g: CanvasRenderingContext2D, photo: ImageData, venue: Venue, projector: Projector, w: number, h: number) => {
+  const m = calibrationMapping(projector, venue.regions);
+  const out = g.createImageData(w, h);
+  if (!m) return g.putImageData(out, 0, 0);
+  const sx = projector.output.width / w, sy = projector.output.height / h;
+  const kx = photo.width / venue.canvas.width, ky = photo.height / venue.canvas.height;
+  const B = 4;
+  const gw = Math.ceil(w / B) + 1, gh = Math.ceil(h / B) + 1;
+  const grid = new Float32Array(gw * gh * 2);
+  for (let j = 0; j < gh; j++)
+    for (let i = 0; i < gw; i++) {
+      const q = m.toContent([i * B * sx, j * B * sy]);
+      grid[(j * gw + i) * 2] = q[0] * kx;
+      grid[(j * gw + i) * 2 + 1] = q[1] * ky;
+    }
+  const src = photo.data, dst = out.data;
+  for (let y = 0; y < h; y++) {
+    const j = Math.floor(y / B), ty = (y - j * B) / B;
+    for (let x = 0; x < w; x++) {
+      const i = Math.floor(x / B), tx = (x - i * B) / B;
+      const a = (j * gw + i) * 2, b = a + 2, c = a + gw * 2, d = c + 2;
+      const u = (grid[a]! * (1 - tx) + grid[b]! * tx) * (1 - ty) + (grid[c]! * (1 - tx) + grid[d]! * tx) * ty;
+      const v = (grid[a + 1]! * (1 - tx) + grid[b + 1]! * tx) * (1 - ty) + (grid[c + 1]! * (1 - tx) + grid[d + 1]! * tx) * ty;
+      const xi = Math.round(u), yi = Math.round(v);
+      const o = (y * w + x) * 4;
+      dst[o + 3] = 255;
+      if (xi < 0 || yi < 0 || xi >= photo.width || yi >= photo.height) continue;
+      const p = (yi * photo.width + xi) * 4;
+      dst[o] = src[p]!;
+      dst[o + 1] = src[p + 1]!;
+      dst[o + 2] = src[p + 2]!;
+    }
+  }
+  g.putImageData(out, 0, 0);
+};
+
+const photoCache = new Map<string, ImageData>();
+/** The house photo's pixels (loaded once). */
+const housePhoto = async (venue: Venue): Promise<ImageData | null> => {
+  const key = `${venue.id}:${venue.referenceAssetId ?? ""}`;
+  const hit = photoCache.get(key);
+  if (hit) return hit;
+  const project = useStudio.getState().project;
+  if (!project) return null;
+  const blob = await venuePhoto(project);
+  if (!blob) return null;
+  const bmp = await createImageBitmap(blob);
+  const c = new OffscreenCanvas(bmp.width, bmp.height);
+  const g = c.getContext("2d")!;
+  g.drawImage(bmp, 0, 0);
+  bmp.close();
+  const d = g.getImageData(0, 0, c.width, c.height);
+  photoCache.set(key, d);
+  return d;
+};
+
+const drawPattern = (c: HTMLCanvasElement, pattern: TestPattern, label: string, w: number, h: number, place?: { venue: Venue; projector: Projector }, photo?: ImageData | null) => {
   c.width = w;
   c.height = h;
   const g = c.getContext("2d")!;
   g.clearRect(0, 0, w, h);
   if (pattern === "none") return;
   if (pattern.startsWith("align:")) return drawAlign(g, pattern, w, h);
-  if (pattern === "outlines") {
-    if (place) drawOutlines(g, place.venue, place.projector, w, h);
+  if (pattern === "photo") {
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, w, h);
+    if (place && photo) drawPhoto(g, photo, place.venue, place.projector, w, h);
+    return;
+  }
+  if (pattern === "outlines" || pattern === "outlines:plain") {
+    // "plain": without the areas' names (for measuring them with the camera).
+    if (place) drawOutlines(g, place.venue, place.projector, w, h, pattern === "outlines");
     return;
   }
   if (pattern === "black") {
@@ -270,18 +333,25 @@ export const OutputWindow = () => {
 
   useEffect(() => {
     if (!patternRef.current || !projector || !config) return;
-    drawPattern(patternRef.current, config.pattern, `${projector.name.replace(/^Projector\s*/i, "") || "1"} ${projector.name}`, projector.output.width, projector.output.height, venue ? { venue, projector } : undefined);
-    // Reported once it's on screen (two frames later), so alignment capture knows the projector shows it.
+    const canvas = patternRef.current;
     const pattern = config.pattern;
-    let r2 = 0;
-    const r1 = requestAnimationFrame(() => {
-      r2 = requestAnimationFrame(() => window.be.windows.reportOutputPattern(pattern));
-    });
+    let r1 = 0, r2 = 0, gone = false;
+    const draw = (photo?: ImageData | null) => {
+      if (gone) return;
+      drawPattern(canvas, pattern, `${projector.name.replace(/^Projector\s*/i, "") || "1"} ${projector.name}`, projector.output.width, projector.output.height, venue ? { venue, projector } : undefined, photo);
+      // Reported once it's on screen (two frames later), so alignment capture knows the projector shows it.
+      r1 = requestAnimationFrame(() => {
+        r2 = requestAnimationFrame(() => window.be.windows.reportOutputPattern(pattern));
+      });
+    };
+    if (pattern === "photo" && venue) void housePhoto(venue).then(draw, () => draw(null));
+    else draw();
     return () => {
+      gone = true;
       cancelAnimationFrame(r1);
       cancelAnimationFrame(r2);
     };
-  }, [config, projector?.output.width, projector?.output.height, projector?.name, config?.pattern === "outlines" ? projector?.calibration : null, config?.pattern === "outlines" ? venue?.regions : null]);
+  }, [config, projector?.output.width, projector?.output.height, projector?.name, config?.pattern?.startsWith("outlines") || config?.pattern === "photo" ? projector?.calibration : null, config?.pattern?.startsWith("outlines") || config?.pattern === "photo" ? venue?.regions : null]);
 
   return (
     <div className={`output-window ${cursorShown ? "" : "cursor-hidden"}`}>

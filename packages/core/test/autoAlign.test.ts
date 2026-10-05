@@ -182,11 +182,17 @@ const AREAS = [
 ];
 
 /** Projector-pixel error over sample points of each surface, against the true projector pixel. */
-const errors = (sol: NonNullable<ReturnType<typeof solveAlignment>>) => {
-  const by: Record<string, number[]> = { wall: [], door: [], gable: [] };
-  for (let j = 0; j < 60; j++)
-    for (let i = 0; i < 96; i++) {
-      const q: Vec2 = [(i + 0.5) * (canvas.width / 96), (j + 0.5) * (canvas.height / 60)];
+const NEAR: Array<[number, number]> = [
+  [24, 0],
+  [-24, 0],
+  [0, 24],
+  [0, -24],
+];
+const errors = (sol: NonNullable<ReturnType<typeof solveAlignment>>, labels = true) => {
+  const by: Record<string, number[]> = { wall: [], door: [], gable: [], edge: [] };
+  for (let j = 0; j < 120; j++)
+    for (let i = 0; i < 192; i++) {
+      const q: Vec2 = [(i + 0.5) * (canvas.width / 192), (j + 0.5) * (canvas.height / 120)];
       const h0 = hit(photoCam.c, ray(photoCam, q));
       if (!h0) continue;
       const pTrue = projectorPixelFor(h0.X, h0.s);
@@ -194,8 +200,12 @@ const errors = (sol: NonNullable<ReturnType<typeof solveAlignment>>) => {
       // Only where the phone could see it too (elsewhere nothing was measured).
       const c = project(phone, h0.X);
       if (!c || c[0] < 0 || c[1] < 0 || c[0] >= phone.w || c[1] >= phone.h) continue;
-      const p = mapContentToOutput(sol.H, sol.calibration.mesh, PW, PH, q);
-      by[h0.s.name]!.push(Math.hypot(p[0] - pTrue[0], p[1] - pTrue[1]));
+      const p = mapContentToOutput(sol.H, sol.calibration.mesh, PW, PH, q, labels ? sol.labelOf : undefined);
+      const e = Math.hypot(p[0] - pTrue[0], p[1] - pTrue[1]);
+      by[h0.s.name]!.push(e);
+      // Near a depth edge: photo points within 24 px of another surface.
+      const near = NEAR.some(([dx, dy]) => hit(photoCam.c, ray(photoCam, [q[0] + dx, q[1] + dy]))?.s !== h0.s);
+      if (near) by.edge!.push(e);
     }
   const stat = (xs: number[]) => {
     const s = [...xs].sort((a, b) => a - b);
@@ -233,6 +243,11 @@ describe("auto-align (simulated house, phone beside the projector)", () => {
     expect(e.door!.median).toBeLessThan(2);
     expect(e.gable!.median).toBeLessThan(2);
     expect(Math.max(e.wall!.p95, e.door!.p95, e.gable!.p95)).toBeLessThan(4);
+    // Depth edges stay sharp: near a door or gable edge, the surface labels keep each side's correction.
+    const blended = errors(sol, false);
+    console.log("near depth edges, with surface labels:", JSON.stringify(e.edge), "without:", JSON.stringify(blended.edge));
+    expect(e.edge!.p95).toBeLessThan(blended.edge!.p95);
+    expect(e.edge!.median).toBeLessThan(3);
     // The per-area report flags nothing as off when the areas were measured.
     const reps = areaReports(AREAS, sol, g, { output: { width: PW, height: PH }, canvas });
     console.log("areas:", JSON.stringify(reps));
