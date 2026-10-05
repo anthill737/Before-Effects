@@ -311,7 +311,7 @@ const STEPS: Record<string, () => Promise<Result>> = {
     return { ok: opened && closed && note, note: "pop-out opened, editor showed 'open in its own window', then brought back" };
   },
   "projector-output-window": async () => {
-    click(byText(".preview-toolbar [role=radio]", "Projector output"));
+    click(byText(".preview-toolbar [role=radio]", "Projector"));
     await until(() => !!byText(".projector-output button", "Open projector output"));
     click(byText(".projector-output button", "Open projector output"));
     const opened = await until(() => !!byText(".projector-output button", "Close projector output"), 8000);
@@ -323,7 +323,7 @@ const STEPS: Record<string, () => Promise<Result>> = {
     const outputs = await window.be.windows.outputs();
     click(byText(".projector-output button", "Close projector output"));
     const closed = await until(() => !!byText(".projector-output button", "Open projector output"), 5000);
-    click(byText(".preview-toolbar [role=radio]", "Show preview"));
+    click(byText(".preview-toolbar [role=radio]", "Show"));
     return { ok: opened && closed && outputs.length === 1, note: `output opened on ${outputs[0]?.displayLabel ?? "?"}, patterns switched, closed` };
   },
   "open-export": async () => {

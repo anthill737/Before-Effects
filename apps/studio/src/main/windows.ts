@@ -215,6 +215,13 @@ export const registerWindowIpc = (mode: string) => {
       webPreferences: webPrefs("output", mode),
     });
     win.removeMenu();
+    // On its own screen, clicking the output (pointing at the house) hands the keyboard straight
+    // back to the editor, so Space, undo and the rest keep working. (On the only screen it keeps
+    // focus, so Esc closes it.)
+    win.on("focus", () => {
+      const ed = editorWindow();
+      if (ed && !ed.isDestroyed() && screen.getDisplayMatching(ed.getBounds()).id !== d.id) ed.focus();
+    });
     load(win, "output", mode);
     outputs.set(config.projectorId, { win, config });
     win.on("closed", () => {

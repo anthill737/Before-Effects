@@ -1,5 +1,6 @@
 /**
- * Full-screen projector output. Shows only the projector image: no editor UI, no cursor.
+ * Full-screen projector output. Shows only the projector image: no editor UI. The mouse shows while
+ * it moves (to point at things on the house while editing) and hides after a few seconds still.
  *
  * It renders at the projector's configured output size, independent of the editor's preview size.
  * Test patterns help identify the right display and check alignment. Press Esc to close it.
@@ -102,6 +103,20 @@ export const OutputWindow = () => {
   const [status, setStatus] = useState("Connecting to the editor…");
   const project = useStudio((s) => s.project);
   const loopRef = useRef<PreviewLoop | null>(null);
+  const [cursorShown, setCursorShown] = useState(false);
+  useEffect(() => {
+    let t = 0;
+    const moved = () => {
+      setCursorShown(true);
+      clearTimeout(t);
+      t = window.setTimeout(() => setCursorShown(false), 3000);
+    };
+    window.addEventListener("mousemove", moved);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("mousemove", moved);
+    };
+  }, []);
 
   useEffect(() => {
     let off: (() => void) | null = null;
@@ -179,7 +194,7 @@ export const OutputWindow = () => {
   }, [config, projector?.output.width, projector?.output.height, projector?.name]);
 
   return (
-    <div className="output-window">
+    <div className={`output-window ${cursorShown ? "" : "cursor-hidden"}`}>
       <canvas ref={canvasRef} className="output-canvas" />
       <canvas ref={patternRef} className="output-canvas pattern" style={{ display: config?.pattern && config.pattern !== "none" ? "block" : "none" }} />
       {status && <div className="output-status">{status}</div>}

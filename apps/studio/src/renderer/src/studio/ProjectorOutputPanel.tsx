@@ -3,7 +3,7 @@
  * identification), open a full-screen output with no editor UI, and switch test patterns while
  * aligning. Physical alignment stays "unverified" until checked against the real surface.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DisplayInfo, OutputStatus, TestPattern } from "../../../shared/api.ts";
 import { useStudio } from "./store.ts";
 
@@ -23,20 +23,34 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
   const [displayId, setDisplayId] = useState<number | null>(null);
   const [outputs, setOutputs] = useState<OutputStatus[]>([]);
-  const [pattern, setPattern] = useState<TestPattern>("identify");
+  const [pattern, setPattern] = useState<TestPattern>("none");
+  const displaysSeen = useRef(0);
 
   const saved = projector?.output.displayId;
   useEffect(() => {
-    void window.be.displays.list().then((d) => {
-      setDisplays(d);
-      // The display this projector was last shown on, if it's connected; else one that isn't the
-      // main screen (projectors are usually external).
-      const remembered = d.find((x) => String(x.id) === saved);
-      setDisplayId((cur) => cur ?? (remembered ?? d.find((x) => !x.primary) ?? d[0])?.id ?? null);
-    });
+    // Displays are re-listed every second, so a projector plugged in (or Windows switched to
+    // Extend) shows up without reopening anything.
+    const list = () =>
+      void window.be.displays.list().then((d) => {
+        setDisplays((old) => (JSON.stringify(old) === JSON.stringify(d) ? old : d));
+        // The display this projector was last shown on, if it's connected; else one that isn't the
+        // main screen (projectors are usually external). A choice of the main screen made only
+        // because nothing else was connected moves to the projector when it appears.
+        const remembered = d.find((x) => String(x.id) === saved);
+        const pick = (remembered ?? d.find((x) => !x.primary) ?? d[0])?.id ?? null;
+        setDisplayId((cur) => {
+          const still = d.find((x) => x.id === cur);
+          return still && !(still.primary && d.length > 1 && displaysSeen.current <= 1) ? cur : pick;
+        });
+        displaysSeen.current = d.length;
+      });
+    list();
     void window.be.windows.outputs().then(setOutputs);
     // Output health: what each output is showing, refreshed every second.
-    const t = setInterval(() => void window.be.windows.outputs().then(setOutputs), 1000);
+    const t = setInterval(() => {
+      list();
+      void window.be.windows.outputs().then(setOutputs);
+    }, 1000);
     const off = window.be.windows.onWindowsChanged((w) => setOutputs(w.outputs));
     return () => {
       clearInterval(t);
@@ -79,7 +93,7 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
           Identify displays
         </button>
         {!open ? (
-          <button className="primary" onClick={() => void openOutput("identify")} disabled={displayId === null}>
+          <button className="primary" onClick={() => void openOutput("none")} disabled={displayId === null}>
             Open projector output
           </button>
         ) : (
@@ -93,7 +107,11 @@ export const ProjectorOutputPanel = ({ venueId, projectorId }: { venueId: string
           {status.displayLabel} was disconnected. The output reopens on it as soon as it's connected again.
         </p>
       )}
-      {onlyOne && <p className="muted small">Only one display is connected. The output will open full-screen on it — press Esc on the output to return.</p>}
+      {onlyOne && (
+        <p className="warn small">
+          Only this screen is connected. To show on the projector while you keep editing here, plug it in and press Win+P → Extend; it appears in this list by itself.
+        </p>
+      )}
       {open && (
         <>
           <div className="segmented wrap" role="radiogroup" aria-label="Test pattern">
