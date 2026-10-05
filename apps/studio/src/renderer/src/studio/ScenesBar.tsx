@@ -45,15 +45,21 @@ export const showComp = (): Composition | undefined => {
   return p ? p.compositionOrder.map((id) => p.compositions[id]!).find((c) => c?.show) : undefined;
 };
 
-/** Create (or open) the show: every scene in order, crossfading. */
+/** Open the show (its running order of scenes), if there is one. */
 export const openShow = () => {
+  const existing = showComp();
+  if (existing) pickScene(existing.id);
+};
+
+/** Assemble a show: every scene in order, crossfading, as a new running order (an edit, undoable). */
+export const assembleShow = () => {
   const s = useStudio.getState();
   if (!s.project) return;
   const existing = showComp();
   if (existing) return pickScene(existing.id);
   const entries: ShowEntry[] = sceneIds(s.project).map((id, i) => ({ sceneId: id, seconds: Math.max(1, Math.round(timeToSeconds(s.project!.compositions[id]!.duration))), transition: i === 0 ? "cut" : "fade", fadeSeconds: 1 }));
   const showId = newId("show");
-  if (s.apply({ type: "show.set", args: { showId, name: "Show", entries, makeMain: true } }, { label: "Arrange the show" })) pickScene(showId);
+  if (s.apply({ type: "show.set", args: { showId, name: "Show", entries, makeMain: true } }, { label: "Assemble a show from the scenes" })) pickScene(showId);
 };
 
 export const ScenesBar = () => {
@@ -141,12 +147,26 @@ export const ScenesBar = () => {
             >
               Empty scene — same areas, nothing in them yet
             </button>
+            {!show && (
+              <button
+                role="menuitem"
+                className="list-item"
+                onClick={() => {
+                  setMenu(false);
+                  assembleShow();
+                }}
+              >
+                Assemble a show from the scenes… — a running order that plays them one after another
+              </button>
+            )}
           </div>
         )}
       </span>
-      <button role="tab" aria-selected={!!show && compId === show.id} className={`scene-tab show-tab ${show && compId === show.id ? "on" : ""}`} onClick={openShow} title="Play the scenes in order, with cuts or crossfades">
-        ▶ Show{show ? ` · ${show.show?.entries.length ?? 0} scenes` : ""}
-      </button>
+      {show && (
+        <button role="tab" aria-selected={compId === show.id} className={`scene-tab show-tab ${compId === show.id ? "on" : ""}`} onClick={openShow} title="The show: your scenes in order, with cuts or crossfades">
+          Show · {show.show?.entries.length ?? 0} scenes
+        </button>
+      )}
     </div>
   );
 };

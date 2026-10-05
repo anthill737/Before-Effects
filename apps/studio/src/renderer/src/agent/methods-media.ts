@@ -758,6 +758,7 @@ method({
       recentSoundStarts: previewAudio.startLog.slice(-8),
       soundStallsMs: previewAudio.stalls.slice(-8),
       unshownCauses: currentPreviewLoop()?.causes ?? null,
+      smoothness: currentPreviewLoop()?.smoothness ?? null,
       now: Math.round(performance.now()),
       scene3dResolves: scene3dResolves(),
       orbit: s.orbit,

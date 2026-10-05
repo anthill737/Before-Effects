@@ -286,7 +286,15 @@ progress { width: 100%; height: 12px; accent-color: var(--accent); }
 .transport { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
 .transport .icon.on { background: #ffc56b33; border-color: #ffc56b88; }
 .range-tools { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-.preview-status { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px 10px 6px; font-size: 12px; background: var(--panel); color: var(--text); font-variant-numeric: tabular-nums; }
+/* One line of fixed height: what it says changes while playing, the preview's size never does. */
+.preview-status { display: flex; flex-wrap: nowrap; align-items: center; gap: 14px; height: 26px; box-sizing: border-box; padding: 0 10px; overflow: hidden; white-space: nowrap; font-size: 12px; background: var(--panel); color: var(--text); font-variant-numeric: tabular-nums; }
+.preview-status > * { flex: none; }
+.preview-status > .status-fill { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.preview-status .prepare-job { flex-wrap: nowrap; }
+/* Full screen: the picture alone on black. */
+.preview-scroll:fullscreen { background: #000; }
+.preview-scroll:fullscreen > :not(.canvas-stage), .preview-scroll:fullscreen .canvas-stage > :not(canvas) { display: none !important; }
+.preview-scroll:fullscreen .canvas-stage { box-shadow: none; }
 .preview-status .warn { color: #ffb36b; }
 .preview-status .offer { color: #ffcf8f; }
 .preview-status progress { width: 120px; height: 8px; vertical-align: middle; margin-left: 6px; }

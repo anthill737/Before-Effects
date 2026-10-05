@@ -418,6 +418,9 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
           <button className="ghost small-btn" onClick={onPopOut} title="Move the preview into its own window, e.g. on another display">
             ⧉ Pop out
           </button>
+          <button className="ghost small-btn" onClick={enterFullScreen} title="Watch the preview on the whole screen (Esc to come back; Space plays and pauses)">
+            ⛶ Full screen
+          </button>
         </>
       )}
       {role === "popout" && (
@@ -572,13 +575,19 @@ const RecommendAndPrepare = () => {
         <button className="ghost small-btn" disabled={busy || !project} onClick={() => void prepareNow("scene", plan.resolution)}>
           Prepare this scene
         </button>
-        <button className="ghost small-btn" disabled={busy || !hasShow} title={hasShow ? "Every scene, in show order" : "Make the show in the scenes bar first"} onClick={() => void prepareNow("show", plan.resolution)}>
+        <button className="ghost small-btn" disabled={busy || !hasShow} title={hasShow ? "Every scene, in show order" : "Assemble a show first (+ Scene menu)"} onClick={() => void prepareNow("show", plan.resolution)}>
           Prepare the whole show
         </button>
       </div>
       <PrepareStatus />
     </div>
   );
+};
+
+/** The preview's picture on the whole screen (Esc, or the browser's own exit, comes back). */
+const enterFullScreen = () => {
+  const el = document.querySelector<HTMLElement>(".preview-panel .preview-scroll");
+  if (el && !document.fullscreenElement) void el.requestFullscreen().catch(() => undefined);
 };
 
 /** Whole gigabytes, the way computers and graphics cards are sold ("32 GB", "12 GB"). */
@@ -820,10 +829,7 @@ const StatusLine = () => {
       )}
       <SimChip />
       <PrepareStatus compact />
-      <span className="muted">
-        Cache {st.cacheFrames} frames · {formatSize(st.cacheMB * MB)} of {formatSize(st.cacheBudgetMB * MB)}
-        {s.diskCache && ` · Disk ${!disk || disk.scanning ? "(looking…)" : `${disk.files.toLocaleString()} frames · ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)}`}`}
-      </span>
+      {st.size && s.resolution !== "full" && st.size.width === st.size.fullWidth && <span className="muted">playing prepared full-size frames</span>}
       {behind && s.resolution !== "auto" && (
         <span className="offer">
           Dropping frames.{" "}
@@ -840,6 +846,10 @@ const StatusLine = () => {
           )}
         </span>
       )}
+      <span className="muted status-fill">
+        Cache {st.cacheFrames} frames · {formatSize(st.cacheMB * MB)} of {formatSize(st.cacheBudgetMB * MB)}
+        {s.diskCache && ` · Disk ${!disk || disk.scanning ? "(looking…)" : `${disk.files.toLocaleString()} frames · ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)}`}`}
+      </span>
     </div>
   );
 };

@@ -109,6 +109,15 @@ export class PreviewLoop {
    * passed over by the clock between two turns to draw (the window wasn't given a turn in time).
    */
   readonly causes = { lateReads: 0, lateTurns: 0, slowTurns: 0, longestTurnMs: 0 };
+  /**
+   * How smoothly the picture moved in the latest play, as a viewer sees it: the time from one new
+   * picture to the next. More than 100 ms (three frames at 30 a second) is a stall, whether or not a
+   * frame was skipped — a frame held while it's read, a pause to read ahead, waiting for the sound.
+   * `startWaitMs`: from pressing play to the first picture.
+   */
+  readonly smoothness = { stalls: 0, stalledMs: 0, longestGapMs: 0, startWaitMs: 0, newFrames: 0 };
+  private playStartedAt: number | null = null;
+  private lastNewFrameAt: number | null = null;
   /** The time this window's clock was at on its last turn while playing. */
   private lastPlayT: number | null = null;
   /** When (ms epoch) its playing clock was last set: the moment the show time it shows is for. */
@@ -237,6 +246,13 @@ export class PreviewLoop {
     // Auto: adaptive while playing, full quality when paused (accurate stills and stepping).
     let fraction = this.fixed?.fraction ?? effectiveFraction(s);
     if (!this.fixed && s.resolution === "auto" && !playing) fraction = 1;
+    // Prepared frames are full size. A smaller preview shows them (scaled down) wherever they are, rather
+    // than rendering every frame again at its own size: reading a prepared frame is far quicker than
+    // rendering one, at any size. Frames not prepared are rendered at the size chosen.
+    if (!this.fixed && useDisk && fraction < 1) {
+      const at = timeToFrame(this.source.time(), comp.frameRate);
+      if (this.cache.has(compId, at, 1, quality) || this.disk.has(project, compId, at, 1, quality)) fraction = 1;
+    }
 
     // ---- clock -------------------------------------------------------------------------
     const dt = now - this.lastTick;
@@ -251,6 +267,9 @@ export class PreviewLoop {
     if (justStarted) {
       this.sync = [];
       this.syncMax = null;
+      Object.assign(this.smoothness, { stalls: 0, stalledMs: 0, longestGapMs: 0, startWaitMs: 0, newFrames: 0 });
+      this.playStartedAt = now;
+      this.lastNewFrameAt = null;
       // Counting starts afresh (the frame shown before playing may be from before a seek).
       this.lastPlayedFrame = -1;
     }
@@ -440,6 +459,18 @@ export class PreviewLoop {
       // Frames never shown: passed over by the clock, or not ready in time (round the loop counts
       // from the last frame of the range; seconds apart is a seek).
       if (mode === "playing") {
+        const m = this.smoothness;
+        if (this.lastNewFrameAt === null) m.startWaitMs = this.playStartedAt === null ? 0 : Math.round(now - this.playStartedAt);
+        else {
+          const gap = now - this.lastNewFrameAt;
+          m.longestGapMs = Math.max(m.longestGapMs, Math.round(gap));
+          if (gap > 100) {
+            m.stalls++;
+            m.stalledMs += Math.round(gap);
+          }
+        }
+        m.newFrames++;
+        this.lastNewFrameAt = now;
         const u = unshownBetween(this.lastPlayedFrame, frame, this.wrappedAt, timeToFrame(range.start, comp.frameRate), fps);
         this.dropped += u.unshown;
         if (u.back) this.stepsBack++;
