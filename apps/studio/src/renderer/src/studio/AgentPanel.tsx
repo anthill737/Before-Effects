@@ -26,7 +26,8 @@ export const useAgentStatus = (open: boolean): [AgentStatus | null, (s: AgentSta
 const recent = (iso: string) => !!iso && Date.now() - Date.parse(iso) < 60_000;
 
 export const AgentButton = () => {
-  const [open, setOpen] = useState(false);
+  const open = useStudio((s) => s.agentsOpen);
+  const setOpen = (v: boolean) => useStudio.setState({ agentsOpen: v });
   const [status] = useAgentStatus(open);
   const active = !!status?.listening && recent(status.lastRequestAt);
   const activity = useAgentActivity();

@@ -81,6 +81,9 @@ export interface StudioState {
   toasts: Toast[];
   exportOpen: boolean;
   rendersOpen: boolean;
+  /** The Google Drive and Agent access panels (opened from the top bar or the menu bar). */
+  driveOpen: boolean;
+  agentsOpen: boolean;
   showGrid: boolean;
   previewScale: number;
   previewMs: number;
@@ -142,6 +145,8 @@ export const useStudio = create<StudioState>((set, get) => {
     toasts: [],
     exportOpen: false,
     rendersOpen: false,
+    driveOpen: false,
+    agentsOpen: false,
     showGrid: false,
     previewScale: 1,
     previewMs: 0,

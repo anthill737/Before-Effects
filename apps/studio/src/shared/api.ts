@@ -414,6 +414,8 @@ export interface BeApi {
     metrics(): Promise<{ cpu: string; threads: number; ramGB: number; processes: Array<{ type: string; name: string; mb: number; privateMb: number }> }>;
     reportSpike(result: unknown): Promise<void>;
     log(message: string): void;
+    /** Commands from the menu bar (File, Edit, View, …). Returns a function that stops listening. */
+    onMenu(fn: (command: string) => void): () => void;
   };
   /** Preview frames kept on disk (see main/previewCache.ts), and how much memory there is for caches. */
   readonly cache: {

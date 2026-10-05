@@ -53,6 +53,11 @@ const api: BeApi = {
     metrics: () => ipcRenderer.invoke("app:metrics"),
     reportSpike: (result) => ipcRenderer.invoke("app:reportSpike", result),
     log: (message) => ipcRenderer.send("app:log", message),
+    onMenu: (fn) => {
+      const h = (_e: unknown, command: string) => fn(command);
+      ipcRenderer.on("menu:command", h);
+      return () => ipcRenderer.removeListener("menu:command", h);
+    },
   },
   cache: {
     machine: () => ipcRenderer.invoke("cache:machine"),

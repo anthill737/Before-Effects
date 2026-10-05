@@ -17,6 +17,7 @@ import { Library } from "./Library.tsx";
 import { openProjectFile, saveProject, startAutosave } from "./persistence.ts";
 import { SpacePanel } from "../space/SpacePanel.tsx";
 import { togglePlay } from "../preview/PreviewPanel.tsx";
+import { runMenuCommand } from "./menuCommands.ts";
 import { ContentPanel } from "./ContentPanel.tsx";
 import { PreviewSidePanel } from "./SidePanels.tsx";
 import { useStudio } from "./store.ts";
@@ -122,6 +123,18 @@ const useShortcuts = () => {
   }, []);
 };
 
+/** A side panel that folds away (the panel toggles at the top right of the window; a folded panel's strip shows it again). */
+const SidePanel = ({ side, collapsed, children }: { side: "left" | "right"; collapsed: boolean; children: React.ReactNode }) => {
+  const name = side === "left" ? "left panel" : "right panel";
+  if (collapsed)
+    return (
+      <button className={`side-shell side-strip ${side}`} onClick={() => usePreview.getState().set({ [side === "left" ? "leftCollapsed" : "rightCollapsed"]: false })} title={`Show the ${name}`} aria-label={`Show the ${name}`}>
+        {side === "left" ? "›" : "‹"}
+      </button>
+    );
+  return <div className={`side-shell ${side}`}>{children}</div>;
+};
+
 const LeftPanel = () => {
   const step = useStudio((s) => s.step);
   const assistant = useAssistant((s) => s.open);
@@ -137,6 +150,9 @@ export const App = () => {
   const maximized = usePreview((s) => s.maximized);
   const assistantOpen = useAssistant((s) => s.open);
   useShortcuts();
+  useEffect(() => window.be.app.onMenu?.(runMenuCommand), []);
+  const leftCollapsed = usePreview((s) => s.leftCollapsed);
+  const rightCollapsed = usePreview((s) => s.rightCollapsed);
   useEffect(() => startAutosave(), []);
   // Photos and media dragged in from Explorer (works on the welcome screen too).
   useEffect(() => (window.be.app.kind === "editor" || window.be.app.kind === "uitest" ? startFileDrop() : undefined), []);
@@ -154,14 +170,22 @@ export const App = () => {
       </>
     );
   return (
-    <div className={`studio ${maximized ? "maximized" : ""} ${assistantOpen ? "assistant-open" : ""}`}>
+    <div className={`studio ${maximized ? "maximized" : ""} ${assistantOpen ? "assistant-open" : ""} ${leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""}`}>
       <TopBar />
       <div className="workspace">
-        {!maximized && <LeftPanel />}
+        {!maximized && (
+          <SidePanel side="left" collapsed={leftCollapsed}>
+            <LeftPanel />
+          </SidePanel>
+        )}
         <main className="center">
           <PreviewPanel role="editor" source={editorSource} />
         </main>
-        {!maximized && <Inspector />}
+        {!maximized && (
+          <SidePanel side="right" collapsed={rightCollapsed}>
+            <Inspector />
+          </SidePanel>
+        )}
       </div>
       <ScenesBar />
       <Timeline />

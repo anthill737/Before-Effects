@@ -68,6 +68,9 @@ export interface PreviewSettings {
   ambient: number;
   /** Enlarged preview (side panels collapsed; timeline and transport stay). */
   maximized: boolean;
+  /** The left panel (Areas, Content, Effects, …) or the right panel (the inspector) folded away. */
+  leftCollapsed: boolean;
+  rightCollapsed: boolean;
 }
 
 const DEFAULTS: PreviewSettings = {
@@ -96,6 +99,8 @@ const DEFAULTS: PreviewSettings = {
   orbit: DEFAULT_ORBIT,
   ambient: 0.05,
   maximized: false,
+  leftCollapsed: false,
+  rightCollapsed: false,
 };
 
 /** Smallest amounts the cache controls accept (there's no largest). */

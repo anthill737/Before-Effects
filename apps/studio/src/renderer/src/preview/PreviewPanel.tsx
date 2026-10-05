@@ -35,10 +35,10 @@ import { dropOnArea, isContentDrag, readDragPayload } from "../studio/assign.ts"
 import { areaAt } from "../space/areaEdit.ts";
 
 const VIEWS: Array<{ id: View; label: string; hint: string }> = [
-  { id: "show", label: "Show preview", hint: "The show exactly as it will be exported (projected light only)" },
-  { id: "venue", label: "On the house", hint: "Simulated: your content lit onto the house photo, as the audience would see it. The photo is never exported or sent to the projector." },
-  { id: "3d", label: "3D projection", hint: "Your content on the building — drag to orbit, right-drag to pan, wheel to zoom" },
-  { id: "projector", label: "Projector output", hint: "The image the projector will output, with its alignment and output corrections" },
+  { id: "show", label: "Show", hint: "The show exactly as it will be exported (projected light only)" },
+  { id: "venue", label: "On house", hint: "Simulated: your content lit onto the house photo, as the audience would see it. The photo is never exported or sent to the projector." },
+  { id: "3d", label: "3D", hint: "Your content on the building — drag to orbit, right-drag to pan, wheel to zoom" },
+  { id: "projector", label: "Projector", hint: "The image the projector will output, with its alignment and output corrections" },
 ];
 
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
@@ -340,7 +340,6 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
         ))}
       </div>
       <label className="tool-field" title="How many pixels the preview renders. Exports always use full size and quality.">
-        <span>Preview size</span>
         <select value={s.resolution} onChange={(e) => s.set({ resolution: e.target.value as ResolutionChoice, autoFraction: 1 })} aria-label="Preview size">
           {RESOLUTIONS.map((r) => (
             <option key={r.id} value={r.id}>
@@ -367,7 +366,6 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
       </label>
       {s.view !== "3d" ? (
         <label className="tool-field" title="Display zoom only — never changes the rendered pixels">
-          <span>Zoom</span>
           <select value={s.zoom === "fit" ? "fit" : String(s.zoom)} onChange={(e) => s.set({ zoom: e.target.value === "fit" ? "fit" : Number(e.target.value) })} aria-label="Zoom">
             <option value="fit">Fit</option>
             {s.zoom !== "fit" && !ZOOMS.includes(s.zoom) && <option value={String(s.zoom)}>{Math.round(s.zoom * 100)}%</option>}
@@ -422,14 +420,14 @@ const PreviewToolbar = ({ role, hasProjector, onPopOut }: { role: "editor" | "po
       <div className="grow" />
       {role === "editor" && (
         <>
-          <button className="ghost small-btn" onClick={() => s.set({ maximized: !s.maximized })} title="Enlarge the preview (keeps the timeline and controls)" aria-pressed={s.maximized}>
-            {s.maximized ? "⤡ Restore" : "⤢ Enlarge"}
+          <button className="ghost small-btn" onClick={() => s.set({ maximized: !s.maximized })} title={s.maximized ? "Back to the panels (`)" : "Enlarge the preview — keeps the timeline and controls (`)"} aria-label={s.maximized ? "Restore" : "Enlarge"} aria-pressed={s.maximized}>
+            {s.maximized ? "⤡" : "⤢"}
           </button>
-          <button className="ghost small-btn" onClick={onPopOut} title="Move the preview into its own window, e.g. on another display">
-            ⧉ Pop out
+          <button className="ghost small-btn" onClick={onPopOut} title="Pop out: the preview in its own window, e.g. on another display" aria-label="Pop out">
+            ⧉
           </button>
-          <button className="ghost small-btn" onClick={enterFullScreen} title="Watch the preview on the whole screen (Esc to come back; Space plays and pauses)">
-            ⛶ Full screen
+          <button className="ghost small-btn" onClick={enterFullScreen} title="Full screen: the preview on the whole screen (Esc to come back; Space plays and pauses)" aria-label="Full screen">
+            ⛶
           </button>
         </>
       )}
@@ -595,7 +593,7 @@ const RecommendAndPrepare = () => {
 };
 
 /** The preview's picture on the whole screen (Esc, or the browser's own exit, comes back). */
-const enterFullScreen = () => {
+export const enterFullScreen = () => {
   const el = document.querySelector<HTMLElement>(".preview-panel .preview-scroll");
   if (el && !document.fullscreenElement) void el.requestFullscreen().catch(() => undefined);
 };

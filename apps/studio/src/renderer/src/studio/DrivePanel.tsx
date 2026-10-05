@@ -20,7 +20,8 @@ const place = (rel: string) => ["My Drive", ...rel.split("/").filter(Boolean)].j
 const size = (b: number) => (b < 1e6 ? `${Math.max(1, Math.round(b / 1e3))} KB` : b < 1e9 ? `${(b / 1e6).toFixed(0)} MB` : `${(b / 1e9).toFixed(1)} GB`);
 
 export const DriveButton = () => {
-  const [open, setOpen] = useState(false);
+  const open = useStudio((s) => s.driveOpen);
+  const setOpen = (v: boolean) => useStudio.setState({ driveOpen: v });
   return (
     <div className="tool-pop">
       <button className="ghost" onClick={() => setOpen(!open)} aria-expanded={open} title="Google Drive: bring in media, save and open show packages">

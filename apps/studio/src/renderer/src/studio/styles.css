@@ -53,7 +53,18 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 
 /* Top bar */
 .studio { display: grid; grid-template-rows: 52px minmax(0, 1fr) auto 210px; height: 100vh; }
-.topbar { display: flex; align-items: center; gap: 16px; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; }
+/* One row that never reflows: the steps, then the actions at the right (labels that change length are kept to a set width). */
+.topbar { display: flex; align-items: center; gap: 16px; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; flex-wrap: nowrap; white-space: nowrap; }
+.topbar > * { flex: none; }
+.topbar .top-actions { margin-left: auto; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; }
+.topbar .top-actions > * { flex: none; }
+.topbar .agent-last { display: none; }
+.topbar .renders-btn { min-width: 8.5em; }
+.topbar .top-actions > button.ghost:last-child { flex: 0 1 auto; min-width: 0; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.panel-toggles { display: flex; gap: 2px; margin-right: 4px; }
+.panel-toggle { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; padding: 0; }
+.panel-toggle:hover { border-color: #3a4250; color: var(--text); }
+.panel-toggle.on { color: var(--text); }
 .brand { font-weight: 700; font-size: 15px; white-space: nowrap; }
 .brand-mark { color: var(--accent); }
 .route { display: flex; gap: 4px; flex: 1; justify-content: center; min-width: 0; overflow: hidden; }
@@ -68,7 +79,15 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .save-state.dirty { color: #ffcf8f; }
 
 /* Workspace */
-.workspace { display: grid; grid-template-columns: 290px minmax(0, 1fr) 330px; min-height: 0; }
+.workspace { display: grid; grid-template-columns: var(--left-w, 290px) minmax(0, 1fr) var(--right-w, 330px); min-height: 0; }
+.studio.left-collapsed { --left-w: 22px; }
+.studio.right-collapsed { --right-w: 22px; }
+/* Side panels fold away (toggles at the top right); a folded one is a thin strip that shows it again. */
+.side-shell { position: relative; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.side-shell > * { flex: 1; min-height: 0; }
+.side-strip { border: none; border-right: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 16px; cursor: pointer; padding: 0; }
+.side-strip.right { border-right: none; border-left: 1px solid var(--line); }
+.side-strip:hover { color: var(--text); background: var(--panel-2); }
 .panel { background: var(--panel); border-right: 1px solid var(--line); padding: 12px; overflow-y: auto; min-height: 0; }
 .inspector { border-right: none; border-left: 1px solid var(--line); }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
@@ -260,12 +279,15 @@ progress { width: 100%; height: 12px; accent-color: var(--accent); }
 .custom-scale { width: 56px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 4px; }
 .small-btn { padding: 4px 10px; min-height: 30px; font-size: 13px; }
 .tool-pop { position: relative; }
-.popover { position: absolute; top: 36px; left: 0; z-index: 20; background: var(--panel-2); border: 1px solid #3a4250; border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; min-width: 240px; box-shadow: 0 10px 32px #000b; }
+.popover { position: absolute; top: 36px; left: 0; z-index: 20; background: var(--panel-2); border: 1px solid #3a4250; border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; min-width: 240px; max-width: min(560px, calc(100vw - 24px)); box-shadow: 0 10px 32px #000b; white-space: normal; overflow-wrap: anywhere; }
+/* Menus near the right edge open leftwards, so they stay on screen; their text wraps (the bars above them don't). */
+.preview-toolbar .popover, .top-actions .popover { white-space: normal; }
+.preview-toolbar .tool-pop:last-child .popover, .preview-toolbar .popover.quality, .preview-toolbar .preview-pop, .top-actions .popover { left: auto; right: 0; }
 .popover.wide { min-width: 360px; }
 .check { display: flex; align-items: center; gap: 8px; }
 .row-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .row-field > span { color: var(--muted); font-size: 12.5px; }
-.popover.quality { width: 420px; max-height: 75vh; overflow-y: auto; }
+.popover.quality { width: min(440px, calc(100vw - 24px)); max-height: 75vh; overflow-y: auto; overflow-x: hidden; }
 .popover.quality h3 { margin: 6px 0 0; }
 .popover.quality p.small { margin: 0; }
 .popover.quality .recommend { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid #3a4250; border-radius: 8px; background: #ffffff08; }
@@ -376,7 +398,7 @@ textarea.text-input { resize: vertical; font: inherit; }
 .assistant-btn.on { border-color: var(--accent); color: var(--accent); }
 .assistant-btn.busy { border-color: #ffc56b88; }
 .studio.assistant-open:not(.maximized) .toasts { left: 396px; }
-.studio.assistant-open:not(.maximized) .workspace { grid-template-columns: 380px minmax(0, 1fr) 330px; }
+.studio.assistant-open:not(.maximized):not(.left-collapsed) { --left-w: 380px; }
 .panel.assistant { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .panel.assistant h2 { margin: 0; }
 .a-head select { max-width: 150px; }

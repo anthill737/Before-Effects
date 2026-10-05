@@ -3,6 +3,7 @@
  * happens in renderer windows (WebGPU); this process moves finished pixels into encoders and
  * files onto disk.
  */
+import { setAppMenu } from "./menu.ts";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
@@ -148,6 +149,7 @@ app.whenReady().then(() => {
   log(`ready (mode ${mode}, packaged ${app.isPackaged}, ffmpeg ${health().ffmpeg.ok ? "ok" : "MISSING"})`);
   registerHouseDetect();
   registerBlender();
+  setAppMenu();
   const win = openEditor();
   // The external-agent API starts with the app when it's enabled (Settings → Agent access).
   if (mode === "studio" || mode === "uitest") void registerAgentApi(mode);

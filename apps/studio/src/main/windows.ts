@@ -66,7 +66,8 @@ export const createEditor = (mode: "studio" | "spike" | "uitest"): BrowserWindow
     show: false,
     backgroundColor: "#0e1014",
     title: "Before Effects",
-    autoHideMenuBar: true,
+    // The menu bar (File, Edit, View, …) is always shown.
+    autoHideMenuBar: false,
     webPreferences: webPrefs(kind, mode),
   });
   if (mode !== "spike") win.once("ready-to-show", () => win.show());
@@ -142,6 +143,7 @@ export const registerWindowIpc = (mode: string) => {
       autoHideMenuBar: true,
       webPreferences: webPrefs("preview", mode),
     });
+    preview.removeMenu();
     load(preview, "preview", mode);
     preview.on("closed", () => {
       preview = null;
@@ -212,6 +214,7 @@ export const registerWindowIpc = (mode: string) => {
       skipTaskbar: false,
       webPreferences: webPrefs("output", mode),
     });
+    win.removeMenu();
     load(win, "output", mode);
     outputs.set(config.projectorId, { win, config });
     win.on("closed", () => {

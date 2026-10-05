@@ -80,7 +80,7 @@ const STEPS: Record<string, () => Promise<Result>> = {
     const tabs = [...document.querySelectorAll(".preview-toolbar [role=radio]")].map((b) => b.textContent);
     const area = panel ? panel.getBoundingClientRect().width * panel.getBoundingClientRect().height : 0;
     const share = area / (window.innerWidth * window.innerHeight);
-    return { ok: !!panel && tabs.includes("Show preview") && tabs.includes("3D projection") && tabs.includes("Projector output") && share > 0.3, note: `preview occupies ${Math.round(share * 100)}% of the window; tabs: ${tabs.join(", ")}` };
+    return { ok: !!panel && tabs.includes("Show") && tabs.includes("3D") && tabs.includes("Projector") && share > 0.3, note: `preview occupies ${Math.round(share * 100)}% of the window; tabs: ${tabs.join(", ")}` };
   },
   "resolution-full": async () => {
     st().setPlaying(false);
@@ -159,7 +159,7 @@ const STEPS: Record<string, () => Promise<Result>> = {
     return { ok: meanDiff < 3 && lum / n > 0.005, note: `Full ${full.w}×${full.h} averaged down vs Half ${half.w}×${half.h}: mean difference ${meanDiff.toFixed(2)} of 255 (same picture, sharper at Full)` };
   },
   "view-3d": async () => {
-    click(byText(".preview-toolbar [role=radio]", "3D projection"));
+    click(byText(".preview-toolbar [role=radio]", "3D"));
     await sleep(800);
     const o = usePreview.getState().orbit;
     usePreview.getState().set({ orbit: { ...o, yaw: -32, pitch: 12 } });
@@ -168,14 +168,14 @@ const STEPS: Record<string, () => Promise<Result>> = {
     return { ok: usePreview.getState().view === "3d" && canvas().width > 200 && looksRendered(px), note: `3D viewport renders ${canvas().width}×${canvas().height}; pixels mean ${px.mean}, contrast ${px.spread}`, settle: 1000 };
   },
   "view-projector": async () => {
-    click(byText(".preview-toolbar [role=radio]", "Projector output"));
+    click(byText(".preview-toolbar [role=radio]", "Projector"));
     const ok = await until(() => usePreview.getState().view === "projector" && !!document.querySelector(".calibration"));
     await sleep(400);
     const px = await canvasPixels();
     return { ok: ok && looksRendered(px), note: `projector output preview ${canvas().width}×${canvas().height}; pixels mean ${px.mean}, contrast ${px.spread}`, settle: 900 };
   },
   "view-show": async () => {
-    click(byText(".preview-toolbar [role=radio]", "Show preview"));
+    click(byText(".preview-toolbar [role=radio]", "Show"));
     return { ok: await until(() => usePreview.getState().view === "show") };
   },
   "frame-step": async () => {
@@ -289,19 +289,19 @@ const STEPS: Record<string, () => Promise<Result>> = {
     return { ok, note: "Ctrl+Z restored the previous color" };
   },
   "enlarge-preview": async () => {
-    click(byText(".preview-toolbar button", "Enlarge"));
+    click(document.querySelector('.preview-toolbar button[aria-label="Enlarge"]'));
     await sleep(500);
     const ok = !!document.querySelector(".studio.maximized") && !!document.querySelector(".transport") && !!document.querySelector(".timeline");
     return { ok, note: "side panels hidden; transport and timeline still available", settle: 700 };
   },
   "restore-preview": async () => {
-    click(byText(".preview-toolbar button", "Restore"));
+    click(document.querySelector('.preview-toolbar button[aria-label="Restore"]'));
     return { ok: await until(() => !document.querySelector(".studio.maximized")) };
   },
   "pop-out-preview": async () => {
     let open = false;
     const off = window.be.windows.onWindowsChanged((w) => (open = w.preview));
-    click(byText(".preview-toolbar button", "Pop out"));
+    click(document.querySelector('.preview-toolbar button[aria-label="Pop out"]'));
     const opened = await until(() => open, 8000);
     await sleep(2500);
     const note = !!document.querySelector(".popped-note");
