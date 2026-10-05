@@ -131,6 +131,16 @@ export const PreviewPanel = ({ role, source, clean = false }: PreviewPanelProps)
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const loopRef = useRef<PreviewLoop | null>(null);
   const [box, setBox] = useState({ w: 800, h: 450 });
+  // Where the hand tool has moved the picture to (screen pixels); back to the middle when the view or zoom changes.
+  const pan = useRef({ x: 0, y: 0 });
+  const stageRef = useRef<HTMLDivElement>(null);
+  const placeStage = () => {
+    if (stageRef.current) stageRef.current.style.translate = pan.current.x || pan.current.y ? `${pan.current.x}px ${pan.current.y}px` : "";
+  };
+  useLayoutEffect(() => {
+    pan.current = { x: 0, y: 0 };
+    placeStage();
+  }, [s.view, s.zoom]);
   const [error, setError] = useState<string | null>(null);
 
   useLayoutEffect(() => {
@@ -240,8 +250,9 @@ export const PreviewPanel = ({ role, source, clean = false }: PreviewPanelProps)
         const o = st.orbit;
         st.set({ orbit: { ...o, panX: o.panX - dx * 0.002 * o.distance, panY: o.panY + dy * 0.002 * o.distance } });
       } else {
-        el.scrollLeft -= dx;
-        el.scrollTop -= dy;
+        // The picture moves with the hand, at any zoom (also past its edges, to reach what's there).
+        pan.current = { x: pan.current.x + dx, y: pan.current.y + dy };
+        placeStage();
       }
     };
     const up = (e: PointerEvent) => {
@@ -357,8 +368,9 @@ export const PreviewPanel = ({ role, source, clean = false }: PreviewPanelProps)
           </div>
         )}
         <div
+          ref={stageRef}
           className={`canvas-stage ${dropArea ? "drop-active" : ""}`}
-          style={{ width: stage.w, height: stage.h, display: poppedOut && role === "editor" ? "none" : undefined }}
+          style={{ width: stage.w, height: stage.h, display: poppedOut && role === "editor" ? "none" : undefined, translate: pan.current.x || pan.current.y ? `${pan.current.x}px ${pan.current.y}px` : undefined }}
           onDragOver={(e) => {
             if (role !== "editor" || s.view !== "show" || !venue || !isContentDrag(e.dataTransfer)) return;
             e.preventDefault();
