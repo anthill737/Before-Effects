@@ -180,7 +180,7 @@ method({
 
 method({
   name: "project.save",
-  summary: "Save the show (to its file, or to `path`; default Documents\\Before Effects\\Projects\\<name>.beproj).",
+  summary: "Save the show (to its file, or to `path`; default the shows folder: Google Drive's Projects folder when Drive is set up).",
   params: z.object({ path: z.string().optional() }),
   run: async (p) => {
     const pr = project();

@@ -57,6 +57,13 @@ export const savePackageToDrive = async (name?: string) => {
 export const openPackageFromDrive = async (where?: string): Promise<{ project: string; files: number; bytes: number } | null> => {
   const pick = where ?? (await window.be.drive.chooseFiles("package"))[0];
   if (!pick) return null;
+  // A show file opens where it is (in Drive): nothing is copied anywhere.
+  if (/\.beproj$/i.test(pick)) {
+    const opened = await window.be.files.openProject(pick);
+    if (!opened) throw new Error(`Couldn't open ${pick}.`);
+    useStudio.getState().openProject(deserialize(opened.json), opened.path);
+    return { project: opened.path, files: 1, bytes: opened.json.length };
+  }
   const r = await window.be.drive.packageOpen(pick);
   const opened = await window.be.files.openProject(r.project);
   if (!opened) throw new Error(`The package was copied to ${r.project} but couldn't be opened.`);

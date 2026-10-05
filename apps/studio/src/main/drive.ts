@@ -100,6 +100,12 @@ const folderPaths = (root: string, s: DriveSettings) => {
   return { base, media: at("media"), projects: at("projects"), exports: at("exports") };
 };
 
+/** Where shows are saved when Google Drive is set up (its Projects folder), or null. */
+export const driveShowsFolder = (): string | null => {
+  const root = myDrive();
+  return root ? folderPaths(root, readSettings()).projects : null;
+};
+
 export const driveStatus = async (notice?: string): Promise<DriveStatus> => {
   const s = readSettings();
   const root = myDrive();
@@ -339,10 +345,10 @@ export const registerDriveIpc = () => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const start = root ? folderPaths(root, readSettings())[kind === "package" ? "projects" : "media"] : undefined;
     const r = await dialog.showOpenDialog(win!, {
-      title: kind === "package" ? "Open a project package from Google Drive (choose its package.json)" : "Bring in media from Google Drive",
+      title: kind === "package" ? "Open a show from Google Drive (a show file, or a package's package.json)" : "Bring in media from Google Drive",
       ...(start && existsSync(start) ? { defaultPath: start } : root ? { defaultPath: root } : {}),
       properties: kind === "package" ? ["openFile"] : ["openFile", "multiSelections"],
-      filters: kind === "package" ? [{ name: "Before Effects package", extensions: ["json"] }] : [{ name: "Pictures, video and sound", extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff", "mp4", "mov", "m4v", "webm", "mkv", "avi", "wav", "mp3", "m4a", "aac", "flac", "ogg", "aiff"] }],
+      filters: kind === "package" ? [{ name: "Before Effects show or package", extensions: ["beproj", "json"] }] : [{ name: "Pictures, video and sound", extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff", "mp4", "mov", "m4v", "webm", "mkv", "avi", "wav", "mp3", "m4a", "aac", "flac", "ogg", "aiff"] }],
     });
     return r.canceled ? [] : r.filePaths;
   });

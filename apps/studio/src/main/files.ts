@@ -5,6 +5,7 @@ import { basename, dirname, extname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { availablePresets, EncodeSession, type EncodeSpec, findFfmpegSync, MediaError, probe, type VerifyExpectation, verifyOutput } from "@be/media";
 import type { AppPaths, HealthReport } from "../shared/api.ts";
+import { driveShowsFolder } from "./drive.ts";
 import { log, logDir } from "./log.ts";
 import { decodeHeif, isHeif } from "./heic.ts";
 import { running } from "./processes.ts";
@@ -14,7 +15,9 @@ export const paths = (): AppPaths => {
   const base = existsSync("D:\\") ? "D:\\Before Effects" : join(homedir(), "Documents", "Before Effects");
   const p: AppPaths = {
     renders: join(base, "Renders"),
-    projects: join(homedir(), "Documents", "Before Effects", "Projects"),
+    // Shows live in one place: the Google Drive folder's Projects folder when Drive is set up, else next
+    // to the renders. A separate profile (a test copy) keeps its own, so tests never save among them.
+    projects: process.env.BE_PROFILE_DIR ? join(app.getPath("userData"), "Projects") : (driveShowsFolder() ?? join(base, "Projects")),
     autosave: join(app.getPath("userData"), "autosave"),
     media: join(base, "Media"),
     cache: join(base, "Cache"),
