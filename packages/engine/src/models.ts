@@ -86,6 +86,15 @@ export const analyzeModel = async (bytes: Uint8Array): Promise<ModelInfo> => {
     const t = Math.max(0.005, (max.y - min.y) * 0.01);
     for (const x of [min.x, max.x]) for (const y of [min.y, max.y]) for (const z of [min.z - t, max.z + t]) hull.push(round(x), round(y), round(z));
   }
+  // Cameras (where they are in the model's frame), its named top-level parts, and what it animates.
+  const cameras: Array<NonNullable<ModelInfo["cameras"]>[number]> = [];
+  root.traverse((o) => {
+    const c = o as THREE.PerspectiveCamera;
+    if (!c.isPerspectiveCamera) return;
+    cameras.push({ name: c.name, matrix: c.matrixWorld.elements.map((v) => Math.round(v * 1e6) / 1e6), fovY: c.fov, ...(c.aspect ? { aspect: c.aspect } : {}), near: c.near, far: c.far });
+  });
+  const nodes = root.children.map((c) => c.name).filter((n) => !!n);
+  const animated = [...new Set(gltf.animations.flatMap((a) => a.tracks.map((t) => t.name.slice(0, t.name.lastIndexOf(".")))))].filter((n) => !!n);
   return {
     bounds: box.isEmpty() ? [0, 0, 0, 0, 0, 0] : [round(box.min.x), round(box.min.y), round(box.min.z), round(box.max.x), round(box.max.y), round(box.max.z)],
     hull,
@@ -93,5 +102,42 @@ export const analyzeModel = async (bytes: Uint8Array): Promise<ModelInfo> => {
     triangles: Math.round(triangles),
     animations: gltf.animations.length,
     lights,
+    ...(cameras.length ? { cameras } : {}),
+    ...(nodes.length ? { nodes } : {}),
+    ...(animated.length ? { animated } : {}),
   };
+};
+
+/**
+ * The motion of one animated object of a model file, sampled every frame (`fps`) from the start of
+ * its animation: where it is and how it's turned in the model's own frame (its parents' motion
+ * included), as the file plays it. Throws, saying why, when the object isn't there or doesn't move.
+ */
+export const sampleModelMotion = async (bytes: Uint8Array, nodeName: string, fps: number): Promise<{ fps: number; seconds: number; positions: number[]; quaternions: number[] }> => {
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const gltf = await new GLTFLoader().parseAsync(buf, "");
+  const root = gltf.scene;
+  const node = root.getObjectByName(nodeName);
+  if (!node) throw new Error(`there's no “${nodeName}” in that model`);
+  if (!gltf.animations.length) throw new Error("that model has no animation");
+  const mixer = new THREE.AnimationMixer(root);
+  let seconds = 0;
+  for (const clip of gltf.animations) {
+    mixer.clipAction(clip).play();
+    seconds = Math.max(seconds, clip.duration);
+  }
+  const frames = Math.max(1, Math.round(seconds * fps) + 1);
+  const positions: number[] = [];
+  const quaternions: number[] = [];
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  for (let k = 0; k < frames; k++) {
+    mixer.setTime(k / fps);
+    root.updateMatrixWorld(true);
+    node.getWorldPosition(p);
+    node.getWorldQuaternion(q);
+    positions.push(p.x, p.y, p.z);
+    quaternions.push(q.x, q.y, q.z, q.w);
+  }
+  return { fps, seconds, positions, quaternions };
 };

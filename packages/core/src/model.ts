@@ -92,6 +92,16 @@ export interface ModelInfo {
   readonly triangles: number;
   readonly animations: number;
   readonly lights: number;
+  /**
+   * Cameras in the file (e.g. a Blender scene's camera), where they are in the model's own frame:
+   * `matrix` (4×4, column-major) places the camera (it looks along its own −z, up +y); `fovY` degrees;
+   * `aspect` width / height when the file says.
+   */
+  readonly cameras?: ReadonlyArray<{ readonly name: string; readonly matrix: readonly number[]; readonly fovY: number; readonly aspect?: number; readonly near: number; readonly far: number }>;
+  /** Named parts at the top of the file (what Geometry3D model `nodes` can pick). */
+  readonly nodes?: readonly string[];
+  /** Objects the file animates (an empty moved by keyframes, a character's root…): motion that can drive a controller. */
+  readonly animated?: readonly string[];
 }
 
 /** Results of analysing an audio asset, saved with the project so preview and export use identical beats. */

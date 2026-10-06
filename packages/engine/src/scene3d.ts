@@ -14,6 +14,8 @@
  *   prepare():          (exports) waits for the building photo and the prepared physics motion.
  */
 import {
+  activeAt,
+  type CameraNow,
   objectPose,
   balancesPicture,
   type EvaluatedSource,
@@ -42,6 +44,7 @@ import {
   type Vec3,
 } from "@be/core";
 import * as THREE from "three/webgpu";
+import { materialColor, materialEmissive, positionWorld, step, texture, uniform, vec2, vec4 } from "three/tsl";
 import { type GLTF, GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { ExternalSourceRenderer } from "./compositor.ts";
@@ -83,6 +86,10 @@ interface Built {
   frustum: THREE.LineSegments | null;
   /** Shadow-map sizes asked for recently (size, when), see fitShadows. */
   shadowAsks: Array<[number, number]>;
+  /** The scene camera's view-projection, for pictures projected through it (Material3D mapping "camera"). */
+  readonly projector: ReturnType<typeof projectorUniform>;
+  /** The scene's own camera this frame (null: the show camera). */
+  cam: CameraNow | null;
 }
 
 /**
@@ -171,6 +178,19 @@ const tmpQ = new THREE.Quaternion();
 const blockQ = new THREE.Quaternion();
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+/** The scene camera's view-projection (set every frame), for pictures projected through it. */
+const projectorUniform = () => uniform(new THREE.Matrix4());
+
+/** A 1×1 black picture standing in until a projected picture has loaded. */
+let blank: THREE.DataTexture | null = null;
+const placeholder = (): THREE.DataTexture => {
+  if (!blank) {
+    blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat);
+    blank.needsUpdate = true;
+  }
+  return blank;
+};
 
 /** Round soft-edged sprites: "glow" (bright core, long falloff, for sparks and embers) or "soft" (a flake). */
 const sprites = new Map<string, THREE.DataTexture>();
@@ -347,7 +367,7 @@ export class SceneHost implements ExternalSourceRenderer {
     const grid = new THREE.GridHelper(40, 40, 0x3a4250, 0x232a35);
     const helpers: THREE.Object3D[] = [grid];
     scene.add(grid);
-    b = { scene, showCam: new THREE.PerspectiveCamera(30, 16 / 9, 0.05, 500), inspectCam: new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 500), entries: new Map(), helpers, backdrop: null, backdropKey: "", frustum: null, shadowAsks: [] };
+    b = { scene, showCam: new THREE.PerspectiveCamera(30, 16 / 9, 0.05, 500), inspectCam: new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 500), entries: new Map(), helpers, backdrop: null, backdropKey: "", frustum: null, shadowAsks: [], projector: projectorUniform(), cam: null };
     this.built.set(id, b);
     return b;
   }
@@ -374,10 +394,16 @@ export class SceneHost implements ExternalSourceRenderer {
       if (!gltf) return { model: o, pieces: ro.pieces, meshes: [], mats: [], geos: [], model3d: { pending: assetId } };
       // Each use gets its own copy (skinned meshes keep their bones), so one file can appear twice.
       const root = cloneSkinned(gltf.scene);
+      // Only some of its parts (Geometry3D model nodes): the others are left out.
+      const keep = o.geometry.nodes;
+      if (keep?.length) for (const child of [...root.children]) if (!keep.includes(child.name)) root.remove(child);
+      // A material of this app's own (e.g. the picture projected through the scene's camera) instead of the file's.
+      const own = o.material ? this.makeMaterials(b, o) : null;
       root.traverse((x) => {
         if ((x as THREE.Mesh).isMesh) {
-          (x as THREE.Mesh).castShadow = o.castShadow ?? true;
+          (x as THREE.Mesh).castShadow = (o.castShadow ?? true) && o.material?.style !== "shadow";
           (x as THREE.Mesh).receiveShadow = o.receiveShadow ?? true;
+          if (own) (x as THREE.Mesh).material = own.front;
         }
       });
       const mixer = new THREE.AnimationMixer(root);
@@ -387,7 +413,15 @@ export class SceneHost implements ExternalSourceRenderer {
         duration = Math.max(duration, clip.duration);
       }
       b.scene.add(root);
-      return { model: o, pieces: ro.pieces, meshes: [], mats: [], geos: [], model3d: { root, mixer, duration, assetId } };
+      return { model: o, pieces: ro.pieces, meshes: [], mats: own?.mats ?? [], geos: [], model3d: { root, mixer, duration, assetId } };
+    }
+    if (o.kind === "null") {
+      // A controller: nothing drawn (a small marker in the inspection view only).
+      const bm = new THREE.MeshBasicMaterial({ color: 0x7fd3ff, wireframe: true });
+      const marker = new THREE.Mesh(new THREE.OctahedronGeometry(0.22), bm);
+      marker.userData.inspectOnly = true;
+      b.scene.add(marker);
+      return { model: o, pieces: ro.pieces, meshes: [], mats: [bm], geos: [marker.geometry], bulb: marker };
     }
     if (o.kind === "particles" && o.particles && ro.emitter) {
       const p = o.particles;
@@ -454,10 +488,64 @@ export class SceneHost implements ExternalSourceRenderer {
       }
       return { model: o, pieces: ro.pieces, meshes: [], mats: [], geos: [], light, ...(target ? { target } : {}) };
     }
+    const { front, side, mats } = this.makeMaterials(b, o);
+    const m = o.material;
+    const geos: THREE.BufferGeometry[] = [];
+    const meshes: THREE.Mesh[] = [];
+    if (o.geometry?.kind === "area")
+      for (const p of ro.pieces) {
+        const g = pieceGeometry(p, r.canvas.width, r.canvas.height);
+        geos.push(g);
+        meshes.push(new THREE.Mesh(g, [front, side]));
+      }
+    else {
+      const g = primitiveGeometry(o);
+      if (g) {
+        geos.push(g);
+        if (m?.style === "image" && m.mapping !== "camera") {
+          // Pictures load top row first (not flipped): turn the face coordinates to match.
+          const uv = g.getAttribute("uv");
+          for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
+          // A box's faces in order: +x, −x, +y, −y, +z (front), −z.
+          meshes.push(new THREE.Mesh(g, g.groups.length === 6 ? [side, side, side, side, front, side] : front));
+        } else meshes.push(new THREE.Mesh(g, front));
+      }
+    }
+    for (const mesh of meshes) {
+      mesh.castShadow = (o.castShadow ?? true) && m?.style !== "shadow";
+      mesh.receiveShadow = o.receiveShadow ?? true;
+      b.scene.add(mesh);
+    }
+    return { model: o, pieces: ro.pieces, meshes, mats, geos };
+  }
+
+  /**
+   * An object's materials: its front (the picture, for picture styles) and sides. A picture projected
+   * through the scene's camera (mapping "camera") is worked out per point from where that camera
+   * sees it, so it lines up exactly on any surface at any depth or angle; its transparent parts give
+   * no colour.
+   */
+  private makeMaterials(b: Built, o: Object3D): { front: THREE.Material; side: THREE.Material; mats: THREE.Material[] } {
     const m = o.material;
     const mats: THREE.Material[] = [];
     let front: THREE.Material;
     let side: THREE.Material;
+    if (m && (m.style === "photo" || (m.style === "image" && m.assetId)) && m.mapping === "camera" && m.style !== undefined) {
+      const base = { roughness: m.roughness, metalness: m.metalness, transparent: m.opacity < 1, opacity: m.opacity };
+      const mat = m.metalness === 0 && m.opacity >= 1 ? new THREE.MeshPhysicalNodeMaterial({ ...base, specularIntensity: 0 }) : new THREE.MeshStandardNodeMaterial(base);
+      const clip = b.projector.mul(vec4(positionWorld, 1));
+      const ndc = clip.xy.div(clip.w);
+      const uvp = vec2(ndc.x.mul(0.5).add(0.5), ndc.y.mul(-0.5).add(0.5));
+      const inside = step(0, uvp.x).mul(step(uvp.x, 1)).mul(step(0, uvp.y)).mul(step(uvp.y, 1)).mul(step(0, clip.w));
+      const tex = texture(placeholder(), uvp);
+      const rgb = tex.rgb.mul(tex.a).mul(inside);
+      mat.colorNode = vec4(rgb.mul(materialColor), 1);
+      mat.emissiveNode = rgb.mul(materialEmissive);
+      mat.userData.projTex = tex;
+      if (m.style === "photo") mat.userData.photo = true;
+      else mat.userData.image = m.assetId;
+      return { front: mat, side: mat, mats: [mat] };
+    }
     if (m?.style === "shadow") {
       front = side = new THREE.ShadowMaterial({ opacity: m.opacity, color: 0x000000 });
       mats.push(front);
@@ -494,33 +582,7 @@ export class SceneHost implements ExternalSourceRenderer {
         mats.push(front);
       }
     }
-    const geos: THREE.BufferGeometry[] = [];
-    const meshes: THREE.Mesh[] = [];
-    if (o.geometry?.kind === "area")
-      for (const p of ro.pieces) {
-        const g = pieceGeometry(p, r.canvas.width, r.canvas.height);
-        geos.push(g);
-        meshes.push(new THREE.Mesh(g, [front, side]));
-      }
-    else {
-      const g = primitiveGeometry(o);
-      if (g) {
-        geos.push(g);
-        if (m?.style === "image") {
-          // Pictures load top row first (not flipped): turn the face coordinates to match.
-          const uv = g.getAttribute("uv");
-          for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
-          // A box's faces in order: +x, −x, +y, −y, +z (front), −z.
-          meshes.push(new THREE.Mesh(g, g.groups.length === 6 ? [side, side, side, side, front, side] : front));
-        } else meshes.push(new THREE.Mesh(g, front));
-      }
-    }
-    for (const mesh of meshes) {
-      mesh.castShadow = (o.castShadow ?? true) && m?.style !== "shadow";
-      mesh.receiveShadow = o.receiveShadow ?? true;
-      b.scene.add(mesh);
-    }
-    return { model: o, pieces: ro.pieces, meshes, mats, geos };
+    return { front, side, mats };
   }
 
   /** Bring the three.js scene up to date with the data and set everything for this frame. */
@@ -563,6 +625,14 @@ export class SceneHost implements ExternalSourceRenderer {
     let pending = false;
     const photo = this.photo(r.photoAssetId);
     const t = src.localTime;
+    // The scene's own camera this frame, and the projection pictures are projected through.
+    b.cam = r.cameraAt(t);
+    {
+      const pc = new THREE.PerspectiveCamera();
+      this.placeCamera(pc, r, b.cam);
+      pc.updateMatrixWorld();
+      b.projector.value.multiplyMatrices(pc.projectionMatrix, pc.matrixWorldInverse);
+    }
     const physics = r.physics;
     const motion = physics && this.physics ? this.physics.motion(physics.key) : null;
     // The lights as they are now: a picture-faced surface is evened out by what falls on it facing the
@@ -570,11 +640,11 @@ export class SceneHost implements ExternalSourceRenderer {
     const lightsNow: LightNow[] = [];
     for (const ro of r.objects) {
       const o = ro.object;
-      if (o.kind !== "light" || !o.light || !o.visible) continue;
+      if (o.kind !== "light" || !o.light || !activeAt(o, t)) continue;
       const L = o.light;
       const c = srgb(L.color);
       const g = L.type === "ambient" ? srgb(L.color.map((x) => x * 0.3)) : null;
-      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: evalProp(L.intensity, t), position: objectPose(r.scene, o, t).place([0, 0, 0]), target: L.target, angle: L.angle, softness: L.softness, balance: balancesPicture(L) });
+      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: evalProp(L.intensity, t), position: objectPose(r.scene, o, t).place([0, 0, 0]), target: L.target, angle: L.angle, softness: L.softness, ...(L.range ? { range: L.range } : {}), ...(L.falloff !== undefined ? { falloff: L.falloff } : {}), balance: balancesPicture(L) });
     }
     for (const ro of r.objects) {
       const e = b.entries.get(ro.object.id)!;
@@ -591,7 +661,18 @@ export class SceneHost implements ExternalSourceRenderer {
         // A soft fill (hemisphere light) takes its "up" direction from its position: keep it straight up.
         if (L.type === "ambient") e.light.position.set(0, 1, 0);
         else e.light.position.set(pos[0], pos[1], pos[2]);
-        e.light.visible = o.visible;
+        e.light.visible = activeAt(o, t);
+        if (e.light instanceof THREE.PointLight || e.light instanceof THREE.SpotLight) {
+          // Range (a smooth fade to nothing there; 0: no limit) and falloff; its shadow reaches as far.
+          e.light.distance = L.range && L.range > 0 ? L.range : 0;
+          e.light.decay = L.falloff ?? 2;
+          const sh = e.light.shadow;
+          const far = L.range && L.range > 0 ? L.range : 60;
+          if (sh && sh.camera.far !== far) {
+            sh.camera.far = far;
+            sh.camera.updateProjectionMatrix();
+          }
+        }
         e.target?.position.set(L.target[0], L.target[1], L.target[2]);
         e.target?.updateMatrixWorld();
         e.bulb?.position.set(pos[0], pos[1], pos[2]);
@@ -618,7 +699,7 @@ export class SceneHost implements ExternalSourceRenderer {
           m.setColorAt(i, tmpColor.setRGB(data[k + 4]! * a, data[k + 5]! * a, data[k + 6]! * a, THREE.SRGBColorSpace));
         }
         m.count = n;
-        m.visible = o.visible;
+        m.visible = activeAt(o, t);
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
         continue;
@@ -629,8 +710,11 @@ export class SceneHost implements ExternalSourceRenderer {
       // Evened out by the picture's own lighting only: added lights (lanterns, glows) brighten it and
       // cast shadows on top of the picture instead of being cancelled out.
       const gain = picture && m.opacity >= 1 ? pictureGain(frontIrradiance(lightsNow.filter((l) => l.balance), e.pieces[0] ? pose.place(e.pieces[0].center) : pos)) : null;
-      for (const mat of e.mats) {
-        if (mat instanceof THREE.MeshStandardMaterial && m) {
+      for (const mat0 of e.mats) {
+        // Standard and physical materials, classic or node-based (a picture projected through the camera).
+        const flags = mat0 as { isMeshStandardMaterial?: boolean; isMeshStandardNodeMaterial?: boolean };
+        if (m && (flags.isMeshStandardMaterial || flags.isMeshStandardNodeMaterial)) {
+          const mat = mat0 as THREE.MeshStandardMaterial;
           const c = evalProp(m.color, t);
           const glow = evalProp(m.glow, t);
           mat.color.copy(srgb(c));
@@ -652,13 +736,16 @@ export class SceneHost implements ExternalSourceRenderer {
             mat.emissiveMap = img;
             mat.needsUpdate = true;
           };
+          // Projected through the camera: the picture goes into its projection instead of the face's own coordinates.
+          const proj = mat.userData.projTex as { value: THREE.Texture } | undefined;
+          const put = proj ? (img: THREE.Texture) => void (proj.value !== img && (proj.value = img)) : showPicture;
           if (mat.userData.photo) {
-            if (photo) showPicture(photo);
+            if (photo) put(photo);
             else if (photo === undefined && r.photoAssetId) pending = true;
           }
           if (mat.userData.image) {
             const img = this.photo(mat.userData.image as string);
-            if (img) showPicture(img);
+            if (img) put(img);
             else if (img === undefined) pending = true;
           }
         }
@@ -671,7 +758,7 @@ export class SceneHost implements ExternalSourceRenderer {
         // Placed by the object's transform (turning about its pivot), or by physics once it moves
         // under it; the file's own animation follows the layer's time.
         const { root, mixer } = e.model3d;
-        root.visible = o.visible;
+        root.visible = activeAt(o, t);
         root.scale.set(scl[0], scl[1], scl[2]);
         const fromMotion = ro.poseIndex >= 0 && !!physics && src.frame >= (ro.motionFrom ?? 0);
         if (fromMotion && !(motion && motion.ready > src.frame)) pending = true;
@@ -698,7 +785,7 @@ export class SceneHost implements ExternalSourceRenderer {
       list.forEach((piece, i) => {
         const mesh = e.meshes[i];
         if (!mesh) return;
-        mesh.visible = o.visible;
+        mesh.visible = activeAt(o, t);
         mesh.scale.set(scl[0], scl[1], scl[2]);
         if (needMotion && haveMotion) {
           const off = (src.frame * physics.movers + ro.poseIndex + i) * 7;
@@ -840,13 +927,7 @@ export class SceneHost implements ExternalSourceRenderer {
     if (!u) return null;
     const { b } = u;
     const r = src.resolved!;
-    const cam = showCamera(r.canvas, r.cameraDistance);
-    b.showCam.fov = cam.fovY;
-    b.showCam.aspect = cam.aspect;
-    b.showCam.near = 0.05;
-    b.showCam.far = 500;
-    b.showCam.position.set(cam.eye[0], cam.eye[1], cam.eye[2]);
-    b.showCam.lookAt(cam.target[0], cam.target[1], cam.target[2]);
+    this.placeCamera(b.showCam, r, b.cam);
     // A composition sized differently from the building canvas frames its part of it (from its top
     // left, like the 2D layers), from the same viewpoint: nothing stretches, depth lines up.
     const v = src.view;
@@ -875,6 +956,29 @@ export class SceneHost implements ExternalSourceRenderer {
     }
   }
 
+  /**
+   * Set a three.js camera to the scene's view: its own camera (Scene3D.camera) when it has one, with
+   * the canvas filling its view, otherwise the show camera that lines the building front up with the
+   * canvas. (Projection only; a composition sized differently is framed by the caller.)
+   */
+  private placeCamera(pc: THREE.PerspectiveCamera, r: NonNullable<Scene3DSource["resolved"]>, cam: CameraNow | null): void {
+    pc.near = 0.05;
+    pc.far = 500;
+    pc.aspect = r.canvas.width / r.canvas.height;
+    if (cam) {
+      pc.fov = cam.fovY;
+      pc.position.set(cam.eye[0], cam.eye[1], cam.eye[2]);
+      pc.quaternion.set(cam.q[0], cam.q[1], cam.q[2], cam.q[3]);
+    } else {
+      const sc = showCamera(r.canvas, r.cameraDistance);
+      pc.fov = sc.fovY;
+      pc.aspect = sc.aspect;
+      pc.position.set(sc.eye[0], sc.eye[1], sc.eye[2]);
+      pc.lookAt(sc.target[0], sc.target[1], sc.target[2]);
+    }
+    pc.updateProjectionMatrix();
+  }
+
   /** Render from an orbiting inspection camera, with the grid, the show camera's view and lights marked. */
   renderInspection(src: Scene3DSource, orbit: OrbitCamera, width: number, height: number): SceneRender | null {
     const u = this.update(src);
@@ -898,14 +1002,30 @@ export class SceneHost implements ExternalSourceRenderer {
       b.scene.add(b.backdrop);
       b.backdropKey = key;
     }
-    // The show camera's view as lines.
-    const cam = showCamera(r.canvas, r.cameraDistance);
+    // The view it's seen through (the show camera, or the scene's own) as lines.
     if (!b.frustum) {
       b.frustum = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.6 }));
       b.scene.add(b.frustum);
     }
-    const e = cam.eye;
-    const corners: Vec3[] = [[-Wm / 2, 0, 0], [Wm / 2, 0, 0], [Wm / 2, Hm, 0], [-Wm / 2, Hm, 0]];
+    let e: Vec3;
+    let corners: Vec3[];
+    if (b.cam) {
+      const pc = new THREE.PerspectiveCamera();
+      this.placeCamera(pc, r, b.cam);
+      pc.updateMatrixWorld();
+      e = b.cam.eye;
+      const D = 12;
+      const ty = Math.tan((b.cam.fovY * Math.PI) / 360) * D;
+      const tx = ty * (r.canvas.width / r.canvas.height);
+      corners = ([[-tx, -ty], [tx, -ty], [tx, ty], [-tx, ty]] as const).map(([x, y]) => {
+        const v = new THREE.Vector3(x, y, -D).applyMatrix4(pc.matrixWorld);
+        return [v.x, v.y, v.z] as Vec3;
+      });
+    } else {
+      const cam = showCamera(r.canvas, r.cameraDistance);
+      e = cam.eye;
+      corners = [[-Wm / 2, 0, 0], [Wm / 2, 0, 0], [Wm / 2, Hm, 0], [-Wm / 2, Hm, 0]];
+    }
     const pts: number[] = [];
     for (const c of corners) pts.push(...e, ...c);
     for (let i = 0; i < 4; i++) pts.push(...corners[i]!, ...corners[(i + 1) % 4]!);
@@ -940,6 +1060,7 @@ const sameBuild = (a: Object3D, b: Object3D): boolean =>
   a.material?.roughness === b.material?.roughness &&
   a.material?.metalness === b.material?.metalness &&
   a.material?.opacity === b.material?.opacity &&
+  a.material?.mapping === b.material?.mapping &&
   a.light?.type === b.light?.type &&
   a.light?.castShadow === b.light?.castShadow &&
   a.light?.angle === b.light?.angle &&

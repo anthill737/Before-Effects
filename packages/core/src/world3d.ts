@@ -58,6 +58,13 @@ export interface Material3D {
    *  the lights are (default on). Off: the picture as the lights really fall on it — e.g. a light's own
    *  pass, added over the house. */
   readonly matchPicture?: boolean;
+  /**
+   * How a picture lands on the surface. "front" (default): straight on the front, lined up with the
+   * canvas (traced areas, cut-outs). "camera": projected through the scene's camera like a slide
+   * projector, so every surface — at any depth or angle — shows exactly the picture the camera sees
+   * there (a house model under its photo's camera). Transparent parts of the picture give no colour.
+   */
+  readonly mapping?: "front" | "camera";
 }
 
 /**
@@ -84,8 +91,12 @@ export type Geometry3D =
   | { readonly kind: "box"; readonly size: Vec3 }
   | { readonly kind: "sphere"; readonly radius: number }
   | { readonly kind: "plane"; readonly size: Vec2 }
-  /** A model brought in from a file (glTF/GLB, e.g. exported from a linked Blender scene): its own meshes, materials, lights and animation. */
-  | { readonly kind: "model"; readonly assetId: Id };
+  /**
+   * A model brought in from a file (glTF/GLB, e.g. exported from a linked Blender scene): its own
+   * meshes, materials, lights and animation. `nodes`: only these named parts of it (and what's inside
+   * them) — one file can give several objects (walls, a door that comes and goes).
+   */
+  | { readonly kind: "model"; readonly assetId: Id; readonly nodes?: readonly string[] };
 
 export interface Physics3D {
   /** "dynamic" falls and collides; "static" stays put (or follows its animation) and others hit it. */
@@ -185,6 +196,10 @@ export interface Light3D {
   readonly angle: number;
   /** Soft shadow edge / spot edge, 0..1. */
   readonly softness: number;
+  /** Point and spot lights: metres beyond which they light nothing (fading smoothly to it); absent or 0: no limit. */
+  readonly range?: number;
+  /** Point and spot lights: how the light weakens with distance — 2 as real light (default), lower reaches further, 0 not at all. */
+  readonly falloff?: number;
   /**
    * Part of the picture's own lighting: picture surfaces are evened out by these lights so that, at
    * rest, they show their picture exactly. Lights that aren't add light (and cast shadows) on top of
@@ -208,9 +223,23 @@ export interface LightNow {
   readonly target: Vec3;
   readonly angle: number;
   readonly softness: number;
+  readonly range?: number;
+  readonly falloff?: number;
   /** Part of the picture's own lighting (see Light3D.balance). */
   readonly balance?: boolean;
 }
+
+/**
+ * How much of a point or spot light reaches `dist` metres (the renderer's own rule): weakening as
+ * 1/dist^falloff, and with a range, fading smoothly to nothing at it.
+ */
+export const lightReach = (dist: number, range = 0, falloff = 2): number => {
+  const d = Math.max(0.1, dist);
+  const k = 1 / d ** Math.max(0, falloff);
+  if (!(range > 0)) return k;
+  const r = Math.min(1, Math.max(0, 1 - (d / range) ** 4));
+  return k * r * r;
+};
 
 /**
  * The light falling on a surface that faces the audience (+z) at `at`, per colour channel, in the
@@ -234,7 +263,7 @@ export const frontIrradiance = (lights: readonly LightNow[], at: Vec3): [number,
     } else {
       const d = [L.position[0] - at[0], L.position[1] - at[1], L.position[2] - at[2]];
       const dist2 = Math.max(0.01, d[0]! ** 2 + d[1]! ** 2 + d[2]! ** 2);
-      k = ((L.intensity * 50) / dist2) * Math.max(0, d[2]! / Math.sqrt(dist2));
+      k = L.intensity * 50 * lightReach(Math.sqrt(dist2), L.range, L.falloff) * Math.max(0, d[2]! / Math.sqrt(dist2));
       if (L.type === "spot") {
         const ax = [L.target[0] - L.position[0], L.target[1] - L.position[1], L.target[2] - L.position[2]];
         const al = Math.hypot(ax[0]!, ax[1]!, ax[2]!) || 1;
@@ -258,8 +287,15 @@ export const pictureGain = (e: readonly number[]): [number, number, number] => e
 export interface Object3D {
   readonly id: Id;
   readonly name: string;
-  readonly kind: "mesh" | "light" | "particles";
+  /** "null": a controller — invisible, only a position, turn and size over time for others to ride on (After Effects' null). */
+  readonly kind: "mesh" | "light" | "particles" | "null";
   readonly visible: boolean;
+  /**
+   * Seconds into the layer when it's there (like a layer's in and out points); outside it's gone —
+   * not drawn, casting no shadow, giving no light. Absent: always.
+   */
+  readonly activeFrom?: number;
+  readonly activeTo?: number;
   readonly position: AnimProp<Vec3>;
   readonly rotation: AnimProp<Vec3>;
   readonly scale: AnimProp<Vec3>;
@@ -304,7 +340,86 @@ export interface Scene3D {
    * building's own viewpoint (Venue.cameraDistance), shared by every scene that follows it.
    */
   readonly cameraDistance?: number;
+  /**
+   * The camera the scene is seen through, instead of the straight-on show camera: a camera in a
+   * model of the scene (e.g. the Blender scene's camera, placed with that model), or one set by hand
+   * (position m, rotation ° XYZ — looking along its −z, as in Blender — and vertical field of view °).
+   * The canvas fills its view. Absent: the show camera.
+   */
+  readonly camera?: SceneCamera;
 }
+
+export type SceneCamera =
+  | { readonly kind: "model"; readonly objectId: Id; readonly name?: string }
+  | { readonly kind: "manual"; readonly position: Vec3; readonly rotation: Vec3; readonly fovY: number };
+
+/** Is the object there at layer time `t` (Object3D.activeFrom / activeTo)? */
+export const activeAt = (o: Pick<Object3D, "visible" | "activeFrom" | "activeTo">, t: Flicks): boolean => {
+  if (!o.visible) return false;
+  const s = t / FLICKS_PER_SECOND;
+  return (o.activeFrom === undefined || s >= o.activeFrom) && (o.activeTo === undefined || s < o.activeTo);
+};
+
+/** A camera at one moment (scene metres): where it is, which way it's turned (it looks along its −z), its vertical field of view. */
+export interface CameraNow {
+  readonly eye: Vec3;
+  readonly q: Quat;
+  readonly fovY: number;
+}
+
+const quatFromMatrix = (m: readonly number[]): Quat => {
+  // Column-major 4×4; the rotation part with any scale divided out.
+  const sx = Math.hypot(m[0]!, m[1]!, m[2]!) || 1, sy = Math.hypot(m[4]!, m[5]!, m[6]!) || 1, sz = Math.hypot(m[8]!, m[9]!, m[10]!) || 1;
+  const r00 = m[0]! / sx, r10 = m[1]! / sx, r20 = m[2]! / sx;
+  const r01 = m[4]! / sy, r11 = m[5]! / sy, r21 = m[6]! / sy;
+  const r02 = m[8]! / sz, r12 = m[9]! / sz, r22 = m[10]! / sz;
+  const tr = r00 + r11 + r22;
+  if (tr > 0) {
+    const s = 0.5 / Math.sqrt(tr + 1);
+    return [(r21 - r12) * s, (r02 - r20) * s, (r10 - r01) * s, 0.25 / s];
+  }
+  if (r00 > r11 && r00 > r22) {
+    const s = 2 * Math.sqrt(1 + r00 - r11 - r22);
+    return [0.25 * s, (r01 + r10) / s, (r02 + r20) / s, (r21 - r12) / s];
+  }
+  if (r11 > r22) {
+    const s = 2 * Math.sqrt(1 + r11 - r00 - r22);
+    return [(r01 + r10) / s, 0.25 * s, (r12 + r21) / s, (r02 - r20) / s];
+  }
+  const s = 2 * Math.sqrt(1 + r22 - r00 - r11);
+  return [(r02 + r20) / s, (r12 + r21) / s, 0.25 * s, (r10 - r01) / s];
+};
+
+/**
+ * The scene's own camera at layer time `t` (scene metres), or null for the show camera. A model's
+ * camera is carried by that model's object (its position, turn and size, and what it rides on).
+ */
+export const sceneCameraAt = (project: Project, scene: Pick<Scene3D, "camera" | "objects">, t: Flicks): CameraNow | null => {
+  const c = scene.camera;
+  if (!c) return null;
+  if (c.kind === "manual") return { eye: c.position, q: eulerDegToQuat(c.rotation), fovY: c.fovY };
+  const o = scene.objects[c.objectId];
+  if (!o || o.geometry?.kind !== "model") return null;
+  const cams = project.assets[o.geometry.assetId]?.meta.model?.cameras ?? [];
+  const cam = (c.name ? cams.find((x) => x.name === c.name) : undefined) ?? cams[0];
+  if (!cam) return null;
+  const pose = objectPose(scene, o, t);
+  const m = cam.matrix;
+  return { eye: pose.place([m[12]!, m[13]!, m[14]!]), q: quatMul(pose.q, quatFromMatrix(m)), fovY: cam.fovY };
+};
+
+/**
+ * Where a scene point appears on the canvas through a camera (canvas pixels, and its distance in
+ * front of the camera; null behind it). The canvas fills the camera's view, centred.
+ */
+export const projectThrough = (cam: CameraNow, canvas: Canvas, p: Vec3): { x: number; y: number; depth: number } | null => {
+  const inv: Quat = [-cam.q[0], -cam.q[1], -cam.q[2], cam.q[3]];
+  const v = rotateByQuat([p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2]], inv);
+  const depth = -v[2];
+  if (depth <= 1e-6) return null;
+  const f = canvas.height / 2 / Math.tan((cam.fovY * Math.PI) / 360);
+  return { x: canvas.width / 2 + (f * v[0]) / depth, y: canvas.height / 2 - (f * v[1]) / depth, depth };
+};
 
 /** A scene's camera distance: its own, or the building's viewpoint, or 1.6. */
 export const sceneCameraDistance = (project: Project, scene: Pick<Scene3D, "cameraDistance">, venueId: Id | undefined): number =>
@@ -899,6 +1014,8 @@ export interface ResolvedScene3D {
   readonly objects: readonly ResolvedObject[];
   readonly physics: ResolvedPhysics | null;
   readonly fps: number;
+  /** The scene's own camera at a layer time (Scene3D.camera), or null: the show camera. */
+  readonly cameraAt: (t: Flicks) => CameraNow | null;
 }
 
 const seconds = (t: Flicks) => t / FLICKS_PER_SECOND;
@@ -1153,7 +1270,8 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
         return { key: `phys-${simHash(stableJson(body))}`, fps, substeps: PHYSICS_SUBSTEPS, frames, gravity: scene.gravity, bodies, movers };
       })()
     : null;
-  const result: ResolvedScene3D = { scene, canvas, cameraDistance: camDist, ...(venue?.referenceAssetId ? { photoAssetId: venue.referenceAssetId } : {}), objects, physics, fps };
+  const cameraAt = (t: Flicks) => sceneCameraAt(project, scene, t);
+  const result: ResolvedScene3D = { scene, canvas, cameraDistance: camDist, ...(venue?.referenceAssetId ? { photoAssetId: venue.referenceAssetId } : {}), objects, physics, fps, cameraAt };
   list.push({ sig, venue, result });
   // A scene shown by several layers of different lengths is resolved once for each; keep them all.
   if (list.length > 16) list.shift();
@@ -1529,7 +1647,7 @@ const sceneShape = z.custom<Scene3D>(
 );
 const objectShape = z.custom<Object3D>((v) => {
   const o = v as Object3D;
-  return !!o && typeof o.id === "string" && (o.kind === "mesh" || o.kind === "light" || (o.kind === "particles" && !!o.particles)) && !!o.position && !!o.rotation && !!o.scale;
+  return !!o && typeof o.id === "string" && (o.kind === "mesh" || o.kind === "light" || o.kind === "null" || (o.kind === "particles" && !!o.particles)) && !!o.position && !!o.rotation && !!o.scale;
 }, { message: "Not a valid 3D object." });
 
 const sceneOf = (d: { readonly scenes3d?: Readonly<Record<Id, Scene3D>> }, id: Id): Scene3D => {
@@ -1553,14 +1671,33 @@ export const scene3dAdd = defineOp({
 export const scene3dUpdate = defineOp({
   type: "scene3d.update",
   title: "Change 3D scene",
-  description: "Rename a 3D scene or change its gravity (m/s², x right, y up, z toward the audience) or show-camera distance (null: follow the building's viewpoint).",
-  args: z.object({ sceneId: z.string(), changes: z.object({ name: z.string().min(1).optional(), gravity: z.tuple([z.number(), z.number(), z.number()]).optional(), cameraDistance: z.number().min(0.2).max(20).nullable().optional() }) }),
+  description: "Rename a 3D scene or change its gravity (m/s², x right, y up, z toward the audience), show-camera distance (null: follow the building's viewpoint) or its own camera (a model's camera, or one set by hand; null: the show camera).",
+  args: z.object({
+    sceneId: z.string(),
+    changes: z.object({
+      name: z.string().min(1).optional(),
+      gravity: z.tuple([z.number(), z.number(), z.number()]).optional(),
+      cameraDistance: z.number().min(0.2).max(20).nullable().optional(),
+      camera: z
+        .union([
+          z.object({ kind: z.literal("model"), objectId: z.string(), name: z.string().optional() }),
+          z.object({ kind: z.literal("manual"), position: z.tuple([z.number(), z.number(), z.number()]), rotation: z.tuple([z.number(), z.number(), z.number()]), fovY: z.number().min(1).max(170) }),
+        ])
+        .nullable()
+        .optional(),
+    }),
+  }),
   apply: (d, a) => {
     const s = sceneOf(d as never, a.sceneId) as unknown as { -readonly [K in keyof Scene3D]: Scene3D[K] };
     if (a.changes.name !== undefined) s.name = a.changes.name;
     if (a.changes.gravity) s.gravity = a.changes.gravity;
     if (a.changes.cameraDistance === null) delete s.cameraDistance;
     else if (a.changes.cameraDistance !== undefined) s.cameraDistance = a.changes.cameraDistance;
+    if (a.changes.camera === null) delete s.camera;
+    else if (a.changes.camera) {
+      if (a.changes.camera.kind === "model" && (s.objects[a.changes.camera.objectId] as Object3D | undefined)?.geometry?.kind !== "model") throw new OpError("A scene's camera from a model needs a model object of that scene.");
+      s.camera = a.changes.camera as SceneCamera;
+    }
   },
 });
 
