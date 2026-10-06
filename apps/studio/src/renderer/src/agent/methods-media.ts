@@ -4,7 +4,19 @@
  */
 import {
   sceneCameraDistance,
+  sceneCameraAt,
   scene3dResolves,
+  isPieced,
+  closedPoints,
+  objectPose,
+  quatMul,
+  nullObject,
+  onPlaneThrough,
+  panelObject,
+  quatToEulerDeg,
+  type Keyframe,
+  type SceneCamera,
+  type Vec2,
   balancesPicture,
   type AnimProp,
   areaObject,
@@ -96,12 +108,23 @@ const objectInfo = (o: Object3D, t: number) => ({
   name: o.name,
   kind: o.kind,
   visible: o.visible,
+  ...(o.activeFrom !== undefined ? { activeFrom: o.activeFrom } : {}),
+  ...(o.activeTo !== undefined ? { activeTo: o.activeTo } : {}),
   position: evalProp(o.position, t),
   rotation: evalProp(o.rotation, t),
   scale: evalProp(o.scale, t),
   animated: ["position", "rotation", "scale"].filter((k) => ((o as unknown as Record<string, AnimProp>)[k]!.keyframes?.length ?? 0) > 0),
-  ...(o.geometry ? { geometry: o.geometry.kind === "area" ? { kind: "area", areas: o.geometry.ref, thicknessCm: Math.round(o.geometry.depth * 100), standOutCm: Math.round((o.geometry.standOut ?? 0) * 100), ...(o.geometry.cut ? { cutOut: o.geometry.cut } : {}) } : o.geometry } : {}),
-  ...(o.material ? { material: { style: o.material.style, ...(o.material.assetId ? { image: o.material.assetId } : {}), color: evalProp(o.material.color, t), roughness: o.material.roughness, metalness: o.material.metalness, glow: evalProp(o.material.glow, t), opacity: o.material.opacity, ...(o.material.style === "photo" || o.material.style === "image" ? { shading: o.material.shading ?? 1, matchPicture: o.material.matchPicture ?? true } : {}) } } : {}),
+  ...(o.geometry
+    ? {
+        geometry:
+          o.geometry.kind === "area"
+            ? { kind: "area", areas: o.geometry.ref, thicknessCm: Math.round(o.geometry.depth * 100), standOutCm: Math.round((o.geometry.standOut ?? 0) * 100), ...(o.geometry.cut ? { cutOut: o.geometry.cut } : {}) }
+            : o.geometry.kind === "panel"
+              ? { kind: "panel", outline: o.geometry.outline, ...(o.geometry.holes ? { holes: o.geometry.holes } : {}), thicknessCm: r2(o.geometry.depth * 100) }
+              : o.geometry,
+      }
+    : {}),
+  ...(o.material ? { material: { style: o.material.style, mapping: o.material.mapping ?? "front", ...(o.material.assetId ? { image: o.material.assetId } : {}), color: evalProp(o.material.color, t), roughness: o.material.roughness, metalness: o.material.metalness, glow: evalProp(o.material.glow, t), opacity: o.material.opacity, ...(o.material.style === "photo" || o.material.style === "image" ? { shading: o.material.shading ?? 1, matchPicture: o.material.matchPicture ?? true } : {}) } } : {}),
   ...(o.physics ? { physics: o.physics } : {}),
   ...(o.fracture ? { fracture: o.fracture } : {}),
   ...(o.blocks ? { blocks: o.blocks } : {}),
@@ -121,6 +144,20 @@ const modelReport = (assetId: string) => {
 };
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
+const vec2 = z.tuple([z.number(), z.number()]);
+
+/** What a scene is seen through, and that camera at layer time `t` (metres, XYZ degrees, vertical field of view). */
+const cameraReport = (scene: Scene3D, t: number) => {
+  const c = scene.camera;
+  if (!c) return { kind: "show" };
+  const now = sceneCameraAt(project(), scene, t);
+  const at = now ? { position: now.eye.map((v) => Math.round(v * 1e4) / 1e4), rotation: quatToEulerDeg(now.q).map((v) => Math.round(v * 1e3) / 1e3), fovY: Math.round(now.fovY * 1e4) / 1e4 } : null;
+  if (c.kind === "manual") return { kind: "manual", ...at };
+  return { kind: "model", object: c.objectId, objectName: scene.objects[c.objectId]?.name, name: c.name ?? null, now: at, ...(at ? {} : { problem: "that model has no camera (or isn't measured yet)" }) };
+};
+
+/** Euler degrees from turns, kept continuous from one to the next (no jumps of 360°). */
+const unwrapEuler = (prev: Vec3 | null, e: Vec3): Vec3 => (prev ? (e.map((a, i) => a + 360 * Math.round((prev[i]! - a) / 360)) as unknown as Vec3) : e);
 
 method({
   name: "scene3d.list",
@@ -151,6 +188,7 @@ method({
       cameraDistance: sceneCameraDistance(project(), scene, activeVenue(st())?.id),
       viewpoint: scene.cameraDistance === undefined ? "building" : "own",
       layer: layer ? { id: layer.id, startSeconds: r2(timeToSeconds(layer.startTime)), seconds: r2(timeToSeconds(layer.outPoint - layer.startTime)), contained: layer.masks.some((m) => m.id === "contain") } : null,
+      camera: cameraReport(scene, t),
       objects: scene.objectOrder.map((id) => objectInfo(scene.objects[id]!, t)),
     };
   },
@@ -224,11 +262,31 @@ method({
     cameraDistance: z.number().min(0.2).max(20).nullable().optional(),
     buildingCameraDistance: z.number().min(0.2).max(20).optional(),
     name: z.string().optional(),
+    camera: z
+      .union([
+        z.literal("show"),
+        z.object({ model: z.string().describe("a model object of this scene (name or id) whose file has a camera"), name: z.string().optional().describe("which of its cameras (default: the first)") }),
+        z.object({ position: vec3.describe("metres"), rotation: vec3.describe("XYZ degrees; it looks along its own −z, as in Blender's glTF"), fovY: z.number().min(1).max(170).describe("vertical field of view, degrees") }),
+      ])
+      .optional()
+      .describe("what the scene is seen through: the show camera, a model's camera (e.g. the Blender scene's), or one set by hand"),
   }),
   mutates: true,
   run: (p, ctx) => {
     const { scene } = scene3d(p.scene);
     const changes: Record<string, unknown> = {};
+    if (p.camera !== undefined) {
+      if (p.camera === "show") changes.camera = null;
+      else if ("model" in p.camera) {
+        const o = object3d(scene, p.camera.model);
+        if (o.geometry?.kind !== "model") throw new AgentError("invalid_params", `“${o.name}” isn't a model.`);
+        const cams = project().assets[o.geometry.assetId]?.meta.model?.cameras ?? [];
+        if (!cams.length) throw new AgentError("rejected", `“${o.name}” has no camera in its file (export the Blender scene with its camera, glTF "Cameras" on).`);
+        const want = p.camera.name;
+        if (want && !cams.some((c) => c.name === want)) throw new AgentError("not_found", `No camera "${want}" in “${o.name}”. Cameras: ${cams.map((c) => c.name).join(", ")}.`);
+        changes.camera = { kind: "model", objectId: o.id, ...(p.camera.name ? { name: p.camera.name } : {}) } satisfies SceneCamera;
+      } else changes.camera = { kind: "manual", position: p.camera.position, rotation: p.camera.rotation, fovY: p.camera.fovY } satisfies SceneCamera;
+    }
     if (p.gravity) {
       const a = ((p.gravity.angle ?? 0) * Math.PI) / 180;
       changes.gravity = [Math.sin(a) * p.gravity.strength, -Math.cos(a) * p.gravity.strength, 0];
@@ -242,7 +300,8 @@ method({
       ctx.edit(() => st().apply({ type: "venue.update", args: { venueId: v.id, changes: { cameraDistance: p.buildingCameraDistance! } } }, { label: "Change the audience viewpoint" }));
     }
     if (Object.keys(changes).length) ctx.edit(() => st().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes } }, { label: "Change 3D scene" }));
-    return { scene: scene.id, gravity: project().scenes3d![scene.id]!.gravity, revision: currentRevision() };
+    const now = project().scenes3d![scene.id]!;
+    return { scene: scene.id, gravity: now.gravity, camera: cameraReport(now, 0), revision: currentRevision() };
   },
 });
 
@@ -252,7 +311,15 @@ method({
     "Add an object: box (falls), ball (falls and bounces), ledge (fixed obstacle), spot light, area — a traced area as its own solid in this scene (the building photo on it; give it a picture, physics or breaking with scene3d.objectUpdate) — or model: a 3D model (glTF/GLB: a character or prop) that shares this scene's depth, lights and shadows with the house (it can pass behind a column, cast shadows on the wall, and collide when given physics). An area can stand out toward the audience (standOutCm: a column in front of a porch — it stays on its picture from the audience while lights and shadows see the real solid) and have other areas cut out of it (cutOut: room for parts that are their own pieces).",
   params: z.object({
     scene: z.string(),
-    kind: z.enum(["box", "ball", "ledge", "light", "area", "model", "picture"]),
+    kind: z.enum(["box", "ball", "ledge", "light", "area", "model", "picture", "null", "panel"]),
+    parts: z.array(z.string()).optional().describe("kind model: only these parts of it (top-level names in its file); default all"),
+    outline: z.array(vec2).min(3).optional().describe("kind panel: its outline in metres in its own x–y plane (front at z = 0)"),
+    holes: z.array(z.array(vec2).min(3)).optional().describe("kind panel: openings in it (metres)"),
+    fromArea: z.string().optional().describe("kind panel: lay a traced area onto the plane z = planeZ through the scene's camera (instead of outline)"),
+    planeZ: z.number().optional().describe("kind panel with fromArea: the plane's depth in scene metres (default 0)"),
+    position: vec3.optional().describe("kind null/panel: where it stands (scene metres)"),
+    rotation: vec3.optional().describe("kind null/panel: its turn (XYZ degrees)"),
+    projected: z.boolean().optional().describe("kind panel: show the picture projected through the scene camera (default: when the scene has its own camera)"),
     model: z.string().optional().describe("kind model: a model in the show (asset id or name), or a .glb/.gltf file path to import"),
     picture: z.string().optional().describe("kind picture: a picture in the show (asset id or name) or an image file path to import; stands in the scene (a cut-out PNG's transparent parts are cut out of it and its shadow)"),
     heightM: z.number().min(0.01).max(200).optional().describe("kind model: scale it to this height (default: as made)"),
@@ -269,6 +336,40 @@ method({
   run: async (p, ctx) => {
     const { scene, layer } = scene3d(p.scene);
     const before = new Set(scene.objectOrder);
+    if (p.kind === "null") {
+      const object = nullObject(newId("obj"), p.name ?? "Controller", (p.position as Vec3 | undefined) ?? [0, 1, 1]);
+      const placed = p.rotation ? { ...object, rotation: { value: p.rotation as Vec3 } } : object;
+      ctx.edit(() => st().apply({ type: "object3d.add", args: { sceneId: scene.id, object: placed } }, { label: `Add ${object.name}` }));
+      return { object: object.id, revision: currentRevision() };
+    }
+    if (p.kind === "panel") {
+      let outline = p.outline as Vec2[] | undefined;
+      let holes = p.holes as Vec2[][] | undefined;
+      let position = (p.position as Vec3 | undefined) ?? [0, 0, 0];
+      if (p.fromArea) {
+        // The traced outline (and its holes) laid onto the plane through the scene's camera at the layer's start.
+        const cam = sceneCameraAt(project(), scene, 0);
+        if (!cam) throw new AgentError("rejected", "fromArea needs the scene to have its own camera (scene3d.update camera).");
+        const venue = activeVenue(st());
+        const reg = venue ? areaIds([p.fromArea]).map((id) => venue.regions[id]!).find(Boolean) : undefined;
+        if (!venue || !reg) throw new AgentError("not_found", `No area "${p.fromArea}".`);
+        const z0 = p.planeZ ?? 0;
+        const lay = (pts: readonly Vec2[]): Vec2[] =>
+          pts.map((q) => {
+            const w = onPlaneThrough(cam, venue.canvas, q, z0);
+            if (!w) throw new AgentError("rejected", "That area isn't on that plane as the camera sees it (the plane is behind the camera there).");
+            return [w[0], w[1]];
+          });
+        outline = lay(closedPoints(reg.path));
+        holes = (reg.holes ?? []).map((h) => lay(closedPoints(h))).filter((h) => h.length >= 3);
+        position = [0, 0, z0];
+      }
+      if (!outline || outline.length < 3) throw new AgentError("invalid_params", "A panel needs outline (metres) or fromArea.");
+      const object = panelObject(newId("obj"), p.name ?? (p.fromArea ? `${p.fromArea} (panel)` : "Panel"), outline, (p.thicknessCm ?? 8) / 100, position, { ...(holes?.length ? { holes } : {}), projected: p.projected ?? !!scene.camera });
+      const placed = p.rotation ? { ...object, rotation: { value: p.rotation as Vec3 } } : object;
+      ctx.edit(() => st().apply({ type: "object3d.add", args: { sceneId: scene.id, object: placed } }, { label: `Add ${object.name}` }));
+      return { object: object.id, outline: outline.map((q) => q.map((v) => Math.round(v * 1e4) / 1e4)), revision: currentRevision() };
+    }
     if (p.kind === "model") {
       if (!p.model) throw new AgentError("invalid_params", "A model object needs model (a model in the show, or a .glb/.gltf file path).");
       let asset = Object.values(project().assets).find((a) => a.kind === "model" && (a.id === p.model || a.name.toLowerCase() === p.model!.toLowerCase()));
@@ -284,10 +385,21 @@ method({
         if (!asset) throw new AgentError("rejected", `“${p.model}” couldn't be imported as a 3D model (see the app log for why).`);
       }
       const info = await ensureModelInfo(asset.id);
-      const object = modelObject(newId("obj"), p.name ?? asset.name.replace(/\.(glb|gltf)$/i, ""), asset.id, info ?? undefined, [p.xM ?? 0, p.standsAtM ?? 0, p.aheadM ?? 1], p.heightM);
+      const made = modelObject(newId("obj"), p.name ?? asset.name.replace(/\.(glb|gltf)$/i, ""), asset.id, info ?? undefined, [p.xM ?? 0, p.standsAtM ?? 0, p.aheadM ?? 1], p.heightM);
+      if (p.parts?.length && info?.nodes) {
+        const missing = p.parts.filter((n) => !info.nodes!.includes(n));
+        if (missing.length) throw new AgentError("not_found", `No part ${missing.map((n) => `"${n}"`).join(", ")} in that model. Parts: ${info.nodes.join(", ")}.`);
+      }
+      // Placed exactly as made (scene metres) when its own position is given, e.g. a house model in the house's frame.
+      const object: Object3D = {
+        ...made,
+        ...(p.parts?.length && made.geometry?.kind === "model" ? { geometry: { ...made.geometry, nodes: p.parts } } : {}),
+        ...(p.position ? { position: { value: p.position as Vec3, spatial: true } } : {}),
+        ...(p.rotation ? { rotation: { value: p.rotation as Vec3 } } : {}),
+      };
       ctx.edit(() => st().apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name}` }));
       const b = info?.bounds;
-      return { object: object.id, asset: asset.id, measured: b ? { widthM: b[3] - b[0], heightM: b[4] - b[1], depthM: b[5] - b[2], hullPoints: info!.hull.length / 3, animations: info!.animations } : null, revision: currentRevision() };
+      return { object: object.id, asset: asset.id, measured: b ? { widthM: b[3] - b[0], heightM: b[4] - b[1], depthM: b[5] - b[2], hullPoints: info!.hull.length / 3, animations: info!.animations, parts: info!.nodes ?? [], cameras: (info!.cameras ?? []).map((c) => ({ name: c.name, fovY: c.fovY })), animatedParts: info!.animated ?? [] } : null, revision: currentRevision() };
     }
     if (p.kind === "picture") {
       if (!p.picture) throw new AgentError("invalid_params", "A picture object needs picture (a picture in the show, or an image file path).");
@@ -339,10 +451,15 @@ method({
     position: vec3.optional(),
     rotation: vec3.optional(),
     scale: z.number().min(1).max(10000).optional(),
-    thicknessCm: z.number().min(1).max(500).optional(),
+    thicknessCm: z.number().min(0.5).max(500).optional(),
     standOutCm: z.number().min(0).max(2000).optional().describe("area: how far its front stands out toward the audience (it stays on its picture from the audience)"),
+    outline: z.array(vec2).min(3).optional().describe("panel: its outline (metres, its own x–y plane)"),
+    holes: z.array(z.array(vec2).min(3)).nullable().optional().describe("panel: openings in it (null: none)"),
+    parts: z.array(z.string()).nullable().optional().describe("model: only these parts (top-level names in its file); null: all"),
+    activeFrom: z.number().min(0).nullable().optional().describe("seconds into the layer when it appears (null: from the start); before then it isn't drawn, casts no shadow, gives no light and nothing hits it"),
+    activeTo: z.number().min(0).nullable().optional().describe("seconds into the layer when it goes (null: to the end)"),
     cutOut: z.array(z.string()).nullable().optional().describe("area: other areas cut out of it (null: none)"),
-    material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1), shading: z.number().min(0).max(1).describe("picture surfaces: 0 = the picture itself whichever way it turns, 1 = lit like a real solid (default)"), matchPicture: z.boolean().describe("picture surfaces: facing the audience it shows the picture exactly whatever the lights (default true); false = as the lights really fall on it (a light's own pass)") }).partial().optional(),
+    material: z.object({ style: z.enum(["photo", "color", "shadow", "image"]), mapping: z.enum(["front", "camera"]).describe("pictures: on its front, lined up with the canvas (default), or projected through the scene's camera onto every surface (a house model under its photo's camera; pieces carry their part when they break)"), image: z.string(), color: z.tuple([z.number(), z.number(), z.number(), z.number()]), roughness: z.number().min(0).max(1), metalness: z.number().min(0).max(1), glow: z.number().min(0).max(10), opacity: z.number().min(0).max(1), shading: z.number().min(0).max(1).describe("picture surfaces: 0 = the picture itself whichever way it turns, 1 = lit like a real solid (default)"), matchPicture: z.boolean().describe("picture surfaces: facing the audience it shows the picture exactly whatever the lights (default true); false = as the lights really fall on it (a light's own pass)") }).partial().nullable().optional().describe("null: a model's own materials from its file"),
     physics: z
       .object({
         body: z.enum(["dynamic", "static"]),
@@ -408,6 +525,8 @@ method({
         angle: z.number().min(1).max(89),
         softness: z.number().min(0).max(1),
         balance: z.boolean().describe("part of the picture's own lighting (evens picture surfaces out so they show exactly); default true for directional/ambient, false for spot/point, which add light and shadows on top"),
+        range: z.number().min(0).max(1000).describe("spot/point: metres beyond which it lights nothing, fading smoothly to it (0: no limit)"),
+        falloff: z.number().min(0).max(4).describe("spot/point: how it weakens with distance (2 as real light)"),
       })
       .partial()
       .optional(),
@@ -425,7 +544,22 @@ method({
     if (p.position) changes.position = at(o.position, p.position as Vec3);
     if (p.rotation) changes.rotation = at(o.rotation, p.rotation as Vec3);
     if (p.scale !== undefined) changes.scale = at(o.scale, [p.scale, p.scale, p.scale] as Vec3);
-    if (p.thicknessCm !== undefined || p.standOutCm !== undefined || p.cutOut !== undefined) {
+    if (p.activeFrom !== undefined) changes.activeFrom = p.activeFrom;
+    if (p.activeTo !== undefined) changes.activeTo = p.activeTo;
+    if (p.parts !== undefined) {
+      if (o.geometry?.kind !== "model") throw new AgentError("invalid_params", `“${o.name}” isn't a model.`);
+      const { nodes: _n, ...g } = o.geometry;
+      changes.geometry = p.parts === null || !p.parts.length ? g : { ...g, nodes: p.parts };
+    }
+    if (o.geometry?.kind === "panel" && (p.thicknessCm !== undefined || p.outline || p.holes !== undefined)) {
+      const g = { ...o.geometry } as Record<string, unknown>;
+      if (p.thicknessCm !== undefined) g.depth = p.thicknessCm / 100;
+      if (p.outline) g.outline = p.outline;
+      if (p.holes === null || (p.holes && !p.holes.length)) delete g.holes;
+      else if (p.holes) g.holes = p.holes;
+      changes.geometry = g;
+    } else if (p.outline || p.holes !== undefined) throw new AgentError("invalid_params", `“${o.name}” isn't a panel, so it has no outline.`);
+    else if (p.thicknessCm !== undefined || p.standOutCm !== undefined || p.cutOut !== undefined) {
       if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", `“${o.name}” isn't a building area, so it has no thickness, stand-out or cut-outs.`);
       const g = { ...o.geometry } as Record<string, unknown>;
       if (p.thicknessCm !== undefined) g.depth = p.thicknessCm / 100;
@@ -434,12 +568,19 @@ method({
       else if (p.cutOut) g.cut = { role: "areas", regionIds: areaIds(p.cutOut) };
       changes.geometry = g;
     }
-    if (p.material) {
+    if (p.material === null) {
+      if (o.geometry?.kind !== "model") throw new AgentError("invalid_params", "Only a model can go back to its own materials.");
+      changes.material = null;
+    } else if (p.material && !o.material && o.geometry?.kind === "model") {
+      // Cover a model with a picture (its own materials until now).
+      const image = p.material.image !== undefined ? mediaId(p.material.image) : undefined;
+      changes.material = { style: p.material.style ?? "photo", ...(image ? { assetId: image } : {}), color: { value: p.material.color ?? [1, 1, 1, 1] }, roughness: p.material.roughness ?? 0.9, metalness: p.material.metalness ?? 0, glow: { value: p.material.glow ?? 0 }, opacity: p.material.opacity ?? 1, mapping: p.material.mapping ?? "camera" } satisfies Material3D;
+    } else if (p.material) {
       if (!o.material) throw new AgentError("invalid_params", `“${o.name}” has no material (is it a light?).`);
       // "image": a picture lined up with the building (like a house skin) on the front, by media id or name.
       const image = p.material.image !== undefined ? mediaId(p.material.image) : undefined;
       if (p.material.style === "image" && !image && !(o.material.style === "image" && o.material.assetId)) throw new AgentError("invalid_params", "A picture surface needs material.image (a picture's media id or name).");
-      const m: Material3D = { ...o.material, ...(image ? { assetId: image } : {}), ...(p.material.style ? { style: p.material.style } : {}), ...(p.material.roughness !== undefined ? { roughness: p.material.roughness } : {}), ...(p.material.metalness !== undefined ? { metalness: p.material.metalness } : {}), ...(p.material.opacity !== undefined ? { opacity: p.material.opacity } : {}), ...(p.material.shading !== undefined ? { shading: p.material.shading } : {}), ...(p.material.matchPicture !== undefined ? { matchPicture: p.material.matchPicture } : {}) };
+      const m: Material3D = { ...o.material, ...(image ? { assetId: image } : {}), ...(p.material.style ? { style: p.material.style } : {}), ...(p.material.roughness !== undefined ? { roughness: p.material.roughness } : {}), ...(p.material.metalness !== undefined ? { metalness: p.material.metalness } : {}), ...(p.material.opacity !== undefined ? { opacity: p.material.opacity } : {}), ...(p.material.shading !== undefined ? { shading: p.material.shading } : {}), ...(p.material.matchPicture !== undefined ? { matchPicture: p.material.matchPicture } : {}), ...(p.material.mapping ? { mapping: p.material.mapping } : {}) };
       changes.material = { ...m, ...(p.material.color ? { color: at(o.material.color, p.material.color) } : {}), ...(p.material.glow !== undefined ? { glow: at(o.material.glow, p.material.glow) } : {}) };
     }
     if (p.physics === null) changes.physics = null;
@@ -465,7 +606,7 @@ method({
     }
     if (p.fracture === null) changes.fracture = null;
     else if (p.fracture) {
-      if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", "Only building areas given thickness can break apart.");
+      if (!isPieced(o.geometry)) throw new AgentError("invalid_params", "Only building areas given thickness, and panels, can break apart.");
       const f: Fracture3D = { ...(o.fracture ?? { pieceSize: 70, seed: 1, collapseAt: 1, rebuildAt: 5, rebuildSeconds: 2, push: 0.6, spin: 0.25 }), ...p.fracture };
       if (f.rebuildAt !== null && f.rebuildAt <= f.collapseAt) throw new AgentError("invalid_params", "rebuildAt must be after collapseAt (or null to stay down).");
       changes.fracture = f;
@@ -473,7 +614,7 @@ method({
     }
     if (p.blocks === null) changes.blocks = null;
     else if (p.blocks) {
-      if (o.geometry?.kind !== "area") throw new AgentError("invalid_params", "Only building areas given thickness can move as blocks.");
+      if (!isPieced(o.geometry)) throw new AgentError("invalid_params", "Only building areas given thickness, and panels, can move as blocks.");
       const merged = { ...(o.blocks ?? DEFAULT_BLOCKS), ...p.blocks } as Record<string, unknown>;
       for (const k of ["height", "offset"]) if (merged[k] === null) delete merged[k];
       const bl = merged as unknown as Blocks3D;
@@ -482,8 +623,9 @@ method({
     }
     if (p.light) {
       if (!o.light) throw new AgentError("invalid_params", `“${o.name}” isn't a light.`);
-      const { intensity, ...rest } = p.light;
-      changes.light = { ...o.light, ...rest, ...(intensity !== undefined ? { intensity: at(o.light.intensity, intensity) } : {}) } satisfies Light3D;
+      const { intensity, range, ...rest } = p.light;
+      const { range: _r, ...old } = o.light;
+      changes.light = { ...old, ...rest, ...((range ?? o.light.range) ? { range: range ?? o.light.range } : {}), ...(intensity !== undefined ? { intensity: at(o.light.intensity, intensity) } : {}) } satisfies Light3D;
     }
     if (!Object.keys(changes).length) throw new AgentError("invalid_params", "Nothing to change.");
     ctx.edit(() => st().apply({ type: "object3d.update", args: { sceneId: scene.id, objectId: o.id, changes } }, { label: `Change “${o.name}”` }));
@@ -543,6 +685,69 @@ method({
     }
     ctx.edit(() => st().apply({ type: "object3d.update", args: { sceneId: scene.id, objectId: o.id, changes: put(next) } }, { label: `Animate ${p.property} of “${o.name}”` }));
     return { object: o.id, property: p.property, keyframes: (next.keyframes ?? []).map((k) => ({ seconds: r2(timeToSeconds(k.t)), value: k.v, out: k.out })), revision: currentRevision() };
+  },
+});
+
+method({
+  name: "scene3d.importMotion",
+  summary:
+    "Bring a part's motion from a model's own animation (e.g. a ghost flying in a Blender scene exported as glTF) into an object's position and turn keyframes — a null controller others ride on, a light, a collider. Sampled at the scene's frame rate (or every few frames), in scene metres; the object then moves by those keyframes (editable) rather than by the file.",
+  params: z.object({
+    scene: z.string(),
+    object: z.string().describe("the object to animate (it should stand on its own: not riding on anything)"),
+    model: z.string().describe("a model object of this scene, or a model in the show (asset id or name)"),
+    part: z.string().describe("the animated part's name in the file"),
+    fromSeconds: z.number().min(0).optional().describe("of the file's animation (default 0)"),
+    toSeconds: z.number().min(0).optional().describe("default: its end"),
+    atSeconds: z.number().min(0).optional().describe("seconds into the layer where fromSeconds lands (default fromSeconds)"),
+    every: z.number().int().min(1).max(30).optional().describe("a keyframe every this many frames (default 1)"),
+    turn: z.boolean().optional().describe("also its turn (default true)"),
+  }),
+  mutates: true,
+  run: async (p, ctx) => {
+    const { scene } = scene3d(p.scene);
+    const o = object3d(scene, p.object);
+    if (o.attach) throw new AgentError("invalid_params", `“${o.name}” rides on another object; its keyframes would be relative to that. Stop it riding first (attachTo null).`);
+    const holder = scene.objects[p.model] ?? Object.values(scene.objects).find((x) => x.name.toLowerCase() === p.model.toLowerCase());
+    const assetId = holder?.geometry?.kind === "model" ? holder.geometry.assetId : Object.values(project().assets).find((a) => a.kind === "model" && (a.id === p.model || a.name.toLowerCase() === p.model.toLowerCase()))?.id;
+    const asset = assetId ? project().assets[assetId] : undefined;
+    if (!asset) throw new AgentError("not_found", `No model "${p.model}".`);
+    const comp = currentComp(st())!;
+    const fps = comp.frameRate.num / comp.frameRate.den;
+    const { sampleModelMotion } = await import("@be/engine");
+    let m: Awaited<ReturnType<typeof sampleModelMotion>>;
+    try {
+      m = await sampleModelMotion(await window.be.files.readFile(asset.path), p.part, fps);
+    } catch (e) {
+      throw new AgentError("rejected", `Its motion couldn't be read: ${String((e as Error)?.message ?? e)}`);
+    }
+    // Where the model object places the file (motion is in the file's own space).
+    const place = holder ? objectPose(scene, holder, 0) : null;
+    const total = m.positions.length / 3;
+    const f0 = Math.max(0, Math.round((p.fromSeconds ?? 0) * fps));
+    const f1 = Math.min(total - 1, p.toSeconds !== undefined ? Math.round(p.toSeconds * fps) : total - 1);
+    if (f1 <= f0) throw new AgentError("invalid_params", `Nothing to bring in between those times (its animation is ${r2(m.seconds)} s).`);
+    const every = p.every ?? 1;
+    const at0 = p.atSeconds ?? p.fromSeconds ?? 0;
+    const pos: Keyframe<Vec3>[] = [];
+    const rot: Keyframe<Vec3>[] = [];
+    let prev: Vec3 | null = null;
+    for (let f = f0; ; f = Math.min(f1, f + every)) {
+      const t = snapToFrame(secondsToTime(at0 + (f - f0) / fps), comp.frameRate);
+      const raw: Vec3 = [m.positions[f * 3]!, m.positions[f * 3 + 1]!, m.positions[f * 3 + 2]!];
+      const q0: [number, number, number, number] = [m.quaternions[f * 4]!, m.quaternions[f * 4 + 1]!, m.quaternions[f * 4 + 2]!, m.quaternions[f * 4 + 3]!];
+      const v = place ? place.place(raw) : raw;
+      const q = place ? quatMul(place.q, q0) : q0;
+      const e = unwrapEuler(prev, quatToEulerDeg(q));
+      prev = e;
+      pos.push({ id: `mo${f}p`, t, v, in: "linear", out: "linear" });
+      rot.push({ id: `mo${f}r`, t, v: e, in: "linear", out: "linear" });
+      if (f >= f1) break;
+    }
+    const changes: Record<string, unknown> = { position: { value: pos[0]!.v, spatial: false, keyframes: pos } };
+    if (p.turn ?? true) changes.rotation = { value: rot[0]!.v, keyframes: rot };
+    ctx.edit(() => st().apply({ type: "object3d.update", args: { sceneId: scene.id, objectId: o.id, changes } }, { label: `Bring in the motion of ${p.part}` }));
+    return { object: o.id, keyframes: pos.length, fromSeconds: r2(at0), toSeconds: r2(at0 + (f1 - f0) / fps), fileSeconds: r2(m.seconds), revision: currentRevision() };
   },
 });
 

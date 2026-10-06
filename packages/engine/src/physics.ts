@@ -71,6 +71,19 @@ const slerp = (a: Quat, b: Quat, t: number): Quat => {
   return [a[0] * wa + bx * wb, a[1] * wa + by * wb, a[2] * wa + bz * wb, a[3] * wa + bw * wb];
 };
 
+/** Move a body along its path (a pose per frame, holding the last): placed at frame 0, then on to the next frame's pose. */
+const follow = (body: RAPIER.RigidBody, path: readonly number[], f: number): void => {
+  const last = path.length / 7 - 1;
+  const o = Math.min(f, last) * 7;
+  const n = Math.min(f + 1, last) * 7;
+  if (f === 0) {
+    body.setTranslation({ x: path[o]!, y: path[o + 1]!, z: path[o + 2]! }, true);
+    body.setRotation({ x: path[o + 3]!, y: path[o + 4]!, z: path[o + 5]!, w: path[o + 6]! }, true);
+  }
+  body.setNextKinematicTranslation({ x: path[n]!, y: path[n + 1]!, z: path[n + 2]! });
+  body.setNextKinematicRotation({ x: path[n + 3]!, y: path[n + 4]!, z: path[n + 5]!, w: path[n + 6]! });
+};
+
 const colliderFor = (b: PhysicsBody): RAPIER.ColliderDesc => {
   const s = b.shape;
   let cd: RAPIER.ColliderDesc | null = null;
@@ -143,13 +156,16 @@ export class PhysicsEngine {
     r.byHandle = new Map();
     r.freed = new Set();
     r.bodies = p.bodies.map((b, i) => {
-      const desc = b.kind === "dynamic" ? RAPIER.RigidBodyDesc.dynamic() : b.kind === "kinematic" || b.kind === "released" ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed();
+      const follows = b.kind === "kinematic" || b.kind === "released" || (b.kind === "fragment" && !!b.path);
+      const desc = b.kind === "dynamic" ? RAPIER.RigidBodyDesc.dynamic() : follows ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed();
       desc.setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] });
       // Thrown things and what they break can move fast: keep them from tunnelling through thin
       // pieces. Only those, so other motion stays exactly as it was prepared before (same key).
       if (b.kind === "released" || b.impact) desc.setCcdEnabled(true);
       const body = world.createRigidBody(desc);
-      world.createCollider(colliderFor(b), body);
+      const collider = world.createCollider(colliderFor(b), body);
+      // Not there yet (or any more): nothing touches it.
+      if (b.active && !(b.active[0] <= 0 && 0 < b.active[1])) collider.setEnabled(false);
       r.byHandle.set(body.handle, i);
       return body;
     });
@@ -161,7 +177,10 @@ export class PhysicsEngine {
     const p = r.physics;
     p.bodies.forEach((b, i) => {
       const body = r.bodies[i]!;
+      if (b.active && (f === b.active[0] || f === b.active[1])) body.collider(0).setEnabled(f === b.active[0]);
       if (b.kind === "fragment") {
+        // Moving with its surface (shaken by blows) until it's hit or lets go.
+        if (b.path && !r.freed.has(i) && (b.release === undefined || f < b.release)) follow(body, b.path, f);
         if (f === b.release) {
           body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
           const v = b.velocity ?? [0, 0, 0];
@@ -186,7 +205,6 @@ export class PhysicsEngine {
           body.setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] }, true);
         }
       } else if ((b.kind === "kinematic" || b.kind === "released") && b.path) {
-        const last = b.path.length / 7 - 1;
         if (b.kind === "released" && f >= (b.release ?? 0)) {
           // Lets go: physics from here, with the speed and spin it had.
           if (f === b.release) {
@@ -198,14 +216,7 @@ export class PhysicsEngine {
           }
           return;
         }
-        const o = Math.min(f, last) * 7;
-        const n = Math.min(f + 1, last) * 7;
-        if (f === 0) {
-          body.setTranslation({ x: b.path[o]!, y: b.path[o + 1]!, z: b.path[o + 2]! }, true);
-          body.setRotation({ x: b.path[o + 3]!, y: b.path[o + 4]!, z: b.path[o + 5]!, w: b.path[o + 6]! }, true);
-        }
-        body.setNextKinematicTranslation({ x: b.path[n]!, y: b.path[n + 1]!, z: b.path[n + 2]! });
-        body.setNextKinematicRotation({ x: b.path[n + 3]!, y: b.path[n + 4]!, z: b.path[n + 5]!, w: b.path[n + 6]! });
+        follow(body, b.path, f);
       }
     });
     this.impacts(r, f);
@@ -224,6 +235,7 @@ export class PhysicsEngine {
     const fps = p.fps;
     p.bodies.forEach((b, i) => {
       if (b.kind === "fixed" || b.kind === "fragment") return;
+      if (b.active && !(b.active[0] <= f && f < b.active[1])) return;
       if (b.kind === "released" && f < (b.release ?? 0)) {
         // Still on its path: its speed is the path's.
         if (!b.path) return;

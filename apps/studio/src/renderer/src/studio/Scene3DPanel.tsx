@@ -4,7 +4,7 @@
  * animated: click ◆ to add a keyframe at the playhead; once animated, changing the value sets a
  * keyframe at the playhead.
  */
-import { type AnimProp, balancesPicture, type Blocks3D, DEFAULT_BLOCKS, DEFAULT_FRACTURE, evalProp, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, type RGBA, type Scene3D, timeToSeconds, type Vec3 } from "@be/core";
+import { type AnimProp, balancesPicture, type Blocks3D, DEFAULT_BLOCKS, DEFAULT_FRACTURE, evalProp, isPieced, PARTICLE_PRESETS, type Particles3D, type Fracture3D, keyAt, type Layer, type Light3D, type Material3D, type Object3D, type Physics3D, type PropValue, quatToEulerDeg, type RGBA, type Scene3D, type SceneCamera, sceneCameraAt, timeToSeconds, type Vec2, type Vec3 } from "@be/core";
 import { type ReactNode, useEffect, useState } from "react";
 import { addAreaObject, addModelFromFile, addModelObject, addPictureFromFile, addObject, ensureModelInfo, layerTime, removeObject, sceneArea, setContain, setPropNow, toggleKeyNow, updateObject, use3D } from "./actions3d.ts";
 import { getRenderer } from "./engineHost.ts";
@@ -77,14 +77,106 @@ const ViewpointField = ({ scene, onScene }: { scene: Scene3D; onScene: (v: numbe
   );
 };
 
+/**
+ * What the scene is seen through: the show camera (straight on, lining the building front up with the
+ * canvas), a camera in one of its models (the Blender scene's camera, placed with that model), or
+ * one set by hand. Pictures projected through the camera stay put while you orbit to inspect.
+ */
+const CameraField = ({ scene, layer }: { scene: Scene3D; layer: Layer }) => {
+  const project = useStudio((s) => s.project)!;
+  const time = useStudio((s) => s.time);
+  const set = (camera: SceneCamera | null, label: string, key = "camera") =>
+    useStudio.getState().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes: { camera } } }, { label, coalesceKey: `${scene.id}:${key}` });
+  const fromModels = scene.objectOrder.flatMap((id) => {
+    const o = scene.objects[id]!;
+    if (o.geometry?.kind !== "model") return [];
+    return (project.assets[o.geometry.assetId]?.meta.model?.cameras ?? []).map((c) => ({ value: `model|${o.id}|${c.name}`, label: `${o.name}: ${c.name}`, objectId: o.id, name: c.name }));
+  });
+  const c = scene.camera;
+  const value = !c ? "show" : c.kind === "manual" ? "manual" : (fromModels.find((x) => x.objectId === c.objectId && (!c.name || x.name === c.name))?.value ?? "show");
+  const choose = (v: string) => {
+    if (v === "show") return set(null, "See the scene through the show camera");
+    if (v === "manual") {
+      // Starts where the camera is now.
+      const now = sceneCameraAt(project, scene, layerTime(layer, time));
+      return set({ kind: "manual", position: now?.eye ?? [0, 1.6, 8], rotation: now ? quatToEulerDeg(now.q) : [0, 0, 0], fovY: now?.fovY ?? 45 }, "Set the scene's camera by hand");
+    }
+    const m = fromModels.find((x) => x.value === v);
+    if (m) set({ kind: "model", objectId: m.objectId, name: m.name }, `See the scene through ${m.label}`);
+  };
+  return (
+    <Field label="Seen through" help="The show camera lines the building front up with the canvas. A model's camera (e.g. the Blender scene's) sees the scene exactly as that camera did, so a house model under its photo's camera shows the photo where it belongs, and Blender renders line up with it.">
+      <select className="select" aria-label="Seen through" value={value} onChange={(e) => choose(e.target.value)}>
+        <option value="show">The show camera (straight on)</option>
+        {fromModels.map((x) => (
+          <option key={x.value} value={x.value}>
+            {x.label}
+          </option>
+        ))}
+        <option value="manual">A camera set by hand</option>
+      </select>
+      {c?.kind === "manual" && (
+        <>
+          <Vec3Sliders label="Camera position" value={c.position} min={[-30, -5, -30]} max={[30, 30, 60]} step={0.01} unit="m" onChange={(v) => set({ ...c, position: v }, "Move the scene's camera", "camera-pos")} />
+          <Vec3Sliders label="Camera turn" value={c.rotation} min={[-180, -180, -180]} max={[180, 180, 180]} step={0.1} unit="°" onChange={(v) => set({ ...c, rotation: v }, "Turn the scene's camera", "camera-rot")} />
+          <Field label="Field of view (vertical)">
+            <Slider label="Field of view" value={c.fovY} min={5} max={120} step={0.01} unit="°" onChange={(v) => set({ ...c, fovY: v }, "Change the camera's field of view", "camera-fov")} />
+          </Field>
+        </>
+      )}
+    </Field>
+  );
+};
+
+/** When an object is there (seconds into the layer, like a layer's in and out points): drawn, casting shadows, lighting and colliding only then. */
+const ActiveField = ({ o, lenS, up }: { o: Object3D; lenS: number; up: (changes: Partial<Record<keyof Object3D, unknown>>, label: string, key: string) => void }) => (
+  <Field label="There" help="Seconds into this layer when it appears and goes. Outside them it isn't drawn, casts no shadow, gives no light and nothing hits it.">
+    <div className="row gap">
+      <Toggle label="From" value={o.activeFrom !== undefined} onChange={(v) => up({ activeFrom: v ? 0 : null }, v ? "Appear later" : "There from the start", "active-from-on")} />
+      {o.activeFrom !== undefined && <Slider label="There from (seconds)" value={o.activeFrom} min={0} max={Math.max(1, lenS)} step={1 / 30} unit="s" onChange={(v) => up({ activeFrom: v }, "Change when it appears", "active-from")} />}
+    </div>
+    <div className="row gap">
+      <Toggle label="Until" value={o.activeTo !== undefined} onChange={(v) => up({ activeTo: v ? Math.max(o.activeFrom ?? 0, lenS) : null }, v ? "Go before the end" : "There to the end", "active-to-on")} />
+      {o.activeTo !== undefined && <Slider label="There until (seconds)" value={o.activeTo} min={o.activeFrom ?? 0} max={Math.max(1, lenS)} step={1 / 30} unit="s" onChange={(v) => up({ activeTo: v }, "Change when it goes", "active-to")} />}
+    </div>
+  </Field>
+);
+
+/** A model's parts (its top-level pieces, as named in Blender): show all, or only some (one file, several objects). */
+const PartsField = ({ o, up }: { o: Object3D; up: (changes: Partial<Record<keyof Object3D, unknown>>, label: string, key: string) => void }) => {
+  const g = o.geometry;
+  const nodes = useStudio((s) => (g?.kind === "model" ? s.project?.assets[g.assetId]?.meta.model?.nodes : undefined));
+  if (g?.kind !== "model" || !nodes || nodes.length < 2) return null;
+  const on = g.nodes ?? nodes;
+  const put = (next: string[]) => {
+    const { nodes: _n, ...rest } = g;
+    up({ geometry: next.length === nodes.length ? rest : { ...rest, nodes: next } }, "Change the model's parts", "nodes");
+  };
+  return (
+    <Field label="Parts shown" help="The model's parts as named in its file. Show only some to make several objects from one file (a wall, and a door that comes and goes).">
+      <div className="col">
+        {nodes.map((n) => (
+          <Toggle key={n} label={n} value={on.includes(n)} onChange={(v) => put(v ? [...on, n] : on.filter((x) => x !== n))} />
+        ))}
+      </div>
+    </Field>
+  );
+};
+
+/** A model's parts and a panel's outline as sizes, for the inspector. */
+const panelSize = (outline: readonly Vec2[]): [number, number, number, number] => {
+  const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+};
+
 /** A model's size as measured, and why it isn't showing when its file couldn't be read. */
 const ModelStatus = ({ assetId }: { assetId: string }) => {
   const asset = useStudio((st) => st.project?.assets[assetId]);
   const [problem, setProblem] = useState<string | null>(null);
   // Measured when it arrived; older ones (e.g. from Blender before measuring existed) are measured now.
   useEffect(() => {
-    if (asset?.kind === "model" && !asset.meta.model) void ensureModelInfo(assetId);
-  }, [assetId, !!asset?.meta.model]);
+    if (asset?.kind === "model" && !asset.meta.model?.nodes) void ensureModelInfo(assetId);
+  }, [assetId, !!asset?.meta.model?.nodes]);
   useEffect(() => {
     let live = true;
     const look = () => void getRenderer().then((r) => live && setProblem(r.scenes.modelErrors.get(assetId) ?? null));
@@ -138,7 +230,7 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
       <div className="panel-head">
         <h2>{scene.name}</h2>
       </div>
-      <p className="muted small">3D objects in front of the building, seen through the show camera. Orbit around them in “3D projection”.</p>
+      <p className="muted small">{scene.camera ? "3D objects seen through the scene's own camera." : "3D objects in front of the building, seen through the show camera."} Orbit around them in “3D projection”.</p>
       <PhysicsStatus layerId={layer.id} />
       <FromBlender sceneId={scene.id} />
       <Section title="Layer">
@@ -148,7 +240,8 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
         <LayerIdentity layer={layer} />
         <LayerTiming layer={layer} />
         <LayerMasks layer={layer} />
-        <ViewpointField scene={scene} onScene={(v, label) => updateScene({ cameraDistance: v }, label, "camera")} />
+        <CameraField scene={scene} layer={layer} />
+        {!scene.camera && <ViewpointField scene={scene} onScene={(v, label) => updateScene({ cameraDistance: v }, label, "camera")} />}
       </Section>
       {area && (
         <Field
@@ -172,7 +265,7 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
           const x = scene.objects[id]!;
           return (
             <button key={id} role="option" aria-selected={o?.id === id} className={`list-item ${o?.id === id ? "on" : ""}`} onClick={() => use3D.setState({ objectId: id })}>
-              <span aria-hidden="true">{x.kind === "light" ? "☀ " : x.kind === "particles" ? "✦ " : x.geometry?.kind === "model" ? "◆ " : x.fracture ? "▦ " : "■ "}</span>
+              <span aria-hidden="true">{x.kind === "light" ? "☀ " : x.kind === "particles" ? "✦ " : x.kind === "null" ? "✛ " : x.geometry?.kind === "model" ? "◆ " : x.fracture ? "▦ " : "■ "}</span>
               {x.name}
               {!x.visible && <span className="muted small"> · hidden</span>}
             </button>
@@ -191,6 +284,8 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
                 ["ball", "Ball (falls and bounces)"],
                 ["ledge", "Ledge (fixed, things land on it)"],
                 ["light", "Spot light"],
+                ["null", "Controller (a null others ride on)"],
+                ["panel", "Panel (a flat solid: a door, a slab — it can break)"],
               ] as const
             ).map(([k, label]) => (
               <button
@@ -428,9 +523,16 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
             <Toggle label="Receives shadows" value={o.receiveShadow ?? true} onChange={(v) => up({ receiveShadow: v }, v ? "Receive shadows" : "No shadows on it", "receive")} />
           </>
         )}
+        <ActiveField o={o} lenS={lenS} up={up} />
         {o.geometry?.kind === "model" && (
           <>
             <ModelStatus assetId={o.geometry.assetId} />
+            <PartsField o={o} up={up} />
+            <Toggle
+              label="Covered with the building picture"
+              value={!!m}
+              onChange={(v) => up({ material: v ? { style: "photo", color: { value: [1, 1, 1, 1] }, roughness: 0.9, metalness: 0, glow: { value: 0 }, opacity: 1, mapping: "camera" } : null }, v ? "Cover the model with the picture" : "Use the model's own materials", "model-material")}
+            />
             <p className="muted small">
               Its shapes, materials and animation come from its file
               {Object.values(project?.blenderLinks ?? {}).some((l) => l.editable?.assetId === (o.geometry?.kind === "model" ? o.geometry.assetId : ""))
@@ -499,6 +601,29 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
             </Field>
           </>
         )}
+        {o.geometry?.kind === "panel" &&
+          (() => {
+            const g = o.geometry;
+            const [x0, y0, w, h] = panelSize(g.outline);
+            // Resized about its bottom-left corner.
+            const resize = (nw: number, nh: number) => up({ geometry: { ...g, outline: g.outline.map((p) => [x0 + ((p[0] - x0) * nw) / (w || 1), y0 + ((p[1] - y0) * nh) / (h || 1)]), ...(g.holes ? { holes: g.holes.map((hl) => hl.map((p) => [x0 + ((p[0] - x0) * nw) / (w || 1), y0 + ((p[1] - y0) * nh) / (h || 1)])) } : {}) } }, "Resize panel", "panel-size");
+            return (
+              <>
+                <p className="muted small">
+                  A flat solid with {g.outline.length} corners{g.holes?.length ? ` and ${g.holes.length} opening${g.holes.length > 1 ? "s" : ""}` : ""}, its front at its position.
+                </p>
+                <Field label="Width">
+                  <Slider label="Panel width" value={Number(w.toFixed(3))} min={0.05} max={Math.max(20, w * 2)} step={0.01} unit="m" onChange={(v) => resize(v, h)} />
+                </Field>
+                <Field label="Height">
+                  <Slider label="Panel height" value={Number(h.toFixed(3))} min={0.05} max={Math.max(20, h * 2)} step={0.01} unit="m" onChange={(v) => resize(w, v)} />
+                </Field>
+                <Field label="Thickness" help="How deep the solid is behind its front.">
+                  <Slider label="Thickness" value={Math.round(g.depth * 1000) / 10} min={0.5} max={100} step={0.5} unit="cm" onChange={(v) => up({ geometry: { ...g, depth: v / 100 } }, "Change thickness", "depth")} />
+                </Field>
+              </>
+            );
+          })()}
         {o.geometry?.kind === "box" && (
           <Vec3Sliders label="Box size" value={o.geometry.size} min={[0.05, 0.05, 0.05]} max={[W * 2, H * 2, 20]} step={0.05} unit="m" onChange={(v) => up({ geometry: { kind: "box", size: v } }, "Change box size", "box")} />
         )}
@@ -554,6 +679,17 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
               </Field>
               {(m.style === "photo" || m.style === "image") && (
                 <>
+                  <Field label="Picture placed" help="Lined up with the canvas on its front (traced areas, cut-outs), or projected through the scene's camera like a slide projector: every surface at any depth or angle shows what that camera sees there (a house model under its photo's camera). Pieces carry their part of it when they break.">
+                    <Choice
+                      label="Picture placed"
+                      value={m.mapping ?? "front"}
+                      choices={[
+                        { value: "front", label: "On its front" },
+                        { value: "camera", label: "Through the scene camera" },
+                      ]}
+                      onChange={(v) => setMat({ mapping: v as Material3D["mapping"] }, v === "camera" ? "Project the picture through the camera" : "Put the picture on its front", "mapping")}
+                    />
+                  </Field>
                   <Field label="Shading" help="How much the lights shade the picture as it turns or falls into shadow. 0 = the picture itself, like a layer mapped onto the pieces.">
                     <Slider label="Shading" value={Math.round((m.shading ?? 1) * 100)} min={0} max={100} step={1} unit="%" onChange={(v) => setMat({ shading: v / 100 }, "Change shading", "shading")} />
                   </Field>
@@ -619,7 +755,7 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
         </Section>
       )}
 
-      {o.geometry?.kind === "area" && (
+      {isPieced(o.geometry) && (
         <Section title="Breaking apart" open={!!fr}>
           <Toggle
             label="Collapse and rebuild"
@@ -690,7 +826,7 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
         </Section>
       )}
 
-      {o.geometry?.kind === "area" && !fr && (
+      {isPieced(o.geometry) && !fr && (
         <Section title="Blocks" open={!!bl}>
           <Toggle
             label="Move as blocks"
@@ -814,6 +950,16 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
                 <Slider label="Shadow softness" value={L.softness} min={0} max={1} step={0.05} onChange={(v) => setLight({ softness: v }, "Change softness", "soft")} />
               </Field>
               {L.type !== "point" && <Vec3Sliders label="Aim at" value={L.target} min={[-W, -2, -10]} max={[W, H + 10, 20]} step={0.05} unit="m" onChange={(v) => setLight({ target: v }, "Aim light", "target")} />}
+              {(L.type === "spot" || L.type === "point") && (
+                <>
+                  <Field label="Reaches" help="Metres beyond which it lights nothing, fading smoothly to it (its shadows reach as far). 0: no limit.">
+                    <Slider label="Light range" value={L.range ?? 0} min={0} max={60} step={0.1} unit="m" onChange={(v) => setLight({ range: v > 0 ? v : undefined }, "Change how far the light reaches", "range")} />
+                  </Field>
+                  <Field label="Falloff" help="How it weakens with distance: 2 as real light, lower reaches further, 0 not at all.">
+                    <Slider label="Light falloff" value={L.falloff ?? 2} min={0} max={3} step={0.05} onChange={(v) => setLight({ falloff: v }, "Change the light's falloff", "falloff")} />
+                  </Field>
+                </>
+              )}
               {L.type === "spot" && (
                 <Field label="Beam width">
                   <Slider label="Beam width" value={L.angle} min={5} max={80} step={1} unit="°" onChange={(v) => setLight({ angle: v }, "Change beam width", "angle")} />

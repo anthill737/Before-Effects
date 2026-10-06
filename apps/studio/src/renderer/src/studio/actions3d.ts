@@ -20,6 +20,8 @@ import {
   houseScene,
   newLayer,
   modelObject,
+  nullObject,
+  panelObject,
   type ModelInfo,
   pictureObject,
   newId,
@@ -250,7 +252,7 @@ export const updateObject = (sceneId: string, objectId: string, changes: Partial
 export const setPropNow = <V extends PropValue>(layer: Layer, p: AnimProp<V>, v: V): AnimProp<V> => setPropAt(p, layerTime(layer, useStudio.getState().time), v);
 export const toggleKeyNow = <V extends PropValue>(layer: Layer, p: AnimProp<V>): AnimProp<V> => toggleKeyAt(p, layerTime(layer, useStudio.getState().time));
 
-export const addObject = (layer: Layer, kind: "box" | "ball" | "light" | "ledge") => {
+export const addObject = (layer: Layer, kind: "box" | "ball" | "light" | "ledge" | "null" | "panel") => {
   const scene = sceneForLayer(layer);
   const s = useStudio.getState();
   const venue = activeVenue(s);
@@ -265,7 +267,11 @@ export const addObject = (layer: Layer, kind: "box" | "ball" | "light" | "ledge"
         ? ballObject(id, "Ball", 0.4, [W * 0.15, H * 0.9, 1.2], { ...DEFAULT_PHYSICS, mass: 30, bounce: 0.5 })
         : kind === "ledge"
           ? boxObject(id, "Ledge", [W * 0.4, 0.25, 1], [0, H * 0.3, 0.5], { body: "static", mass: 1000, friction: 0.8, bounce: 0.1 })
-          : lightObject(id, "Spot light", { type: "spot", target: [0, H / 2, 0], intensity: staticProp(4), angle: 30 }, [W * 0.4, H + 2, 7]);
+          : kind === "null"
+            ? nullObject(id, "Controller", scene.camera ? [0, 1, 1] : [0, H / 2, 1])
+            : kind === "panel"
+              ? panelObject(id, "Panel", [[0, 0], [2, 0], [2, 2], [0, 2]], 0.08, scene.camera ? [0, 0, 0] : [-1, H / 2 - 1, 0.5], { projected: !!scene.camera })
+              : lightObject(id, "Spot light", { type: "spot", target: [0, H / 2, 0], intensity: staticProp(4), angle: 30 }, [W * 0.4, H + 2, 7]);
   if (s.apply({ type: "object3d.add", args: { sceneId: scene.id, object } }, { label: `Add ${object.name.toLowerCase()}` })) use3D.setState({ objectId: id });
 };
 
@@ -276,13 +282,13 @@ export const addObject = (layer: Layer, kind: "box" | "ball" | "light" | "ledge"
 export const ensureModelInfo = async (assetId: string): Promise<ModelInfo | null> => {
   const a = useStudio.getState().project?.assets[assetId];
   if (!a || a.kind !== "model") return null;
-  if (a.meta.model) return a.meta.model;
+  if (a.meta.model?.nodes) return a.meta.model;
   try {
     const model = await measureModel(a.path);
     useStudio.getState().apply({ type: "asset.update", args: { assetId, changes: { meta: { model } } } }, { label: `Measure “${a.name}”`, source: "system" });
     return model;
   } catch {
-    return null;
+    return a.meta.model ?? null;
   }
 };
 

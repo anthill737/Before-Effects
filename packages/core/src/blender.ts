@@ -359,8 +359,8 @@ export const preparedObstacles = (
     }
     const t0 = secondsToTime(ob.fracture?.collapseAt ?? 0);
     const sc = evalProp(ob.scale, t0).map((v) => v / 100) as unknown as Vec3;
-    if (g.kind === "area") {
-      for (const reg of refRegions(project, g.ref, venueId)) regionIds.add(reg.id);
+    if (g.kind === "area" || g.kind === "panel") {
+      if (g.kind === "area") for (const reg of refRegions(project, g.ref, venueId)) regionIds.add(reg.id);
       ro.pieces.forEach((piece, i) => objects.push({ name: `${o.layerName}: ${ob.name} ${i + 1}`, owner: "before-effects", role: "obstacle", mesh: pieceSolid(piece, sc), motion: poses(ro.poseIndex + i) }));
     } else if (g.kind !== "model") {
       const half: Vec3 =

@@ -24,6 +24,7 @@ import {
   blockPose,
   FLICKS_PER_SECOND,
   frontIrradiance,
+  isPieced,
   type Light3D,
   type LightNow,
   METERS_PER_PIXEL,
@@ -44,7 +45,7 @@ import {
   type Vec3,
 } from "@be/core";
 import * as THREE from "three/webgpu";
-import { materialColor, materialEmissive, positionWorld, step, texture, uniform, vec2, vec4 } from "three/tsl";
+import { attribute, materialColor, materialEmissive, positionWorld, step, texture, uniform, vec2, vec4 } from "three/tsl";
 import { type GLTF, GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { ExternalSourceRenderer } from "./compositor.ts";
@@ -107,14 +108,21 @@ export const shadowMapSize = (height: number): number => {
 
 const srgb = (c: readonly number[]) => new THREE.Color().setRGB(c[0]!, c[1]!, c[2]!, THREE.SRGBColorSpace);
 
-/** Extruded piece: front faces (group 0, photo) at +depth/2, sides and back (group 1). Local metres. */
-const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): THREE.BufferGeometry => {
+/**
+ * Extruded piece: front faces (group 0, photo) at +depth/2, sides and back (group 1). Local metres.
+ * Its picture coordinates: across the canvas (a traced area), or across `frame` (a panel: its whole
+ * outline, x0 y0 x1 y1). "home": each point where it is at rest in its object's space, for a picture
+ * projected through the camera that the pieces carry with them.
+ */
+const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number, frame?: readonly [number, number, number, number]): THREE.BufferGeometry => {
   const Wm = canvasW * METERS_PER_PIXEL;
   const Hm = canvasH * METERS_PER_PIXEL;
   const d = piece.depth / 2;
   const pos: number[] = [];
   const uv: number[] = [];
-  const uvOf = (x: number, y: number) => [(piece.center[0] + x) / Wm + 0.5, 1 - (piece.center[1] + y) / Hm];
+  const uvOf = frame
+    ? (x: number, y: number) => [(piece.center[0] + x - frame[0]) / (frame[2] - frame[0] || 1), 1 - (piece.center[1] + y - frame[1]) / (frame[3] - frame[1] || 1)]
+    : (x: number, y: number) => [(piece.center[0] + x) / Wm + 0.5, 1 - (piece.center[1] + y) / Hm];
   const contour = piece.outline.map((p) => new THREE.Vector2(p[0], p[1]));
   const holes = piece.holes.map((h) => h.map((p) => new THREE.Vector2(p[0], p[1])));
   const tris = THREE.ShapeUtils.triangulateShape(contour, holes);
@@ -166,6 +174,7 @@ const pieceGeometry = (piece: ResolvedPiece, canvasW: number, canvasH: number): 
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute("home", new THREE.Float32BufferAttribute(pos.map((v, i) => v + piece.center[i % 3]!), 3));
   g.computeVertexNormals();
   g.addGroup(0, frontCount, 0);
   g.addGroup(frontCount, pos.length / 3 - frontCount, 1);
@@ -181,6 +190,20 @@ const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /** The scene camera's view-projection (set every frame), for pictures projected through it. */
 const projectorUniform = () => uniform(new THREE.Matrix4());
+
+/** A panel's picture frame: its outline's extent (x0, y0, x1, y1). */
+const panelFrame = (outline: readonly (readonly [number, number])[]): [number, number, number, number] => {
+  const xs = outline.map((p) => p[0]), ys = outline.map((p) => p[1]);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+};
+
+/** Where an object's points are at the layer's start (its own space -> scene), as a matrix. */
+const restMatrix = (out: THREE.Matrix4, scene: ResolvedScene3D["scene"], o: Object3D): void => {
+  const pose = objectPose(scene, o, 0);
+  const c = pose.place([0, 0, 0]);
+  const ax = pose.place([1, 0, 0]), ay = pose.place([0, 1, 0]), az = pose.place([0, 0, 1]);
+  out.set(ax[0] - c[0], ay[0] - c[0], az[0] - c[0], c[0], ax[1] - c[1], ay[1] - c[1], az[1] - c[1], c[1], ax[2] - c[2], ay[2] - c[2], az[2] - c[2], c[2], 0, 0, 0, 1);
+};
 
 /** A 1×1 black picture standing in until a projected picture has loaded. */
 let blank: THREE.DataTexture | null = null;
@@ -492,13 +515,14 @@ export class SceneHost implements ExternalSourceRenderer {
     const m = o.material;
     const geos: THREE.BufferGeometry[] = [];
     const meshes: THREE.Mesh[] = [];
-    if (o.geometry?.kind === "area")
+    if (isPieced(o.geometry)) {
+      const frame = o.geometry.kind === "panel" ? panelFrame(o.geometry.outline) : undefined;
       for (const p of ro.pieces) {
-        const g = pieceGeometry(p, r.canvas.width, r.canvas.height);
+        const g = pieceGeometry(p, r.canvas.width, r.canvas.height, frame);
         geos.push(g);
         meshes.push(new THREE.Mesh(g, [front, side]));
       }
-    else {
+    } else {
       const g = primitiveGeometry(o);
       if (g) {
         geos.push(g);
@@ -531,20 +555,34 @@ export class SceneHost implements ExternalSourceRenderer {
     let front: THREE.Material;
     let side: THREE.Material;
     if (m && (m.style === "photo" || (m.style === "image" && m.assetId)) && m.mapping === "camera" && m.style !== undefined) {
-      const base = { roughness: m.roughness, metalness: m.metalness, transparent: m.opacity < 1, opacity: m.opacity };
-      const mat = m.metalness === 0 && m.opacity >= 1 ? new THREE.MeshPhysicalNodeMaterial({ ...base, specularIntensity: 0 }) : new THREE.MeshStandardNodeMaterial(base);
-      const clip = b.projector.mul(vec4(positionWorld, 1));
-      const ndc = clip.xy.div(clip.w);
-      const uvp = vec2(ndc.x.mul(0.5).add(0.5), ndc.y.mul(-0.5).add(0.5));
-      const inside = step(0, uvp.x).mul(step(uvp.x, 1)).mul(step(0, uvp.y)).mul(step(uvp.y, 1)).mul(step(0, clip.w));
-      const tex = texture(placeholder(), uvp);
-      const rgb = tex.rgb.mul(tex.a).mul(inside);
-      mat.colorNode = vec4(rgb.mul(materialColor), 1);
-      mat.emissiveNode = rgb.mul(materialEmissive);
-      mat.userData.projTex = tex;
-      if (m.style === "photo") mat.userData.photo = true;
-      else mat.userData.image = m.assetId;
-      return { front: mat, side: mat, mats: [mat] };
+      // Pieces carry the picture they show at rest (where the camera sees each point of them at the
+      // layer's start); anything else shows what the camera sees where it is now.
+      const pieced = isPieced(o.geometry);
+      const rest = pieced ? uniform(new THREE.Matrix4()) : null;
+      const make = (sideOf: boolean) => {
+        const base = { roughness: m.roughness, metalness: m.metalness, transparent: m.opacity < 1, opacity: m.opacity };
+        const mat = m.metalness === 0 && m.opacity >= 1 ? new THREE.MeshPhysicalNodeMaterial({ ...base, specularIntensity: 0 }) : new THREE.MeshStandardNodeMaterial(base);
+        const at = rest ? rest.mul(vec4(attribute("home", "vec3"), 1)) : vec4(positionWorld, 1);
+        const clip = b.projector.mul(at);
+        const ndc = clip.xy.div(clip.w);
+        const uvp = vec2(ndc.x.mul(0.5).add(0.5), ndc.y.mul(-0.5).add(0.5));
+        const inside = step(0, uvp.x).mul(step(uvp.x, 1)).mul(step(0, uvp.y)).mul(step(uvp.y, 1)).mul(step(0, clip.w));
+        const tex = texture(placeholder(), uvp);
+        const rgb = tex.rgb.mul(tex.a).mul(inside);
+        mat.colorNode = vec4(rgb.mul(materialColor), 1);
+        mat.emissiveNode = rgb.mul(materialEmissive);
+        mat.userData.projTex = tex;
+        if (rest) mat.userData.rest = rest;
+        if (sideOf) mat.userData.sideOf = true;
+        if (m.style === "photo") mat.userData.photo = true;
+        else mat.userData.image = m.assetId;
+        return mat;
+      };
+      const mat = make(false);
+      if (!pieced) return { front: mat, side: mat, mats: [mat] };
+      // A piece's broken edges read as the material in shade.
+      const edge = make(true);
+      return { front: mat, side: edge, mats: [mat, edge] };
     }
     if (m?.style === "shadow") {
       front = side = new THREE.ShadowMaterial({ opacity: m.opacity, color: 0x000000 });
@@ -559,7 +597,7 @@ export class SceneHost implements ExternalSourceRenderer {
       front = make();
       // Pieces cut from areas carry the picture round their sides as well (like a layer mapped onto
       // shattered pieces); a box's sides stay plain.
-      const mappedSides = o.geometry?.kind === "area";
+      const mappedSides = isPieced(o.geometry);
       if (m?.style === "image" && m.assetId) {
         // A picture on the front (e.g. what's seen through an opening, or a cut-out character). Its
         // transparent parts are cut out, from the picture and from its shadow.
@@ -725,6 +763,13 @@ export class SceneHost implements ExternalSourceRenderer {
             const mix = pictureMix(m, glow, gain ?? [1, 1, 1]);
             mat.color.setRGB(mat.color.r * mix.lit[0], mat.color.g * mix.lit[1], mat.color.b * mix.lit[2]);
             mat.emissiveIntensity = mix.self;
+            // The broken edges of pieces carrying a projected picture: that picture, in shade.
+            if (mat.userData.sideOf && mat.userData.projTex) {
+              mat.color.multiplyScalar(0.45);
+              mat.emissiveIntensity *= 0.45;
+            }
+            const rest = mat.userData.rest as { value: THREE.Matrix4 } | undefined;
+            if (rest) restMatrix(rest.value, r.scene, o);
           } else {
             // Plain sides read as the material in shade.
             if (mat.userData.sideOf) mat.color.multiplyScalar(picture ? 0.38 : 0.55);

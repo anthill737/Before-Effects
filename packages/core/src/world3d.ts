@@ -63,6 +63,8 @@ export interface Material3D {
    * canvas (traced areas, cut-outs). "camera": projected through the scene's camera like a slide
    * projector, so every surface — at any depth or angle — shows exactly the picture the camera sees
    * there (a house model under its photo's camera). Transparent parts of the picture give no colour.
+   * Pieces (of an area or panel) carry the picture they show at rest: a broken door's fragments fly
+   * off with their part of it.
    */
   readonly mapping?: "front" | "camera";
 }
@@ -96,7 +98,17 @@ export type Geometry3D =
    * meshes, materials, lights and animation. `nodes`: only these named parts of it (and what's inside
    * them) — one file can give several objects (walls, a door that comes and goes).
    */
-  | { readonly kind: "model"; readonly assetId: Id; readonly nodes?: readonly string[] };
+  | { readonly kind: "model"; readonly assetId: Id; readonly nodes?: readonly string[] }
+  /**
+   * A flat solid placed in the scene's own space (metres), for scenes modelled in 3D and seen through
+   * their own camera: `outline` (and `holes`) in the object's x–y plane, its front at z = 0 and
+   * `depth` behind it — a door, a slab, a section of wall. It can break apart like an area.
+   */
+  | { readonly kind: "panel"; readonly outline: readonly Vec2[]; readonly holes?: readonly (readonly Vec2[])[]; readonly depth: number };
+
+/** Geometry that is cut into pieces (and can break apart or move as blocks): traced areas and panels. */
+export type PiecedGeometry = Extract<Geometry3D, { kind: "area" | "panel" }>;
+export const isPieced = (g: Geometry3D | undefined): g is PiecedGeometry => g?.kind === "area" || g?.kind === "panel";
 
 export interface Physics3D {
   /** "dynamic" falls and collides; "static" stays put (or follows its animation) and others hit it. */
@@ -438,6 +450,17 @@ export const eulerDegToQuat = (r: Vec3): Quat => {
   return [s1 * c2 * c3 + c1 * s2 * s3, c1 * s2 * c3 - s1 * c2 * s3, c1 * c2 * s3 + s1 * s2 * c3, c1 * c2 * c3 - s1 * s2 * s3];
 };
 
+/** Quaternion → XYZ Euler degrees (the inverse of eulerDegToQuat; three.js's convention). */
+export const quatToEulerDeg = (q: Quat): Vec3 => {
+  const [x, y, z, w] = q;
+  const m11 = 1 - 2 * (y * y + z * z), m12 = 2 * (x * y - z * w), m13 = 2 * (x * z + y * w);
+  const m22 = 1 - 2 * (x * x + z * z), m23 = 2 * (y * z - x * w);
+  const m32 = 2 * (y * z + x * w), m33 = 1 - 2 * (x * x + y * y);
+  const ry = Math.asin(Math.min(1, Math.max(-1, m13)));
+  const [rx, rz] = Math.abs(m13) < 0.9999999 ? [Math.atan2(-m23, m33), Math.atan2(-m12, m11)] : [Math.atan2(m32, m22), 0];
+  return [rx, ry, rz].map((a) => (a * 180) / Math.PI) as unknown as Vec3;
+};
+
 /**
  * Where a point of an object (`c`, in its rest frame) ends up for a pose: scaled and turned about
  * the object's pivot, then moved. With no pivot this is position + rotation·(scale·c).
@@ -603,7 +626,8 @@ export const solidWithHoles = (outline: readonly Vec2[], holes: readonly (readon
   }
 };
 
-const closedPoints = (path: { closed: boolean; vertices: readonly { p: Vec2 }[] } & Parameters<typeof flattenPath>[0]): Vec2[] => {
+/** A closed path's outline as points (curves flattened, repeats dropped). */
+export const closedPoints = (path: { closed: boolean; vertices: readonly { p: Vec2 }[] } & Parameters<typeof flattenPath>[0]): Vec2[] => {
   const pts = flattenPath(path, 8);
   const out: Vec2[] = [];
   for (const p of pts) if (!out.length || Math.hypot(p[0] - out.at(-1)![0], p[1] - out.at(-1)![1]) > 1e-6) out.push(p);
@@ -988,7 +1012,10 @@ export interface PhysicsBody {
   readonly velocity?: Vec3;
   readonly spin?: Vec3;
   readonly rebuild?: { readonly start: number; readonly frames: number; readonly delay: number };
-  /** Fragment of a surface that breaks where it's hit (no `release`): which surface, and how. */
+  /** Frames it's there [from, to) (Object3D.activeFrom / activeTo): outside them nothing touches it. Absent: always. */
+  readonly active?: readonly [number, number];
+  /** Fragment of a surface that breaks where it's hit (no `release`): which surface, and how. With a
+   *  `path`, it follows that until it's hit. */
   readonly impact?: { readonly group: number; readonly radius: number; readonly speed: number };
   /** Where its pose is recorded in the prepared motion (−1 = not recorded). */
   readonly poseIndex: number;
@@ -1031,7 +1058,15 @@ const blockCut = (b: Blocks3D | undefined) => (b ? `${b.shape}|${b.size}|${b.gap
  */
 const piecesFor = (project: Project, o: Object3D, canvas: Canvas, venueId: Id | undefined, camD = 0): ResolvedPiece[] => {
   const g = o.geometry;
-  if (!g || g.kind !== "area") return [];
+  if (!isPieced(g)) return [];
+  if (g.kind === "panel") {
+    const hit = piecesCache.get(g);
+    const cut = o.fracture ? "" : blockCut(o.blocks);
+    if (hit && hit.fracture === o.fracture && hit.cut === cut) return hit.pieces;
+    const pieces = panelPieces(g, o.fracture, o.fracture ? undefined : o.blocks);
+    piecesCache.set(g, { fracture: o.fracture, cut, venue: null, w: 0, h: 0, camD: 0, pieces });
+    return pieces;
+  }
   const venue = venueId ? project.venues[venueId] : undefined;
   const hit = piecesCache.get(g);
   const cut = o.fracture ? "" : blockCut(o.blocks);
@@ -1081,6 +1116,35 @@ const computePieces = (project: Project, g: Extract<Geometry3D, { kind: "area" }
   return out;
 };
 
+/**
+ * A panel's pieces (its own metres). Cut like an area — the fracture and block sizes are in cm, as
+ * they are for areas (where 1 canvas pixel is 1 cm).
+ */
+const panelPieces = (g: Extract<Geometry3D, { kind: "panel" }>, fr: Fracture3D | undefined, blocks?: Blocks3D): ResolvedPiece[] => {
+  const cm = (p: Vec2): Vec2 => [p[0] * 100, p[1] * 100];
+  const outline = g.outline.map(cm);
+  if (outline.length < 3) return [];
+  const holes = (g.holes ?? []).filter((h) => h.length >= 3).map((h) => h.map(cm));
+  const depth = Math.max(0.005, g.depth);
+  const polys = fr
+    ? (fr.pattern === "glass" ? glassShards : fr.pattern === "bricks" ? brickPieces : fracture)(outline, holes, fr.pieceSize, fr.seed).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
+    : blocks
+      ? blockCells(outline, holes, blocks).map((p) => ({ outline: p, holes: [] as Vec2[][] }))
+      : solidWithHoles(outline, holes);
+  const m = (p: Vec2): Vec2 => [p[0] / 100, p[1] / 100];
+  return polys.map((poly) => {
+    const w = poly.outline.map(m);
+    const c = polyCentroid(w);
+    return {
+      outline: w.map((p) => [p[0] - c[0], p[1] - c[1]] as Vec2),
+      holes: poly.holes.map((h) => h.map(m).map((p) => [p[0] - c[0], p[1] - c[1]] as Vec2)),
+      center: [c[0], c[1], -depth / 2] as Vec3,
+      depth,
+      area: Math.abs(polyArea(w)),
+    };
+  });
+};
+
 const scaleOf = (o: Object3D, t: Flicks): Vec3 => evalProp(o.scale, t).map((s) => s / 100) as unknown as Vec3;
 
 const chunk = <T>(a: readonly T[], n: number): T[][] => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
@@ -1127,6 +1191,21 @@ const shapeFor = (o: Object3D, piece: ResolvedPiece | null, scale: Vec3, fixed: 
   return { kind: "hull", points };
 };
 
+/** Frames until an object's own animation stops changing (all of them when it rides on something). */
+const animationFrames = (o: Object3D, fps: number, frames: number): number => {
+  if (o.attach) return frames;
+  const last = Math.max(0, ...[o.position, o.rotation, o.scale].flatMap((p) => (p.keyframes ?? []).map((k) => k.t)));
+  return Math.max(1, Math.min(frames, Math.ceil(seconds(last) * fps) + 2));
+};
+
+/** The frames an object is there for physics (its active times), or undefined: always. */
+const activeFrames = (o: Object3D, fps: number, frames: number): [number, number] | undefined => {
+  if (o.activeFrom === undefined && o.activeTo === undefined) return undefined;
+  const a = o.activeFrom === undefined ? 0 : Math.max(0, Math.ceil(o.activeFrom * fps - 1e-6));
+  const b = o.activeTo === undefined ? frames : Math.min(frames, Math.ceil(o.activeTo * fps - 1e-6));
+  return [a, Math.max(a, b)];
+};
+
 const resolveCache = new WeakMap<Scene3D, Array<{ sig: string; venue: unknown; result: ResolvedScene3D }>>();
 let resolves = 0;
 /** How many times a 3D scene has been worked out from scratch (not remembered) in this window (diagnostics: playing prepared frames needs none). */
@@ -1159,7 +1238,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
     let poseIndex = -1;
     let motionFrom: number | undefined;
     if (ph && o.geometry) {
-      const fr = o.geometry.kind === "area" ? o.fracture : undefined;
+      const fr = isPieced(o.geometry) ? o.fracture : undefined;
       const impact = fr?.trigger === "impact";
       // Pose of the object when it starts moving under physics (a surface broken by an impact: as it
       // stands at the start; it's fixed until hit).
@@ -1184,6 +1263,9 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
         const ys = pieces.map((p) => p.center[1]);
         const yLo = Math.min(...ys), ySpan = Math.max(1e-6, Math.max(...ys) - yLo);
         const rank = new Map(order.map(([, i], r) => [i, r]));
+        // A surface broken by an impact that moves (shaken by blows before it gives way): its pieces
+        // follow its animation until they're hit.
+        const poses = impact && animated ? Array.from({ length: animationFrames(o, fps, frames) }, (_, f) => objectPose(scene, o, frameTime(f))) : null;
         pieces.forEach((piece, i) => {
           const r1 = rand01(fr.seed, i, 11), r2 = rand01(fr.seed, i, 12), r3 = rand01(fr.seed, i, 13);
           const spin = fr.spin * 2 * Math.PI;
@@ -1197,6 +1279,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
             ...common,
             p: placed(piece.center),
             q,
+            ...(poses ? { path: poses.flatMap((ps) => [...ps.place(piece.center), ...ps.q]) } : {}),
             ...(impact ? { impact: { group, radius: Math.max(0.05, fr.impactRadius ?? 0.8), speed: Math.max(0, fr.impactSpeed ?? 3) } } : { release }),
             velocity: [(r1 - 0.5) * fr.push * 0.5, (r2 - 0.3) * fr.push * 0.3, fr.push * (0.2 + 1.6 * h) * (0.7 + 0.6 * r3)],
             spin: [(r2 - 0.5) * spin, (r3 - 0.5) * spin, (r1 - 0.5) * spin],
@@ -1241,6 +1324,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
             }
           }
           const p0: Vec3 = path ? [path[0]!, path[1]!, path[2]!] : placed(center);
+          const active = activeFrames(o, fps, frames);
           const q0: Quat = path ? [path[3]!, path[4]!, path[5]!, path[6]!] : q;
           bodies.push({
             kind: releaseFrame >= 0 ? "released" : fixed ? (path ? "kinematic" : "fixed") : "dynamic",
@@ -1251,6 +1335,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
             q: q0,
             ...(path ? { path } : {}),
             ...(releaseFrame >= 0 ? { release: releaseFrame, velocity: velocity!, spin: spin! } : {}),
+            ...(active ? { active } : {}),
             poseIndex: moving ? movers++ : -1,
           });
         }
@@ -1362,6 +1447,37 @@ export const modelObject = (id: Id, name: string, assetId: Id, info: import("./m
  */
 export const pictureObject = (id: Id, name: string, assetId: Id, aspect: number, heightM: number, base: Vec3): Object3D =>
   mesh(id, name, { kind: "plane", size: [heightM * Math.max(0.01, aspect), heightM] }, [base[0], base[1] + heightM / 2, base[2]], { style: "image", assetId, color: staticProp<RGBA>([1, 1, 1, 1]), roughness: 0.9 }, { receiveShadow: false });
+
+/**
+ * A flat solid in the scene's own space (see Geometry3D "panel"): `outline` in metres in its x–y
+ * plane, standing at `position`. With a scene camera it shows the picture projected through it.
+ */
+export const panelObject = (id: Id, name: string, outline: readonly Vec2[], depth: number, position: Vec3, opts: { holes?: readonly (readonly Vec2[])[]; projected?: boolean } = {}): Object3D =>
+  mesh(id, name, { kind: "panel", outline, ...(opts.holes?.length ? { holes: opts.holes } : {}), depth: Math.max(0.005, depth) }, position, opts.projected ? { style: "photo", color: staticProp<RGBA>([1, 1, 1, 1]), roughness: 0.9, mapping: "camera" } : {});
+
+/** A controller (After Effects' null): only a position, turn and size over time, for others to ride on. */
+export const nullObject = (id: Id, name: string, position: Vec3): Object3D => ({
+  id,
+  name,
+  kind: "null",
+  visible: true,
+  position: staticProp(position, true),
+  rotation: staticProp<Vec3>([0, 0, 0]),
+  scale: staticProp<Vec3>([100, 100, 100]),
+});
+
+/**
+ * Where the scene camera sees canvas point `px` on the plane z = `planeZ` (scene metres), or null
+ * when that ray doesn't reach it in front of the camera: a traced outline laid onto a modelled wall.
+ */
+export const onPlaneThrough = (cam: CameraNow, canvas: Canvas, px: Vec2, planeZ: number): Vec3 | null => {
+  const f = canvas.height / 2 / Math.tan((cam.fovY * Math.PI) / 360);
+  const dir = rotateByQuat([(px[0] - canvas.width / 2) / f, -(px[1] - canvas.height / 2) / f, -1], cam.q);
+  if (Math.abs(dir[2]) < 1e-9) return null;
+  const k = (planeZ - cam.eye[2]) / dir[2];
+  if (!(k > 0)) return null;
+  return [cam.eye[0] + dir[0] * k, cam.eye[1] + dir[1] * k, planeZ];
+};
 
 export const ballObject = (id: Id, name: string, radius: number, position: Vec3, physics?: Physics3D): Object3D =>
   mesh(id, name, { kind: "sphere", radius }, position, { color: staticProp<RGBA>([0.9, 0.5, 0.2, 1]), roughness: 0.4 }, physics ? { physics } : {});
