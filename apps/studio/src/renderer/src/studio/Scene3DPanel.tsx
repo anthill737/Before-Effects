@@ -710,9 +710,14 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
             </>
           )}
           {m.style === "shadow" && (
-            <Field label="Shadow darkness">
-              <Slider label="Shadow darkness" value={m.opacity} min={0} max={1} step={0.05} onChange={(v) => setMat({ opacity: v }, "Change shadow darkness", "opacity")} />
-            </Field>
+            <>
+              <Field label="Shadow darkness">
+                <Slider label="Shadow darkness" value={m.opacity} min={0} max={1} step={0.05} onChange={(v) => setMat({ opacity: v }, "Change shadow darkness", "opacity")} />
+              </Field>
+              <Field label="Hides what's behind it" help="Things of this layer behind it are hidden, so the layers below show there: a wall standing in for the house picture, that debris can fall behind.">
+                <Toggle label="Hides what's behind it" value={!!m.holdout} onChange={(v) => setMat({ holdout: v }, v ? "Hide what's behind it" : "Don't hide what's behind it", "holdout")} />
+              </Field>
+            </>
           )}
         </Section>
       )}

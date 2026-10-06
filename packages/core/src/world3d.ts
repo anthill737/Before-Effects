@@ -67,6 +67,11 @@ export interface Material3D {
    * off with their part of it.
    */
   readonly mapping?: "front" | "camera";
+  /**
+   * Shadows only: also hide whatever of this layer is behind it, so the layers below show there — a
+   * wall that debris falls behind, standing in for the house picture under this layer.
+   */
+  readonly holdout?: boolean;
 }
 
 /**

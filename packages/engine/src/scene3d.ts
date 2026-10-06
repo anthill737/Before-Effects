@@ -572,6 +572,8 @@ export class SceneHost implements ExternalSourceRenderer {
         mat.colorNode = vec4(rgb.mul(materialColor), 1);
         mat.emissiveNode = rgb.mul(materialEmissive);
         mat.userData.projTex = tex;
+        // A model's surfaces (single planes, normals either way) take the picture on whichever side the camera sees.
+        if (o.geometry?.kind === "model") mat.side = THREE.DoubleSide;
         if (rest) mat.userData.rest = rest;
         if (sideOf) mat.userData.sideOf = true;
         if (m.style === "photo") mat.userData.photo = true;
@@ -585,7 +587,8 @@ export class SceneHost implements ExternalSourceRenderer {
       return { front: mat, side: edge, mats: [mat, edge] };
     }
     if (m?.style === "shadow") {
-      front = side = new THREE.ShadowMaterial({ opacity: m.opacity, color: 0x000000 });
+      // A holdout is drawn opaque: it writes its shadow (or nothing) over what's behind it in this layer.
+      front = side = new THREE.ShadowMaterial({ opacity: m.opacity, color: 0x000000, ...(m.holdout ? { transparent: false } : {}) });
       mats.push(front);
     } else {
       const base = { roughness: m?.roughness ?? 0.8, metalness: m?.metalness ?? 0, transparent: (m?.opacity ?? 1) < 1, opacity: m?.opacity ?? 1 };
@@ -1106,6 +1109,7 @@ const sameBuild = (a: Object3D, b: Object3D): boolean =>
   a.material?.metalness === b.material?.metalness &&
   a.material?.opacity === b.material?.opacity &&
   a.material?.mapping === b.material?.mapping &&
+  a.material?.holdout === b.material?.holdout &&
   a.light?.type === b.light?.type &&
   a.light?.castShadow === b.light?.castShadow &&
   a.light?.angle === b.light?.angle &&

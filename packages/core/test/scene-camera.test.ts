@@ -47,7 +47,7 @@ describe("a scene's own camera", () => {
       expect(back[1]).toBeCloseTo(p[1], 6);
     }
     // Straight ahead lands in the middle of the canvas.
-    const ahead = [cam.eye[0], cam.eye[1], cam.eye[2]].map((v, i) => v + [0, 0, -5][i]!) as Vec3;
+    const ahead: Vec3 = [cam.eye[0], cam.eye[1], cam.eye[2] - 5];
     const straight = { ...cam, q: eulerDegToQuat([0, 0, 0]) };
     const c = projectThrough(straight, canvas, ahead)!;
     expect(c.x).toBeCloseTo(960, 6);
