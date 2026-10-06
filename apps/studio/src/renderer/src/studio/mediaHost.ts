@@ -222,20 +222,22 @@ export class MediaHost implements MediaProvider {
    * otherwise a window that fell behind kept decoding every frame it once asked for, ever later.
    * `current`: a frame being drawn now (it goes first, and marks where playback is).
    */
-  private loadFrame(assetId: string, frame: number, width: number, current = false, loop = false): Promise<void> {
+  private loadFrame(assetId: string, frame: number, width: number, current = false, loop = false, must = false): Promise<void> {
     const asset = this.project?.assets[assetId];
     if (!asset || frame < 0 || (asset.meta.frameCount && frame >= asset.meta.frameCount)) return Promise.resolve();
     if (current) this.markCurrent(assetId, frame);
     const key = `${assetId}|${frame}|${width}`;
     if (this.frames.has(key)) return Promise.resolve();
-    const p = this.loading.get(key);
-    if (p) return p;
     const qk = `${assetId}|${width}`;
     let q = this.queues.get(qk);
     if (!q) {
-      q = { assetId, width, waiting: new Map(), inflight: 0, loop };
+      q = { assetId, width, waiting: new Map(), inflight: 0, loop, must: new Set() };
       this.queues.set(qk, q);
     }
+    // Someone waits for this frame (an export, preparation): it's decoded whatever playback does.
+    if (must) q.must.add(frame);
+    const p = this.loading.get(key);
+    if (p) return p;
     q.loop ||= loop;
     const queue = q;
     const promise = new Promise<void>((resolve) => queue.waiting.set(frame, resolve));
@@ -245,7 +247,7 @@ export class MediaHost implements MediaProvider {
   }
 
   /** Requests per video and size: frames waiting (with what to call when done) and how many are decoding. */
-  private queues = new Map<string, { assetId: string; width: number; waiting: Map<number, () => void>; inflight: number; loop: boolean }>();
+  private queues = new Map<string, { assetId: string; width: number; waiting: Map<number, () => void>; inflight: number; loop: boolean; must: Set<number> }>();
   /** Frames drawn recently per video (frame, when): where playback is, for every layer using it. */
   private nowAt = new Map<string, Array<{ frame: number; at: number }>>();
   private static readonly INFLIGHT = 3;
@@ -279,7 +281,7 @@ export class MediaHost implements MediaProvider {
     // layer has passed are dropped. With nothing playing it now, everything asked for is kept.
     const rank = (f: number) => (recent.length ? Math.min(...recent.map((e) => this.forward(f, e.frame, count, q.loop))) : f);
     for (const [f, done] of [...q.waiting]) {
-      if (rank(f) !== Number.POSITIVE_INFINITY) continue;
+      if (q.must.has(f) || rank(f) !== Number.POSITIVE_INFINITY) continue;
       q.waiting.delete(f);
       this.loading.delete(`${q.assetId}|${f}|${q.width}`);
       done();
@@ -291,6 +293,7 @@ export class MediaHost implements MediaProvider {
       q.inflight++;
       void this.decodeNow(q.assetId, f, q.width).finally(() => {
         q.inflight--;
+        q.must.delete(f);
         this.loading.delete(`${q.assetId}|${f}|${q.width}`);
         done();
         this.pump(qk);
@@ -380,7 +383,7 @@ export class MediaHost implements MediaProvider {
             const srcW = asset.meta.width ?? 1920;
             // The width the compositor will ask for (the layer's pixels at this size); full size for exports.
             const w = scale >= 1 ? srcW : this.decodeWidth(srcW, Math.ceil(s.width * scale));
-            if (!this.decoded(s.assetId, s.frame, w)) waits.push(this.loadFrame(s.assetId, s.frame, w, true, s.loop));
+            if (!this.decoded(s.assetId, s.frame, w)) waits.push(this.loadFrame(s.assetId, s.frame, w, true, s.loop, true));
             else this.markCurrent(s.assetId, s.frame);
             for (const f of this.ahead(s.assetId, s.frame, s.loop, 4)) void this.loadFrame(s.assetId, f, w, false, s.loop);
           }
