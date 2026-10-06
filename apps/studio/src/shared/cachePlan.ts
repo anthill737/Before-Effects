@@ -3,9 +3,11 @@
  * shared by the preview settings and the agent API; unit-tested in apps/studio/test.
  *
  *   Graphics memory   Finished frames and decoded video live on the graphics card. A card with its
- *                     own memory gives the caches about 55 % of it (the rest is for effects, 3D,
- *                     simulations and the display); one that borrows the computer's memory gets a
- *                     share of that instead.
+ *                     own memory gives the editor's caches about a third of it: the rest is for
+ *                     effects, 3D, simulations, the display and the projector output window (which
+ *                     keeps a small cache of its own). Going over the card's memory makes Windows
+ *                     lend it the computer's memory, and everything slows down. A card that borrows
+ *                     the computer's memory gets a modest share of that instead.
  *   Disk              Prepared frames are kept on the data drive (compact JPEGs), so a whole show can
  *                     be prepared once and played smoothly after restarting. The recommended size
  *                     holds the whole show at the recommended preview size, when the drive allows,
@@ -107,8 +109,8 @@ export const recommendCache = (hw: Hardware, footage: readonly Footage[]): Cache
   // ---- graphics memory ----
   let caches: number;
   if (gpuKind === "dedicated") {
-    caches = vram * 0.55;
-    reasons.push(`The graphics card (${hw.gpu!.name}) has ${Math.round(vram / GB)} GB of its own: about half of it holds finished frames and video, the rest is left for effects, 3D and the display.`);
+    caches = vram * 0.35;
+    reasons.push(`The graphics card (${hw.gpu!.name}) has ${Math.round(vram / GB)} GB of its own: about a third of it holds finished frames and video, the rest is left for effects, 3D, the display and the projector output.`);
   } else {
     caches = Math.min(hw.ramBytes * 0.15, 6 * GB);
     reasons.push(
@@ -118,7 +120,7 @@ export const recommendCache = (hw: Hardware, footage: readonly Footage[]): Cache
     );
   }
   caches = Math.max(1 * GB, caches);
-  const videoCacheMB = roundTo(Math.min(3 * GB, Math.max(512 * MB, caches * 0.25)) / MB, 256);
+  const videoCacheMB = roundTo(Math.min(1.5 * GB, Math.max(1 * GB, caches * 0.25)) / MB, 256);
   const frameCacheMB = roundTo(Math.max(512 * MB, caches - videoCacheMB * MB) / MB, 256);
 
   // ---- disk and preview size ----

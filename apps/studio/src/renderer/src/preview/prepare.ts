@@ -166,7 +166,7 @@ export const startPreparing = async (opts: PrepareOptions): Promise<PrepareJob> 
         reason:
           want * GB > spare
             ? `Every frame of “${t.name}” at ${RES_NAME[resolution]} size needs about ${formatSize(diskBytes)} on disk, more than ${space?.drive ?? "the drive"} can spare (${formatSize(space?.freeBytes ?? 0)} free). Prepare at a smaller size, free some space, or choose another folder for preview frames.`
-            : `Every frame of “${t.name}” needs about ${formatSize(diskBytes)} on disk, but the disk cache is set to ${formatSize(limit)}. Raise it to ${want} GB (Quality & speed → Disk space), or use the recommended settings.`,
+            : `Every frame of “${t.name}” needs about ${formatSize(diskBytes)} on disk, more than preview frames may use (${formatSize(limit)}). Prepare a shorter stretch or at a smaller size.`,
       });
       return usePrepare.getState().job!;
     }
@@ -234,7 +234,7 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
   }
   // 2. The frames already on disk for this version of the show.
   update({ phase: "Finding frames already prepared" });
-  if (!(await disk.ensureReady(current(), compId))) throw new Error("the disk cache isn't available (check its folder in Quality & speed)");
+  if (!(await disk.ensureReady(current(), compId))) throw new Error("preview frames can't be saved on disk right now (their folder isn't available)");
 
   let bytesSaved = 0;
   let pixelsSaved = 0;
@@ -309,7 +309,7 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
       // Saving keeps failing: the drive is nearly full (or the folder went away).
       if (unsaved >= 12) {
         const sp = await window.be.cache.space().catch(() => null);
-        throw new Error(sp && sp.freeBytes < 3 * GB ? `${sp.drive} is nearly full (${formatSize(sp.freeBytes)} free). Free some space, then prepare again: frames already saved are kept` : "frames couldn't be saved to the disk cache's folder. Check it in Quality & speed, then prepare again: frames already saved are kept");
+        throw new Error(sp && sp.freeBytes < 3 * GB ? `${sp.drive} is nearly full (${formatSize(sp.freeBytes)} free). Free some space, then prepare again: frames already saved are kept` : "frames couldn't be saved to disk. Prepare again in a moment: frames already saved are kept");
       }
       // Real frame sizes: check the disk cache still holds every frame.
       if (!sizeChecked && savedFrames >= 60) {
@@ -324,7 +324,7 @@ const run = async (r: import("@be/engine").FrameRenderer, disk: DiskFrames, ctl:
         const limit = usePreview.getState().diskCacheGB * GB;
         update({ diskBytes: Math.round(need) });
         if (need > limit * 0.97) {
-          update({ state: "stopped", phase: "Stopped", finishedAt: Date.now(), etaSeconds: null, reason: `These frames are larger than estimated: every frame needs about ${formatSize(need)}, more than the disk cache's ${formatSize(limit)}. Raise its size (Quality & speed → Disk space), then prepare again; frames already saved are kept.` });
+          update({ state: "stopped", phase: "Stopped", finishedAt: Date.now(), etaSeconds: null, reason: `These frames are larger than estimated: every frame needs about ${formatSize(need)}, more than preview frames may use (${formatSize(limit)}). Prepare a shorter stretch or at a smaller size; frames already saved are kept.` });
           running = null;
           return;
         }

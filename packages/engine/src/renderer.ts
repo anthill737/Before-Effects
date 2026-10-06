@@ -90,11 +90,18 @@ export class FrameRenderer {
   }
 
   /** Imported media source (images, video frames). Set by the host app. */
-  setMedia(media: MediaProvider & { prepare?(project: Project, compId: Id, t: Flicks, scale?: number): Promise<void> }): void {
+  setMedia(
+    media: MediaProvider & {
+      prepare?(project: Project, compId: Id, t: Flicks, scale?: number): Promise<void>;
+      lookahead?(project: Project, compId: Id, now: Flicks, later: Flicks, scale: number): void;
+    },
+  ): void {
     this.compositor.media = media;
     this.mediaPrepare = media.prepare?.bind(media) ?? null;
+    this.mediaLookahead = media.lookahead?.bind(media) ?? null;
   }
   private mediaPrepare: ((project: Project, compId: Id, t: Flicks, scale?: number) => Promise<void>) | null = null;
+  private mediaLookahead: ((project: Project, compId: Id, now: Flicks, later: Flicks, scale: number) => void) | null = null;
 
   /** Smoke and water simulations: prepared frames are kept in `store` (set by the host app). */
   setSimStore(store: SimStore): SimEngine {
@@ -127,6 +134,19 @@ export class FrameRenderer {
 
   get sims(): SimEngine | null {
     return this.compositor.sims;
+  }
+
+  /** Footage frames the last renderContent() didn't have yet, and how many of them it drew with a nearby frame instead. */
+  get lastFrameMedia(): { missing: number; standIns: number; blank: ReadonlyArray<{ assetId: string; frame: number }> } {
+    return { missing: this.compositor.stats.missingMedia, standIns: this.compositor.stats.standIns, blank: this.compositor.stats.blank };
+  }
+
+  /**
+   * Start loading the video frames needed a little later (while playing): frames of clips about to
+   * begin, and of clips that start over, are asked for before they're drawn. Doesn't wait.
+   */
+  lookaheadMedia(project: Project, compId: Id, now: Flicks, later: Flicks, scale = 1): void {
+    this.mediaLookahead?.(project, compId, now, later, scale);
   }
 
   /** True when the last renderContent() had footage or simulation frames that weren't ready (don't cache that frame). */

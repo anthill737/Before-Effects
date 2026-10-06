@@ -8,15 +8,15 @@ const show: Footage = { name: "The show", width: 1920, height: 1080, fps: 30, se
 const scene: Footage = { name: "Act one", width: 1920, height: 1080, fps: 30, seconds: 150 };
 
 describe("cache recommendations", () => {
-  it("gives a 12 GB graphics card about half its memory and prepares a 20-minute show at Full on a roomy drive", () => {
+  it("gives a 12 GB graphics card about a third of its memory and prepares a 20-minute show at Full on a roomy drive", () => {
     const p = recommendCache(
       { ramBytes: 31 * GB, gpu: { name: "NVIDIA GeForce RTX 5070 Ti Laptop GPU", bytes: 12 * GB }, drive: { path: "D:", freeBytes: 800 * GB, totalBytes: 1000 * GB } },
       [scene, show],
     );
     expect(p.gpuKind).toBe("dedicated");
     const caches = (p.frameCacheMB + p.videoCacheMB) * MB;
-    expect(caches).toBeGreaterThan(6 * GB);
-    expect(caches).toBeLessThan(7.5 * GB);
+    expect(caches).toBeGreaterThan(3.5 * GB);
+    expect(caches).toBeLessThan(4.6 * GB);
     expect(p.frameCacheMB).toBeGreaterThan(p.videoCacheMB);
     expect(p.frameCacheMB % 256).toBe(0);
     expect(p.resolution).toBe("full");

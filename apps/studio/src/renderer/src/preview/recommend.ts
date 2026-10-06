@@ -77,3 +77,21 @@ export const matchesPlan = (plan: CachePlan): boolean => {
   const s = usePreview.getState();
   return s.cacheBudgetMB === plan.frameCacheMB && s.videoCacheMB === plan.videoCacheMB && s.diskCache && s.diskCacheGB === plan.diskCacheGB;
 };
+
+/**
+ * Memory and disk for preview frames are set automatically from this computer (nothing to adjust):
+ * the editor gets the recommended amounts; the projector output and pop-out windows, which play what
+ * the editor has prepared, keep small caches of their own. Frames are always kept on disk too.
+ */
+export const applyAutomaticCaches = async (): Promise<void> => {
+  const { plan } = await computePlan();
+  const kind = window.be?.app.kind ?? "editor";
+  const follower = kind !== "editor" && kind !== "uitest";
+  usePreview.getState().set({
+    cacheBudgetMB: follower ? Math.min(1024, plan.frameCacheMB) : plan.frameCacheMB,
+    // Video frames are drawn from at full size in an output: room for several at once, a few ahead each.
+    videoCacheMB: follower ? 1024 : plan.videoCacheMB,
+    diskCache: true,
+    diskCacheGB: plan.diskCacheGB,
+  });
+};

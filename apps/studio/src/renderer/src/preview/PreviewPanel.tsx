@@ -6,8 +6,9 @@
  *   Zoom:       Fit / 25–400 %. Display only; it never changes the rendered pixels.
  *   Transport:  restart, step, play/pause, loop, preview range
  *   Status:     target vs achieved fps, skipped frames, cache (memory and disk), preparing progress
- *   Caches:     any amount of graphics memory for frames and video, and disk space for frames
- *               (Quality & speed), with what this computer has for guidance
+ *   Play:       what Space plays, render first or play right away, preparing ahead
+ *   Quality:    effects and simulations at full or draft quality while previewing; memory and disk
+ *               for preview frames are set automatically for the computer (recommend.ts)
  */
 import { formatSecondsFriendly, formatTimecode, type Project } from "@be/core";
 import { DEFAULT_ORBIT } from "@be/engine";
@@ -18,7 +19,7 @@ import { clearDiskCache, refreshDiskStatus, useDiskCache } from "./diskCache.ts"
 import { touched } from "./activity.ts";
 import { pausePreparing, type PrepareJob, type PrepareTarget, startPreparing, stopPreparing, usePrepare } from "./prepare.ts";
 import type { PlanResolution } from "../../../shared/cachePlan.ts";
-import { applyPlan, matchesPlan, useCachePlan } from "./recommend.ts";
+import { applyAutomaticCaches } from "./recommend.ts";
 import { previewAudio } from "../studio/audioEngine.ts";
 import { followerClock, followersReady } from "./sync.ts";
 import { getMediaHost, getRenderer, venueReference } from "../studio/engineHost.ts";
@@ -213,6 +214,12 @@ export const PreviewPanel = ({ role, source, clean = false }: PreviewPanelProps)
       cancelled = true;
     };
   }, [project?.activeVenueId, venue?.referenceAssetId]);
+
+  // Memory and disk for preview frames: set for this computer and show, automatically.
+  const showSeconds = project ? Math.max(0, ...project.compositionOrder.map((id) => project.compositions[id]?.duration ?? 0)) : 0;
+  useEffect(() => {
+    void applyAutomaticCaches().catch(() => undefined);
+  }, [project?.id, showSeconds]);
 
   // A moment's wait, so dragging the slider down and back up doesn't throw frames away on the way.
   useEffect(() => {
@@ -542,15 +549,15 @@ const PreviewToolbar = ({ role, hasProjector, onProjector, onPopOut }: { role: "
       </div>
       {role === "editor" && (
         <div className="tool-pop">
-          <button className="ghost small-btn" aria-expanded={open === "preview"} onClick={() => setOpen(open === "preview" ? null : "preview")} title="What Play plays and caches, and preparing frames ahead">
-            Preview ▾
+          <button className="ghost small-btn" aria-expanded={open === "preview"} onClick={() => setOpen(open === "preview" ? null : "preview")} title="What Space plays, and preparing frames ahead so they play smoothly">
+            Play ▾
           </button>
           {open === "preview" && <PreviewPopover />}
         </div>
       )}
       <div className="tool-pop">
-        <button className="ghost small-btn" aria-expanded={open === "quality"} onClick={() => setOpen(open === "quality" ? null : "quality")}>
-          Quality & speed ▾
+        <button className="ghost small-btn" aria-expanded={open === "quality"} onClick={() => setOpen(open === "quality" ? null : "quality")} title="Preview quality (exports are always full quality)">
+          Quality ▾
         </button>
         {open === "quality" && <QualityPopover />}
       </div>
@@ -585,71 +592,15 @@ const PreviewToolbar = ({ role, hasProjector, onProjector, onPopOut }: { role: "
   );
 };
 
-const MB = 1024 ** 2;
-const GB = 1024 ** 3;
-
-/** How much memory this computer and its graphics card have (asked once per window). */
-let machineInfo: Promise<MachineMemory | null> | null = null;
-const useMachine = (): MachineMemory | null => {
-  const [m, setM] = useState<MachineMemory | null>(null);
-  useEffect(() => {
-    let live = true;
-    void (machineInfo ??= window.be.cache.machine().catch(() => null)).then((v) => live && setM(v));
-    return () => {
-      live = false;
-    };
-  }, []);
-  return m;
-};
-
-/**
- * An amount in gigabytes: a slider over the usual range and a box for any amount, including more
- * than the slider reaches. A typed amount applies on Enter or when leaving the box.
- */
-const AmountField = ({ label, gb, min, max, step, title, onChange }: { label: string; gb: number; min: number; max: number; step: number; title: string; onChange: (gb: number) => void }) => {
-  const [draft, setDraft] = useState<string | null>(null);
-  const commit = () => {
-    if (draft === null) return;
-    const v = Number(draft.replace(",", "."));
-    setDraft(null);
-    if (Number.isFinite(v) && v > 0) onChange(Math.max(min, v));
-  };
-  return (
-    <div className="amount-field" title={title}>
-      <span>{label}</span>
-      <input type="range" min={min} max={Math.max(min, max)} step={step} value={Math.min(gb, max)} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
-      <input
-        className="amount-number"
-        type="number"
-        min={min}
-        step="any"
-        value={draft ?? String(Number(gb.toFixed(2)))}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
-          else if (e.key === "Escape") setDraft(null);
-        }}
-        aria-label={`${label} in gigabytes (any amount)`}
-      />
-      <span className="unit">GB</span>
-    </div>
-  );
-};
-
 const RES_LABEL = { full: "Full", half: "Half", quarter: "Quarter", eighth: "Eighth" } as const;
 const clockText = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min${s % 60 >= 1 ? ` ${Math.round(s % 60)} s` : ""}` : `${Math.max(1, Math.round(s))} s`);
 
-/** Start preparing a scene or the show (at the preview's size; Auto uses the recommended size). */
-const prepareNow = async (target: PrepareTarget, recommended?: PlanResolution) => {
-  const auto = usePreview.getState().resolution === "auto";
-  try {
-    await startPreparing({ target, raiseDiskLimit: true, ...(auto && recommended ? { resolution: recommended } : {}) });
-  } catch (e) {
+/** Start preparing (in the background, at the preview's size); a problem shows as a message. */
+const prepareNow = (options: Parameters<typeof startPreparing>[0]) =>
+  void startPreparing({ raiseDiskLimit: true, ...options }).catch((e: unknown) => {
     usePrepare.setState({ job: null });
     useStudio.getState().toast({ kind: "error", text: String((e as Error)?.message ?? e) });
-  }
-};
+  });
 
 const ACTIVE: ReadonlyArray<PrepareJob["state"]> = ["waiting", "preparing", "checking", "paused"];
 
@@ -686,57 +637,6 @@ const PrepareStatus = ({ compact = false }: { compact?: boolean }) => {
   );
 };
 
-/** What this computer suits (one click to use it), and preparing a scene or the whole show. */
-const RecommendAndPrepare = () => {
-  const ctx = useCachePlan();
-  usePreview(); // re-render when settings change (matchesPlan reads them)
-  const project = useStudio((st) => st.project);
-  const job = usePrepare((j) => j.job);
-  const hasShow = !!project && project.compositionOrder.some((id) => project.compositions[id]?.show);
-  if (!ctx) return <p className="muted small">Looking at this computer…</p>;
-  const { plan } = ctx;
-  const same = matchesPlan(plan);
-  const res = RES_LABEL[plan.resolution];
-  const busy = !!job && ACTIVE.includes(job.state);
-  return (
-    <div className="recommend">
-      <h3>Recommended for this computer</h3>
-      <p className="small">
-        Frame cache {formatSize(plan.frameCacheMB * MB)} · video frames {formatSize(plan.videoCacheMB * MB)} · disk {plan.diskCacheGB} GB{ctx.space ? ` on ${ctx.space.drive.replace(/\\$/, "")}` : ""} · prepare at {res} size
-      </p>
-      <details>
-        <summary className="small">Why these amounts</summary>
-        <ul className="muted small reasons">
-          {plan.reasons.map((r) => (
-            <li key={r}>{r}</li>
-          ))}
-        </ul>
-      </details>
-      <div className="row gap wrap">
-        <button className={same ? "ghost small-btn" : "primary small-btn"} disabled={same} onClick={() => applyPlan(plan)}>
-          {same ? "✓ Using the recommended settings" : "Use these settings"}
-        </button>
-      </div>
-      <h3>Prepare for smooth playback</h3>
-      <p className="muted small">Every frame is rendered once and kept on disk, so it plays smoothly, even after restarting. Edits re-prepare only what they change. Exports always render afresh.</p>
-      {plan.fits.map((f) => (
-        <p key={f.name} className={f.diskFits ? "muted small" : "warn small"}>
-          “{f.name}” ({clockText(f.seconds)}) at {res}: {f.frames.toLocaleString()} frames, about {formatSize(f.diskBytes)} on disk{f.diskFits ? "" : ", more than the recommended disk space"}; {f.memorySeconds >= 1 ? `${Math.floor(f.memorySeconds)} s` : "under a second"} of it fits in graphics memory at once.
-        </p>
-      ))}
-      <div className="row gap wrap">
-        <button className="ghost small-btn" disabled={busy || !project} onClick={() => void prepareNow("scene", plan.resolution)}>
-          Prepare this scene
-        </button>
-        <button className="ghost small-btn" disabled={busy || !hasShow} title={hasShow ? "Every scene, in show order" : "Assemble a show first (+ Scene menu)"} onClick={() => void prepareNow("show", plan.resolution)}>
-          Prepare the whole show
-        </button>
-      </div>
-      <PrepareStatus />
-    </div>
-  );
-};
-
 /** The preview's picture on the whole screen (Esc, or the browser's own exit, comes back). */
 export const enterFullScreen = () => {
   const el = document.querySelector<HTMLElement>(".preview-panel .preview-scroll");
@@ -755,25 +655,26 @@ export const togglePlay = () => {
 };
 
 const RANGES: Array<{ id: PreviewSettings["previewRange"]; label: string; hint: string }> = [
-  { id: "workarea-extended", label: "Work area, extended by the playhead", hint: "The preview range (Range start / end); from the playhead when it's outside it" },
-  { id: "workarea", label: "Work area", hint: "Only the preview range (Range start / end), or the whole scene when none is set" },
-  { id: "entire", label: "Entire duration", hint: "The whole scene" },
-  { id: "around", label: "Around the playhead", hint: "A few seconds before and after the playhead" },
+  { id: "workarea-extended", label: "The range, from the playhead", hint: "Between Range start and Range end. With the playhead outside the range, from the playhead on." },
+  { id: "workarea", label: "The range only", hint: "Between Range start and Range end (the whole scene when no range is set)" },
+  { id: "entire", label: "The whole scene", hint: "From the start of the scene to its end" },
+  { id: "around", label: "A few seconds around the playhead", hint: "The seconds set below, before and after the playhead" },
 ];
 
-/** What Play plays and caches (as After Effects' Preview panel), and preparing frames ahead. */
+/** What Space plays, and preparing frames ahead so they play smoothly. */
 const PreviewPopover = () => {
   const s = usePreview();
   const job = usePrepare((j) => j.job);
   const busy = !!job && ["waiting", "preparing", "checking"].includes(job.state);
   const st = useStudio.getState();
   const comp = st.project && st.compId ? st.project.compositions[st.compId] : undefined;
-  const prepareRange = (startSeconds: number, endSeconds: number) => void startPreparing({ target: "scene", raiseDiskLimit: true, range: { startSeconds, endSeconds } }).catch(() => undefined);
+  const size = RESOLUTIONS.find((r) => r.id === s.resolution)?.label ?? "";
+  const prepareRange = (startSeconds: number, endSeconds: number) => prepareNow({ target: "scene", range: { startSeconds, endSeconds } });
   return (
-    <div className="popover preview-pop" role="dialog" aria-label="Preview">
+    <div className="popover preview-pop" role="dialog" aria-label="Play">
       <label className="tool-field">
-        <span>Range</span>
-        <select value={s.previewRange} onChange={(e) => s.set({ previewRange: e.target.value as PreviewSettings["previewRange"] })} aria-label="Preview range">
+        <span>Space plays</span>
+        <select value={s.previewRange} onChange={(e) => s.set({ previewRange: e.target.value as PreviewSettings["previewRange"] })} aria-label="What Space plays">
           {RANGES.map((r) => (
             <option key={r.id} value={r.id} title={r.hint}>
               {r.label}
@@ -791,25 +692,27 @@ const PreviewPopover = () => {
           </label>
         </div>
       )}
-      <label className="check" title="Render every frame of the range first, then play it smoothly with sound">
-        <input type="checkbox" checked={s.playbackMode === "cache"} onChange={(e) => s.set({ playbackMode: e.target.checked ? "cache" : "realtime" })} /> Cache before playback
+      <label className="check">
+        <input type="checkbox" checked={s.playbackMode === "cache"} onChange={(e) => s.set({ playbackMode: e.target.checked ? "cache" : "realtime" })} /> Render first, then play
       </label>
-      <label className="check" title="Pressing Space (or Pause) while it's still caching plays the frames cached so far, from the range's start">
-        <input type="checkbox" checked={s.playCachedOnStop} onChange={(e) => s.set({ playCachedOnStop: e.target.checked })} /> If caching, Space plays the cached frames
-      </label>
-      <label className="check" title="When nothing happens for a moment, frames ahead of the playhead are rendered and kept, so they play at once">
-        <input type="checkbox" checked={s.idleCache} onChange={(e) => s.set({ idleCache: e.target.checked })} /> Cache frames when idle, after{" "}
-        <input className="text-input num" type="number" min={0.5} max={60} step={0.5} value={s.idleDelaySeconds} onChange={(e) => s.set({ idleDelaySeconds: Math.max(0.5, Number(e.target.value) || 2) })} aria-label="Seconds idle before caching" /> s
-      </label>
-      <h3>Prepare ahead (kept on disk)</h3>
-      <p className="muted small">At the preview size ({RESOLUTIONS.find((r) => r.id === s.resolution)?.label}). Frames already prepared are skipped; playing pauses it.</p>
+      <p className="muted small">
+        {s.playbackMode === "cache"
+          ? "Space draws every frame first (the bar under the picture fills up), then plays them all smoothly with sound. Press Space again while it draws to play what's ready."
+          : "Space plays right away. Frames that take too long to draw are skipped to keep time with the sound."}{" "}
+        Frames are kept as they're drawn, so playing a stretch again is smooth.
+      </p>
+      <h3>Prepare ahead</h3>
+      <p className="muted small">
+        Draws every frame once in the background and saves it, so it plays smoothly from then on, even after restarting. It pauses while you play, and edits redo only what they change. Uses the preview size{size ? ` (${size})` : ""}.
+      </p>
       <div className="row gap wrap">
-        <button className="ghost small-btn" disabled={busy || !st.range} title={st.range ? "The preview range" : "Set Range start / end first"} onClick={() => st.range && prepareRange(st.range.start / 705_600_000, st.range.end / 705_600_000)}>
-          Work area
+        <button className="ghost small-btn" disabled={busy || !st.range} title={st.range ? "Between Range start and Range end" : "Set Range start and Range end first"} onClick={() => st.range && prepareRange(st.range.start / 705_600_000, st.range.end / 705_600_000)}>
+          The range
         </button>
         <button
           className="ghost small-btn"
           disabled={busy || !comp}
+          title={`${s.aroundBefore} s before to ${s.aroundAfter} s after the playhead`}
           onClick={() => {
             const t = useStudio.getState().time / 705_600_000;
             prepareRange(Math.max(0, t - s.aroundBefore), Math.min((comp?.duration ?? 0) / 705_600_000, t + s.aroundAfter));
@@ -817,168 +720,54 @@ const PreviewPopover = () => {
         >
           Around the playhead
         </button>
-        <button className="ghost small-btn" disabled={busy || !comp} onClick={() => void startPreparing({ target: "scene", raiseDiskLimit: true }).catch(() => undefined)}>
+        <button className="ghost small-btn" disabled={busy || !comp} onClick={() => prepareNow({ target: "scene" })}>
           This scene
         </button>
-        <button className="ghost small-btn" disabled={busy || !showCompOf(st.project)} title={showCompOf(st.project) ? "Every scene, in show order" : "Assemble a show first (+ Scene menu)"} onClick={() => void startPreparing({ target: "show", raiseDiskLimit: true }).catch(() => undefined)}>
-          Whole show
+        <button className="ghost small-btn" disabled={busy || !showCompOf(st.project)} title={showCompOf(st.project) ? "Every scene, in show order" : "Assemble a show first (+ Scene menu)"} onClick={() => prepareNow({ target: "show" })}>
+          The whole show
         </button>
       </div>
       <PrepareStatus />
     </div>
   );
 };
-const showCompOf = (p: import("@be/core").Project | null) => (p ? p.compositionOrder.some((id) => p.compositions[id]?.show) : false);
+const showCompOf = (p: Project | null) => (p ? p.compositionOrder.some((id) => p.compositions[id]?.show) : false);
 
-/** Whole gigabytes, the way computers and graphics cards are sold ("32 GB", "12 GB"). */
-const wholeGB = (bytes: number) => `${Math.max(1, Math.round(bytes / GB))} GB`;
+const GB = 1024 ** 3;
 
+/** How the preview looks while editing (never exports), and clearing saved preview frames. */
 const QualityPopover = () => {
   const s = usePreview();
-  const machine = useMachine();
-  const disk = useDiskCache((d) => d.status);
-  useEffect(() => {
-    if (s.diskCache) void refreshDiskStatus();
-  }, [s.diskCache, s.diskCacheFolder]);
-
-  // Graphics memory: guidance from what this computer has (a warning, never a limit).
-  const vram = machine?.gpu?.bytes ?? 0;
-  const ram = machine?.ramBytes ?? 0;
-  const memoryMax = vram ? Math.max(4, Math.ceil(vram / GB)) : 16;
-  const onCard = (s.cacheBudgetMB + s.videoCacheMB) * MB;
-  let memoryNote: { warn: boolean; text: string } | null = null;
-  if (vram && onCard > vram) {
-    memoryNote = { warn: true, text: `Together that's ${formatSize(onCard)}, more than the graphics card's ${wholeGB(vram)}. Windows lends it the computer's memory instead, which is slower, and if that runs out too, frames can't be kept.` };
-  } else if (vram && onCard > vram * 0.75) {
-    memoryNote = { warn: false, text: "That's most of the graphics card's memory. Effects, 3D and the display need some too." };
-  } else if (!vram && ram && onCard > ram / 2) {
-    memoryNote = { warn: true, text: `Together that's ${formatSize(onCard)}, more than this computer can likely give its graphics card (about ${wholeGB(ram / 2)}).` };
-  }
-  const machineLine = machine
-    ? `This computer has ${wholeGB(ram)} of memory${machine.gpu ? `; its graphics card (${machine.gpu.name}) has ${wholeGB(machine.gpu.bytes)} of its own` : ""}. The pop-out preview keeps its own frames.`
-    : "";
-
-  // Disk: guidance from the drive's free space.
-  const free = disk && !disk.scanning ? disk.freeBytes : null;
-  const diskMax = free !== null && disk ? Math.max(10, Math.floor((free + disk.bytes) / GB)) : 200;
-  const tooBig = free !== null && disk !== null && s.diskCacheGB * GB > disk.bytes + free;
-  const chooseFolder = async () => {
-    const dir = await window.be.files.chooseFolder("Choose where to keep preview frames");
-    if (dir) s.set({ diskCacheFolder: dir });
-  };
-
   return (
-    <div className="popover wide quality" role="dialog" aria-label="Quality and speed">
-      <p className="muted small">These only affect the preview. Exports always render at full size and full quality.</p>
-      <RecommendAndPrepare />
-      <label className="row-field">
-        <span>Playback</span>
-        <select value={s.playbackMode} onChange={(e) => s.set({ playbackMode: e.target.value as "realtime" | "cache" })}>
-          <option value="realtime">Real time (skips frames if needed)</option>
-          <option value="cache">Smooth — prepare frames first</option>
-        </select>
-      </label>
-      <label className="row-field">
-        <span>Effect quality</span>
+    <div className="popover quality" role="dialog" aria-label="Preview quality">
+      <p className="muted small">These change only the preview. Exports always render at full size and full quality.</p>
+      <label className="row-field" title="Blurs, glows and other effects drawn more simply while previewing">
+        <span>Effects</span>
         <select value={s.effectQuality} onChange={(e) => s.set({ effectQuality: e.target.value as "full" | "draft" })}>
-          <option value="full">Full</option>
+          <option value="full">Full quality</option>
           <option value="draft">Draft (faster blurs and glows)</option>
         </select>
       </label>
-      <label className="row-field">
-        <span>Simulation quality</span>
+      <label className="row-field" title="Smoke, fire, water, cloth and falling pieces worked out more coarsely while previewing">
+        <span>Simulations</span>
         <select value={s.simQuality} onChange={(e) => s.set({ simQuality: e.target.value as "full" | "draft" })}>
-          <option value="full">Full</option>
-          <option value="draft">Draft</option>
+          <option value="full">Full quality</option>
+          <option value="draft">Draft (faster smoke, fire and physics)</option>
         </select>
       </label>
-      <label className="check">
-        <input type="checkbox" checked={s.frameSkipping} onChange={(e) => s.set({ frameSkipping: e.target.checked })} /> Skip frames to keep real-time timing
-      </label>
-      <label className="check">
-        <input type="checkbox" checked={s.useProxies} onChange={(e) => s.set({ useProxies: e.target.checked })} /> Use lighter proxy copies of videos for preview
-      </label>
-      <h3>Graphics memory</h3>
-      <AmountField
-        label="Frame cache"
-        gb={s.cacheBudgetMB / 1024}
-        min={MIN_MEMORY_MB / 1024}
-        max={memoryMax}
-        step={0.25}
-        title="Finished frames kept in graphics memory, ready to play. More memory means more of the show plays smoothly at full size."
-        onChange={(gb) => s.set({ cacheBudgetMB: Math.round(gb * 1024) })}
-      />
-      <AmountField
-        label="Video frames"
-        gb={s.videoCacheMB / 1024}
-        min={MIN_MEMORY_MB / 1024}
-        max={memoryMax}
-        step={0.25}
-        title="Decoded frames of your videos, kept in graphics memory so they play without waiting."
-        onChange={(gb) => s.set({ videoCacheMB: Math.round(gb * 1024) })}
-      />
-      {machineLine && <p className="muted small">{machineLine}</p>}
-      {memoryNote && (
-        <p className={memoryNote.warn ? "warn small" : "muted small"} role={memoryNote.warn ? "alert" : undefined}>
-          {memoryNote.text}
-        </p>
-      )}
-      <h3>Disk</h3>
-      <label className="check">
-        <input type="checkbox" checked={s.diskCache} onChange={(e) => s.set({ diskCache: e.target.checked })} /> Also keep finished frames on disk, so they don’t have to be prepared again (even after restarting)
-      </label>
-      {s.diskCache && (
-        <>
-          <AmountField
-            label="Disk space"
-            gb={s.diskCacheGB}
-            min={MIN_DISK_GB}
-            max={diskMax}
-            step={1}
-            title="How much of the drive preview frames may use. When it's full, the frames used longest ago make room."
-            onChange={(gb) => s.set({ diskCacheGB: Math.round(gb * 100) / 100 })}
-          />
-          <p className="muted small disk-folder" title={disk?.root}>
-            Folder: {disk?.root ?? "…"}
-          </p>
-          <div className="row gap wrap">
-            <button className="ghost small-btn" onClick={() => void chooseFolder()}>
-              Change folder…
-            </button>
-            {s.diskCacheFolder && (
-              <button className="ghost small-btn" onClick={() => s.set({ diskCacheFolder: null })}>
-                Use the standard folder
-              </button>
-            )}
-            <button className="ghost small-btn" disabled={!disk || disk.scanning || disk.files === 0} onClick={() => void clearDiskCache()}>
-              Clear disk cache
-            </button>
-          </div>
-          <p className="muted small">
-            {!disk || disk.scanning
-              ? "Finding the frames already saved there…"
-              : `Using ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)} (${disk.files.toLocaleString()} frames)${disk.freeBytes !== null ? ` · ${formatSize(disk.freeBytes)} free on this drive` : ""}`}
-          </p>
-          {tooBig && (
-            <p className="warn small" role="alert">
-              That’s more than this drive has free ({formatSize(free ?? 0)}). Frames stop being saved when the drive is nearly full.
-            </p>
-          )}
-          {disk?.problem && (
-            <p className="warn small" role="alert">
-              {disk.problem}
-            </p>
-          )}
-        </>
-      )}
-      <div className="row gap">
-        <button className="ghost small-btn" onClick={() => currentPreviewLoop()?.cache.clear()}>
-          Clear frames in memory
-        </button>
-        <button className="ghost small-btn" onClick={() => s.reset()}>
-          Reset preview settings
-        </button>
-      </div>
+      <p className="muted small">
+        Memory and disk space for preview frames are set automatically for this computer ({formatSize((s.cacheBudgetMB + s.videoCacheMB) * 1024 * 1024)} of graphics memory, up to {formatSize(s.diskCacheGB * GB)} on disk).
+      </p>
+      <button
+        className="ghost small-btn"
+        title="Throws away every saved preview frame (in memory and on disk); they're drawn again as needed"
+        onClick={() => {
+          currentPreviewLoop()?.cache.clear();
+          void clearDiskCache();
+        }}
+      >
+        Clear saved preview frames
+      </button>
     </div>
   );
 };
@@ -1089,8 +878,8 @@ const StatusLine = () => {
         </span>
       )}
       <span className="muted status-fill">
-        Cache {st.cacheFrames} frames · {formatSize(st.cacheMB * MB)} of {formatSize(st.cacheBudgetMB * MB)}
-        {s.diskCache && ` · Disk ${!disk || disk.scanning ? "(looking…)" : `${disk.files.toLocaleString()} frames · ${formatSize(disk.bytes)} of ${formatSize(s.diskCacheGB * GB)}`}`}
+        Ready to play: {st.cacheFrames.toLocaleString()} frames in memory
+        {s.diskCache && (!disk || disk.scanning ? "" : ` · ${disk.files.toLocaleString()} saved on disk`)}
       </span>
     </div>
   );

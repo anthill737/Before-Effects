@@ -758,6 +758,10 @@ method({
       recentSoundStarts: previewAudio.startLog.slice(-8),
       soundStallsMs: previewAudio.stalls.slice(-8),
       unshownCauses: currentPreviewLoop()?.causes ?? null,
+      blankVideoFrames: (currentPreviewLoop()?.blankRecent ?? []).map((k) => {
+        const [id, f] = k.split("@");
+        return `${useStudio.getState().project?.assets[id ?? ""]?.name ?? id} frame ${f}`;
+      }),
       smoothness: currentPreviewLoop()?.smoothness ?? null,
       liveRenders: currentPreviewLoop()?.renders ?? 0,
       now: Math.round(performance.now()),

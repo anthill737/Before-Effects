@@ -56,7 +56,17 @@ export interface EvaluatedShape {
 export type EvaluatedSource =
   | { readonly kind: "solid"; readonly color: RGBA; readonly width: number; readonly height: number }
   | { readonly kind: "shape"; readonly shapes: readonly EvaluatedShape[] }
-  | { readonly kind: "footage"; readonly assetId: Id; readonly frame: number; readonly localTime: Flicks; readonly width: number; readonly height: number; readonly still: boolean }
+  | {
+      readonly kind: "footage";
+      readonly assetId: Id;
+      readonly frame: number;
+      readonly localTime: Flicks;
+      readonly width: number;
+      readonly height: number;
+      readonly still: boolean;
+      /** The clip starts over when it ends (the frame after its last is its first). */
+      readonly loop?: boolean;
+    }
   | {
       readonly kind: "text";
       readonly text: string;
@@ -258,7 +268,7 @@ const evaluateSource = (
       if (count && s.loop && frame >= count) frame = ((frame % count) + count) % count;
       if (count && frame >= count) frame = count - 1; // hold the last frame
       if (frame < 0) frame = 0;
-      return { kind: "footage", assetId: s.assetId, frame, localTime: lt, width: asset?.meta.width ?? 0, height: asset?.meta.height ?? 0, still };
+      return { kind: "footage", assetId: s.assetId, frame, localTime: lt, width: asset?.meta.width ?? 0, height: asset?.meta.height ?? 0, still, ...(s.loop && !still ? { loop: true } : {}) };
     }
     case "text": {
       const d = s.doc;

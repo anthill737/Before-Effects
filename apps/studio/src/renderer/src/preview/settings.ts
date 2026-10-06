@@ -124,9 +124,19 @@ const loadDisk = (): Partial<PreviewSettings> => {
   }
 };
 
-/** Amounts from older or hand-edited preferences are kept within what the controls accept. */
+/**
+ * Amounts from older or hand-edited preferences are kept within what the controls accept. Behaviour
+ * that's automatic now (no switch for it) always starts on, whatever an older version saved: frames
+ * play from the cache when stopping while caching, are cached when idle, skip to keep time, and
+ * videos decode at the size they're drawn.
+ */
 const sane = (s: PreviewSettings): PreviewSettings => ({
   ...s,
+  playCachedOnStop: true,
+  idleCache: true,
+  idleDelaySeconds: DEFAULTS.idleDelaySeconds,
+  frameSkipping: true,
+  useProxies: true,
   cacheBudgetMB: atLeast(s.cacheBudgetMB, MIN_MEMORY_MB, DEFAULTS.cacheBudgetMB),
   videoCacheMB: atLeast(s.videoCacheMB, MIN_MEMORY_MB, DEFAULTS.videoCacheMB),
   diskCache: s.diskCache === true,

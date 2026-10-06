@@ -120,7 +120,15 @@ export class PreviewLoop {
    * Why frames went unshown while playing (diagnostics): due but not yet read back from disk, and
    * passed over by the clock between two turns to draw (the window wasn't given a turn in time).
    */
-  readonly causes = { lateReads: 0, lateTurns: 0, slowTurns: 0, longestTurnMs: 0 };
+  /**
+   * Why frames weren't shown on time, and video that wasn't ready while playing: frames drawn while a
+   * video frame was still decoding (videoLate), and of those, drawn with a gap where a video belongs
+   * because no nearby frame of it was ready either (videoBlank — a flash).
+   */
+  readonly causes = { lateReads: 0, lateTurns: 0, slowTurns: 0, longestTurnMs: 0, videoLate: 0, videoBlank: 0 };
+  /** The last video frames drawn as a gap (asset@frame), for diagnostics. */
+  readonly blankRecent: string[] = [];
+  private lookaheadFrame = -1;
   /**
    * How smoothly the picture moved in the latest play, as a viewer sees it: the time from one new
    * picture to the next. More than 100 ms (three frames at 30 a second) is a stall, whether or not a
@@ -404,6 +412,12 @@ export class PreviewLoop {
       }
       this.source.setTime(t);
       this.lastPlayT = t;
+      // Videos needed half a second from now start loading (clips about to begin, loops starting over).
+      const ahead = timeToFrame(t, comp.frameRate) + Math.round(fps / 2);
+      if (ahead !== this.lookaheadFrame) {
+        this.lookaheadFrame = ahead;
+        this.renderer.lookaheadMedia(project, compId, t, frameToTime(ahead, comp.frameRate), fraction);
+      }
       this.clockAt = Date.now();
       const advanced = timeToFrame(t, comp.frameRate) - before;
       if (wrapped) this.wrappedAt = timeToFrame(range.end - 1, comp.frameRate);
@@ -464,6 +478,15 @@ export class PreviewLoop {
       const tex = this.renderer.renderContent(project, compId, frameToTime(frame, comp.frameRate), fraction, quality);
       if (!tex) return;
       content = this.renderer.gpu.detach(tex);
+      if (mode === "playing") {
+        const m = this.renderer.lastFrameMedia;
+        if (m.missing > 0) this.causes.videoLate++;
+        if (m.missing > m.standIns) {
+          this.causes.videoBlank++;
+          for (const b of m.blank) this.blankRecent.push(`${b.assetId}@${b.frame}`);
+          if (this.blankRecent.length > 24) this.blankRecent.splice(0, this.blankRecent.length - 24);
+        }
+      }
       // Frames still waiting for media, or bigger than the whole cache budget, are drawn once and freed.
       if (this.renderer.lastFrameIncomplete || !this.cache.put(compId, frame, fraction, quality, content)) this.renderer.gpu.defer(content);
       else if (useDisk) this.disk.offer(project, compId, frame, fraction, quality, content);

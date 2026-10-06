@@ -84,10 +84,7 @@ export const runMenuCommand = (command: string): void => {
       return s.setLoop(!s.loop);
     case "cache-before":
       p.set({ playbackMode: p.playbackMode === "cache" ? "realtime" : "cache" });
-      return s.toast({ kind: "info", text: `Cache before playback: ${usePreview.getState().playbackMode === "cache" ? "on" : "off"}` });
-    case "idle-cache":
-      p.set({ idleCache: !p.idleCache });
-      return s.toast({ kind: "info", text: `Cache frames when idle: ${usePreview.getState().idleCache ? "on" : "off"}` });
+      return s.toast({ kind: "info", text: usePreview.getState().playbackMode === "cache" ? "Space now draws the frames first, then plays them smoothly" : "Space now plays right away" });
     case "prepare-workarea":
       if (!s.range) return s.toast({ kind: "info", text: "Set a work area first (I and O, or Range start / end)." });
       return prepare({ startSeconds: seconds(s.range.start), endSeconds: seconds(s.range.end) });

@@ -10,6 +10,7 @@ import "../studio/styles.css";
 import { calibrationMapping, flattenPath, stripeLit, type Projector, type Vec2, type Venue } from "@be/core";
 import type { OutputConfig, TestPattern } from "../../../shared/api.ts";
 import { PreviewLoop, usePreviewStats } from "../preview/loop.ts";
+import { applyAutomaticCaches } from "../preview/recommend.ts";
 import { usePreview } from "../preview/settings.ts";
 import { editorSource } from "../preview/PreviewPanel.tsx";
 import { followerClockError, startFollowerSync } from "../preview/sync.ts";
@@ -287,6 +288,8 @@ export const OutputWindow = () => {
 
   useEffect(() => {
     if (!config || !canvasRef.current || loopRef.current) return;
+    // This window's own (small) caches, set automatically.
+    void applyAutomaticCaches().catch(() => undefined);
     void getRenderer().then((r) => {
       if (!canvasRef.current) return;
       const loop = new PreviewLoop(r, canvasRef.current, editorSource, () => ({ width: window.innerWidth, height: window.innerHeight }));

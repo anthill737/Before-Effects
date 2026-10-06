@@ -37,7 +37,14 @@ export interface Rect {
  * so previews retry and exports wait (see FrameRenderer.prepare).
  */
 export interface MediaProvider {
-  footage(assetId: string, frame: number, still: boolean, maxWidth: number): GPUTexture | null;
+  /** `loop`: the clip starts over after its last frame (so reading ahead wraps round to its start). */
+  footage(assetId: string, frame: number, still: boolean, maxWidth: number, loop?: boolean): GPUTexture | null;
+  /**
+   * While a video frame is still decoding: the nearest frame of the same video that's ready (held from
+   * just before, as a player does), so a late frame never leaves a hole in the picture. The frame still
+   * counts as incomplete (it's never cached, and exports wait for the real one).
+   */
+  standIn?(assetId: string, frame: number, maxWidth: number): GPUTexture | null;
 }
 
 /** Something that can render a 3D scene into a texture. `pending`: drawn, but not final yet (physics or photo still loading). */
@@ -55,6 +62,10 @@ export interface RenderStats {
   missing: Array<{ assetId: string; frame: number }>;
   /** Simulation frames that aren't prepared (or loaded) yet; the frame is incomplete when > 0. */
   simsPending: number;
+  /** Of the missing footage frames, those drawn with a nearby frame of the same video meanwhile. */
+  standIns: number;
+  /** Missing footage frames with nothing to draw instead (a gap in the picture). */
+  blank: Array<{ assetId: string; frame: number }>;
 }
 
 const MAX_LAYER_TEXTURE = 8192;
@@ -182,7 +193,7 @@ export class Compositor {
   readonly raster: CoverageRasterizer;
   private readonly white: GPUTexture;
   private readonly transparent: GPUTexture;
-  stats: RenderStats = { layers: 0, passes: 0, warnings: [], missingMedia: 0, missing: [], simsPending: 0 };
+  stats: RenderStats = { layers: 0, passes: 0, warnings: [], missingMedia: 0, missing: [], simsPending: 0, standIns: 0, blank: [] };
   media: MediaProvider | null = null;
   /** Prepared smoke and water simulations (set by the renderer when a frame store is available). */
   sims: SimEngine | null = null;
@@ -205,7 +216,7 @@ export class Compositor {
 
   /** Render a composition. `scale` < 1 renders a faster, lower-resolution preview. Caller releases the result. */
   render(comp: EvaluatedComp, encoder: GPUCommandEncoder, scale = 1, quality: "full" | "draft" = "full"): GPUTexture {
-    this.stats = { layers: 0, passes: 0, warnings: [], missingMedia: 0, missing: [], simsPending: 0 };
+    this.stats = { layers: 0, passes: 0, warnings: [], missingMedia: 0, missing: [], simsPending: 0, standIns: 0, blank: [] };
     this.quality = quality;
     return this.renderComp(comp, encoder, scale);
   }
@@ -316,11 +327,16 @@ export class Compositor {
         break;
       }
       case "footage": {
-        const t = this.media?.footage(s.assetId, s.frame, s.still, Math.ceil(s.width * density));
+        const t = this.media?.footage(s.assetId, s.frame, s.still, Math.ceil(s.width * density), s.loop);
         if (t) this.blit(t, { x: 0, y: 0, w: s.width, h: s.height }, rect, density, tex, encoder);
         else {
           this.stats.missingMedia++;
           this.stats.missing.push({ assetId: s.assetId, frame: s.frame });
+          const near = s.still ? null : (this.media?.standIn?.(s.assetId, s.frame, Math.ceil(s.width * density)) ?? null);
+          if (near) {
+            this.blit(near, { x: 0, y: 0, w: s.width, h: s.height }, rect, density, tex, encoder);
+            this.stats.standIns++;
+          } else this.stats.blank.push({ assetId: s.assetId, frame: s.frame });
         }
         break;
       }

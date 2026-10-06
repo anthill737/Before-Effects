@@ -36,10 +36,19 @@ interface Decoder {
   ended: boolean;
   lastUsed: number;
   chain: Promise<unknown>;
+  /** Reads queued on this stream and not finished: a busy stream is never closed to make room. */
+  pending: number;
+  /** Closed to make room or for being idle (not because its file ended): its reads start afresh. */
+  closed: boolean;
 }
 
 const decoders = new Map<number, Decoder>();
-const MAX_DECODERS = 8;
+/**
+ * Streams kept open across all windows (editor, projector output, preparation). A show's busiest
+ * moments use a few videos at a time, each at one or two sizes, plus a fresh stream where a looping
+ * clip starts over; only streams with nothing to do are closed to make room.
+ */
+const MAX_DECODERS = 16;
 const RECENT = 3;
 /** Frames a stream may read ahead before it waits. */
 const AHEAD = 4;
@@ -57,7 +66,7 @@ const start = async (path: string, frame: number, fps: number, width: number, sr
   const args = ["-hide_banner", "-loglevel", "error", ...(seek > 0 ? ["-ss", seek.toFixed(6)] : []), "-i", path, "-an", "-sn", "-vf", `scale=${w}:${h}:flags=bicubic,fps=${fps}`, "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"];
   const proc = spawn(ffmpeg, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   track(`ffmpeg-decode:${path.split(/[\\/]/).pop()}`, proc);
-  const d: Decoder = { id: ++ids, key: "", proc, next: frame, tail: frame, recent: new Map(), width: w, height: h, frameBytes: w * h * 4, queue: new FrameQueue(), waiters: [], ended: false, lastUsed: Date.now(), chain: Promise.resolve() };
+  const d: Decoder = { id: ++ids, key: "", proc, next: frame, tail: frame, recent: new Map(), width: w, height: h, frameBytes: w * h * 4, queue: new FrameQueue(), waiters: [], ended: false, lastUsed: Date.now(), chain: Promise.resolve(), pending: 0, closed: false };
   proc.stdout.on("data", (chunk: Buffer) => {
     d.queue.push(chunk);
     // Back-pressure: pause when a few frames are waiting to be read.
@@ -90,6 +99,7 @@ const readFrame = async (d: Decoder): Promise<Buffer | null> => {
 };
 
 const stopDecoder = (d: Decoder) => {
+  d.closed = !d.ended;
   d.ended = true;
   d.queue.clear();
   d.recent.clear();
@@ -119,14 +129,19 @@ export const decodeFrame = async (path: string, frame: number, fps: number, widt
     dec.key = key;
     decoders.set(dec.id, dec);
     if (decoders.size > MAX_DECODERS) {
-      const oldest = [...decoders.values()].filter((d) => d !== dec).sort((a, b) => a.lastUsed - b.lastUsed)[0]!;
-      stopDecoder(oldest);
-      decoders.delete(oldest.id);
+      // Make room by closing the stream unused longest, but never one with reads waiting on it
+      // (closing it would leave those frames blank). With every stream busy, there's one more for now.
+      const oldest = [...decoders.values()].filter((d) => d !== dec && d.pending === 0).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+      if (oldest) {
+        stopDecoder(oldest);
+        decoders.delete(oldest.id);
+      }
     }
   }
   const d = dec;
   d.tail = Math.max(d.tail, frame + 1);
   d.lastUsed = Date.now();
+  d.pending++;
   // Serialise reads on one stream.
   const job = d.chain.then(async (): Promise<Decoded | null> => {
     const hit = d.recent.get(frame);
@@ -136,10 +151,12 @@ export const decodeFrame = async (path: string, frame: number, fps: number, widt
     let buf: Buffer | null = null;
     while (d.next <= frame) {
       buf = await readFrame(d);
-      if (!buf) return null;
+      // Closed while reading (not the end of the file): read it from a fresh stream instead of blank.
+      if (!buf) return d.closed && retry ? decodeFrame(path, frame, fps, width, srcW, srcH, false) : null;
     }
     return buf ? wrap(d, buf) : null;
   });
+  void job.finally(() => d.pending--).catch(() => undefined);
   d.chain = job.catch(() => undefined);
   return job;
 };
@@ -154,7 +171,7 @@ export const registerDecodeIpc = () => {
   setInterval(() => {
     const now = Date.now();
     for (const d of [...decoders.values()]) {
-      if (now - d.lastUsed < IDLE_MS) continue;
+      if (now - d.lastUsed < IDLE_MS || d.pending > 0) continue;
       stopDecoder(d);
       decoders.delete(d.id);
     }

@@ -466,7 +466,7 @@
     action: >-
       None; on by default.
     defaults: >-
-      8 s delay, around current time, work area.
+      Always on (no switch): after 2 s idle, from the playhead through what Space plays.
     automation: >-
       Pauses on battery power.
     usability_check: >-
@@ -654,7 +654,9 @@
     action: >-
       None; a message appears only if a fallback changes what is shown.
     defaults: >-
-      VRAM budget 80% of adapter memory minus other jobs.
+      Set automatically, with no controls: the editor's finished-frame and video-frame caches take about a third of
+      the graphics card's own memory (video frames 1-1.5 GB of it); projector output and pop-out windows keep 1 GB +
+      1 GB; preview frames are always also kept on disk, sized from the drive and the show.
     automation: >-
       Applies the fallback chain automatically.
     usability_check: >-

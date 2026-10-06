@@ -58,18 +58,42 @@ export class MediaHost implements MediaProvider {
     for (const fn of this.listeners) fn();
   }
 
-  /** Decode width: the requested size rounded up (lighter proxies), or full size when proxies are off. */
+  /**
+   * Decode width: the video's own width or a half, quarter or eighth of it — the smallest that's at
+   * least as wide as it's drawn. Few sizes means few decoding streams per video (every window and
+   * preview size shares them) and frames that serve every size at or below theirs.
+   */
   private decodeWidth(srcW: number, maxWidth: number): number {
     if (!usePreview.getState().useProxies) return srcW;
-    const w = Math.ceil(Math.max(64, maxWidth) / 64) * 64;
-    return Math.min(srcW, w);
+    const need = Math.max(64, maxWidth);
+    let w = srcW;
+    for (let k = 0; k < 3 && Math.round(w / 2) >= need; k++) w = Math.round(w / 2);
+    return w;
+  }
+
+  /**
+   * Frames to have decoding ahead of `frame`: the next few, and for a clip that starts over, round
+   * to its start (a new stream has to start there, so it's asked for well before it's needed).
+   */
+  private ahead(assetId: string, frame: number, loop: boolean | undefined, n: number): number[] {
+    const count = this.project?.assets[assetId]?.meta.frameCount ?? 0;
+    const out: number[] = [];
+    const reach = loop && count && frame + n >= count ? n + 8 : n;
+    for (let k = 1; k <= reach; k++) {
+      const f = frame + k;
+      if (count && f >= count) {
+        if (!loop) break;
+        out.push(f % count);
+      } else out.push(f);
+    }
+    return out;
   }
 
   /**
    * The compositor asks with maxWidth = the pixels it will draw; reduced previews get lighter proxy
    * sizes. Exports prepare full-size frames first, and those serve every request for that frame.
    */
-  footage(assetId: string, frame: number, still: boolean, maxWidth: number): GPUTexture | null {
+  footage(assetId: string, frame: number, still: boolean, maxWidth: number, loop?: boolean): GPUTexture | null {
     const asset = this.project?.assets[assetId];
     if (!asset || this.failed.has(assetId)) return null;
     if (still) {
@@ -87,12 +111,45 @@ export class MediaHost implements MediaProvider {
     const e = this.decoded(assetId, frame, w);
     // Not decoded yet: the renderer marks the frame incomplete (never cached) and redraws when it arrives.
     // Ask for this frame before the ones ahead, so the decoder reads them in order.
-    if (!e) void this.loadFrame(assetId, frame, w);
+    if (!e) void this.loadFrame(assetId, frame, w, true, loop);
+    else this.markCurrent(assetId, frame);
     // Keep a few frames ahead decoding so playback stays smooth.
-    for (let k = 1; k <= 3; k++) void this.loadFrame(assetId, frame + k, w);
+    for (const f of this.ahead(assetId, frame, loop, 3)) void this.loadFrame(assetId, f, w, false, loop);
     if (e) {
       e.used = ++this.tick;
       return e.tex;
+    }
+    return null;
+  }
+
+  /**
+   * The nearest ready frame of a video while `frame` is still decoding: held from just before (up to
+   * two seconds back), else just after; the widest one decoded, so it looks right at any size.
+   */
+  standIn(assetId: string, frame: number, maxWidth: number): GPUTexture | null {
+    void maxWidth;
+    const pick = (f: number): Entry | undefined => {
+      let best: Entry | undefined;
+      for (const w of this.widths.get(`${assetId}|${f}`) ?? []) {
+        const e = this.frames.get(`${assetId}|${f}|${w}`);
+        if (e && (!best || e.tex.width > best.tex.width)) best = e;
+      }
+      return best;
+    };
+    for (let k = 1; k <= 60; k++) {
+      const e = pick(frame - k) ?? (k <= 8 ? pick(frame + k) : undefined);
+      if (e) {
+        e.used = ++this.tick;
+        return e.tex;
+      }
+    }
+    // A clip that has just started over: its last frames.
+    const count = this.project?.assets[assetId]?.meta.frameCount ?? 0;
+    if (count && frame < 8) {
+      for (let f = count - 1; f >= count - 8; f--) {
+        const e = pick(f);
+        if (e) return e.tex;
+      }
     }
     return null;
   }
@@ -159,33 +216,141 @@ export class MediaHost implements MediaProvider {
     return p;
   }
 
-  private loadFrame(assetId: string, frame: number, width: number): Promise<void> {
+  /**
+   * Ask for a video frame. Requests wait in a small queue per video and size: a few are being decoded
+   * at a time, in order, and frames the playhead has already passed are dropped instead of decoded —
+   * otherwise a window that fell behind kept decoding every frame it once asked for, ever later.
+   * `current`: a frame being drawn now (it goes first, and marks where playback is).
+   */
+  private loadFrame(assetId: string, frame: number, width: number, current = false, loop = false): Promise<void> {
     const asset = this.project?.assets[assetId];
     if (!asset || frame < 0 || (asset.meta.frameCount && frame >= asset.meta.frameCount)) return Promise.resolve();
+    if (current) this.markCurrent(assetId, frame);
     const key = `${assetId}|${frame}|${width}`;
     if (this.frames.has(key)) return Promise.resolve();
-    let p = this.loading.get(key);
+    const p = this.loading.get(key);
     if (p) return p;
+    const qk = `${assetId}|${width}`;
+    let q = this.queues.get(qk);
+    if (!q) {
+      q = { assetId, width, waiting: new Map(), inflight: 0, loop };
+      this.queues.set(qk, q);
+    }
+    q.loop ||= loop;
+    const queue = q;
+    const promise = new Promise<void>((resolve) => queue.waiting.set(frame, resolve));
+    this.loading.set(key, promise);
+    this.pump(qk);
+    return promise;
+  }
+
+  /** Requests per video and size: frames waiting (with what to call when done) and how many are decoding. */
+  private queues = new Map<string, { assetId: string; width: number; waiting: Map<number, () => void>; inflight: number; loop: boolean }>();
+  /** Frames drawn recently per video (frame, when): where playback is, for every layer using it. */
+  private nowAt = new Map<string, Array<{ frame: number; at: number }>>();
+  private static readonly INFLIGHT = 3;
+  private static readonly RECENT_MS = 500;
+
+  private markCurrent(assetId: string, frame: number) {
+    const now = performance.now();
+    const list = (this.nowAt.get(assetId) ?? []).filter((e) => now - e.at < MediaHost.RECENT_MS && e.frame !== frame);
+    list.push({ frame, at: now });
+    this.nowAt.set(assetId, list);
+  }
+
+  /**
+   * Frames from `cur` on (forward, round the start for a clip that starts over): 0 for `cur` itself,
+   * negative for frames just behind, Infinity for frames long passed.
+   */
+  private forward(frame: number, cur: number, count: number, loop: boolean): number {
+    let d = frame - cur;
+    if (loop && count) d = ((d % count) + count) % count;
+    if (loop && count && d > count - 3) d -= count; // just behind, round the loop
+    return d < -2 ? Number.POSITIVE_INFINITY : d;
+  }
+
+  private pump(qk: string) {
+    const q = this.queues.get(qk);
+    if (!q) return;
+    const count = this.project?.assets[q.assetId]?.meta.frameCount ?? 0;
+    const now = performance.now();
+    const recent = (this.nowAt.get(q.assetId) ?? []).filter((e) => now - e.at < MediaHost.RECENT_MS);
+    // How far ahead of where playback is (the nearest of the layers using this video); frames every
+    // layer has passed are dropped. With nothing playing it now, everything asked for is kept.
+    const rank = (f: number) => (recent.length ? Math.min(...recent.map((e) => this.forward(f, e.frame, count, q.loop))) : f);
+    for (const [f, done] of [...q.waiting]) {
+      if (rank(f) !== Number.POSITIVE_INFINITY) continue;
+      q.waiting.delete(f);
+      this.loading.delete(`${q.assetId}|${f}|${q.width}`);
+      done();
+    }
+    while (q.inflight < MediaHost.INFLIGHT && q.waiting.size) {
+      const f = [...q.waiting.keys()].sort((a, b) => rank(a) - rank(b))[0]!;
+      const done = q.waiting.get(f)!;
+      q.waiting.delete(f);
+      q.inflight++;
+      void this.decodeNow(q.assetId, f, q.width).finally(() => {
+        q.inflight--;
+        this.loading.delete(`${q.assetId}|${f}|${q.width}`);
+        done();
+        this.pump(qk);
+      });
+    }
+  }
+
+  private async decodeNow(assetId: string, frame: number, width: number): Promise<void> {
+    const asset = this.project?.assets[assetId];
+    if (!asset) return;
     const rate = asset.meta.frameRate ?? { num: 30, den: 1 };
-    p = (async () => {
-      try {
-        const r = await window.be.media.decodeFrame(asset.path, frame, rate.num / rate.den, width, asset.meta.width ?? width, asset.meta.height ?? Math.round((width * 9) / 16));
-        if (r) {
+    try {
+      const r = await window.be.media.decodeFrame(asset.path, frame, rate.num / rate.den, width, asset.meta.width ?? width, asset.meta.height ?? Math.round((width * 9) / 16));
+      if (r) {
+        const key = `${assetId}|${frame}|${width}`;
+        if (!this.frames.has(key)) {
           this.store(this.frames, key, this.renderer.importPixels(r));
           const wk = `${assetId}|${frame}`;
           const ws = this.widths.get(wk) ?? new Set<number>();
           ws.add(width);
           this.widths.set(wk, ws);
-          this.notify();
         }
-      } catch (e) {
-        window.be.app.log(`media: could not decode frame ${frame} of ${asset.path}: ${String(e)}`);
-      } finally {
-        this.loading.delete(key);
+        this.notify();
       }
-    })();
-    this.loading.set(key, p);
-    return p;
+    } catch (e) {
+      window.be.app.log(`media: could not decode frame ${frame} of ${asset.path}: ${String(e)}`);
+    }
+  }
+
+  /**
+   * While playing: start loading what will be needed at `later` but isn't playing now — clips about to
+   * begin, and clips about to start over — so their first frames are ready when they're drawn. Clips
+   * already playing are left alone (asking their stream for frames ahead of where it's reading would
+   * make it skip the frames in between, and start another stream for those).
+   */
+  lookahead(project: Project, compId: Id, now: Flicks, later: Flicks, scale: number): void {
+    this.project = project;
+    const comp = project.compositions[compId];
+    if (!comp) return;
+    const venueId = comp.venueId ?? project.activeVenueId;
+    const opts = venueId ? { venueId } : {};
+    const playing = new Map<string, number>();
+    const collect = (c: EvaluatedComp, into: (assetId: string, frame: number, s: Extract<EvaluatedComp["layers"][number]["source"], { kind: "footage" }>) => void) => {
+      for (const l of c.layers) {
+        for (const x of l.trackMatte ? [l, l.trackMatte.layer] : [l]) {
+          if (x.source.kind === "comp") collect(x.source.comp, into);
+          else if (x.source.kind === "footage" && !x.source.still) into(x.source.assetId, x.source.frame, x.source);
+        }
+      }
+    };
+    collect(evaluateComp(project, compId, now, opts), (id, f) => playing.set(id, Math.max(playing.get(id) ?? -1, f)));
+    collect(evaluateComp(project, compId, later, opts), (id, f, s) => {
+      const at = playing.get(id);
+      // Playing now and still moving forward: its stream is already reading towards it.
+      if (at !== undefined && f >= at) return;
+      const asset = project.assets[id];
+      if (!asset) return;
+      const w = this.decodeWidth(asset.meta.width ?? 1920, Math.ceil(s.width * scale));
+      for (const g of [f, ...this.ahead(id, f, s.loop, 3)]) void this.loadFrame(id, g, w, false, s.loop);
+    });
   }
 
   /**
@@ -215,8 +380,9 @@ export class MediaHost implements MediaProvider {
             const srcW = asset.meta.width ?? 1920;
             // The width the compositor will ask for (the layer's pixels at this size); full size for exports.
             const w = scale >= 1 ? srcW : this.decodeWidth(srcW, Math.ceil(s.width * scale));
-            if (!this.decoded(s.assetId, s.frame, w)) waits.push(this.loadFrame(s.assetId, s.frame, w));
-            for (let k = 1; k <= 4; k++) void this.loadFrame(s.assetId, s.frame + k, w);
+            if (!this.decoded(s.assetId, s.frame, w)) waits.push(this.loadFrame(s.assetId, s.frame, w, true, s.loop));
+            else this.markCurrent(s.assetId, s.frame);
+            for (const f of this.ahead(s.assetId, s.frame, s.loop, 4)) void this.loadFrame(s.assetId, f, w, false, s.loop);
           }
         }
       }
