@@ -550,6 +550,26 @@ export class SceneHost implements ExternalSourceRenderer {
    * no colour.
    */
   private makeMaterials(b: Built, o: Object3D): { front: THREE.Material; side: THREE.Material; mats: THREE.Material[] } {
+    const made = this.makeMaterialsInner(b, o);
+    // Adding over the layers beneath: its colour is added to the layer; the layer's coverage there is
+    // only a trace, so the composite adds it (a premultiplied colour with next to no alpha).
+    if (o.material?.addOver)
+      for (const mat of made.mats) {
+        mat.blending = THREE.CustomBlending;
+        mat.blendSrc = THREE.OneFactor;
+        mat.blendDst = THREE.OneFactor;
+        mat.blendEquation = THREE.AddEquation;
+        mat.blendSrcAlpha = THREE.ConstantAlphaFactor;
+        mat.blendDstAlpha = THREE.OneFactor;
+        mat.blendEquationAlpha = THREE.AddEquation;
+        mat.blendAlpha = 0.002;
+        mat.transparent = false;
+        mat.depthWrite = true;
+      }
+    return made;
+  }
+
+  private makeMaterialsInner(b: Built, o: Object3D): { front: THREE.Material; side: THREE.Material; mats: THREE.Material[] } {
     const m = o.material;
     const mats: THREE.Material[] = [];
     let front: THREE.Material;
@@ -1110,6 +1130,8 @@ const sameBuild = (a: Object3D, b: Object3D): boolean =>
   a.material?.opacity === b.material?.opacity &&
   a.material?.mapping === b.material?.mapping &&
   a.material?.holdout === b.material?.holdout &&
+  a.material?.addLight === b.material?.addLight &&
+  a.material?.addOver === b.material?.addOver &&
   a.light?.type === b.light?.type &&
   a.light?.castShadow === b.light?.castShadow &&
   a.light?.angle === b.light?.angle &&

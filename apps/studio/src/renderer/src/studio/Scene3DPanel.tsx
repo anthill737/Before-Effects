@@ -693,6 +693,12 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
                   <Field label="Shading" help="How much the lights shade the picture as it turns or falls into shadow. 0 = the picture itself, like a layer mapped onto the pieces.">
                     <Slider label="Shading" value={Math.round((m.shading ?? 1) * 100)} min={0} max={100} step={1} unit="%" onChange={(v) => setMat({ shading: v / 100 }, "Change shading", "shading")} />
                   </Field>
+                  <Field label="Picture plus light" help="The picture exactly as it is, plus the light the scene's lights add to it (nothing evened out): a house picture lit by a lantern or a ghost passing by. Shading sets how strongly lights add.">
+                    <Toggle label="Picture plus light" value={!!m.addLight} onChange={(v) => setMat({ addLight: v }, v ? "Picture plus light" : "Picture evened out by its lighting", "add-light")} />
+                  </Field>
+                  <Field label="Adds over the layers beneath" help="Adds what it shows instead of covering what's beneath: a light's own pass on the house (with the exact picture off), kept in the same layer as the ghost or lantern that casts it.">
+                    <Toggle label="Adds over the layers beneath" value={!!m.addOver} onChange={(v) => setMat({ addOver: v }, v ? "Add over the layers beneath" : "Cover the layers beneath", "add-over")} />
+                  </Field>
                   <Field label="Exact picture at rest" help="Facing the audience it shows the picture exactly, whatever the lights. Off: the picture as the lights really fall on it (for a light's own pass added over the house).">
                     <Toggle label="Exact picture at rest" value={m.matchPicture ?? true} onChange={(v) => setMat({ matchPicture: v }, v ? "Exact picture at rest" : "Picture as the lights fall", "match")} />
                   </Field>

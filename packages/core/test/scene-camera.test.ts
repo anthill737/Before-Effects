@@ -169,3 +169,14 @@ describe("panels: flat solids in the scene's own space", () => {
     expect(body.active).toEqual([30, 60]);
   });
 });
+
+describe("a picture with light added to it", () => {
+  it("shows the picture exactly with no light, and adds what lights bring", async () => {
+    const { pictureMix } = await import("../src/index.ts");
+    const m = pictureMix({ addLight: true, shading: 0.8 }, 0, [3, 3, 3]);
+    expect(m.self).toBe(1);
+    expect(m.lit).toEqual([0.8, 0.8, 0.8]);
+    // Without it, unchanged: evened out by the picture's lighting.
+    expect(pictureMix({ shading: 1 }, 0, [2, 2, 2])).toEqual({ lit: [2, 2, 2], self: 0 });
+  });
+});

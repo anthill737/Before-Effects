@@ -72,6 +72,17 @@ export interface Material3D {
    * wall that debris falls behind, standing in for the house picture under this layer.
    */
   readonly holdout?: boolean;
+  /**
+   * Picture surfaces: the picture exactly, plus the light the scene's lights add to it (none of it
+   * evened out) — a house picture lit by a lantern carried past it. `shading` sets how strongly.
+   */
+  readonly addLight?: boolean;
+  /**
+   * Adds what it shows to the layers beneath instead of covering them — a light's own pass on the
+   * house (with matchPicture off) kept in the same layer as what casts it, e.g. a ghost and the
+   * glow it throws on the house. It still hides what of this layer is behind it.
+   */
+  readonly addOver?: boolean;
 }
 
 /**
@@ -80,8 +91,10 @@ export interface Material3D {
  * (what shading leaves, plus any glow). With the defaults a surface facing the audience shows exactly
  * its picture; turning or a shadow only darkens the shaded part.
  */
-export const pictureMix = (m: Pick<Material3D, "shading" | "matchPicture">, glow: number, gain: readonly number[]): { lit: [number, number, number]; self: number } => {
+export const pictureMix = (m: Pick<Material3D, "shading" | "matchPicture" | "addLight">, glow: number, gain: readonly number[]): { lit: [number, number, number]; self: number } => {
   const s = Math.max(0, Math.min(1, m.shading ?? 1));
+  // The picture itself (as it shows), with what the lights bring on top.
+  if (m.addLight) return { lit: [s, s, s], self: 1 + Math.max(0, glow) };
   const g = m.matchPicture === false ? [1, 1, 1] : gain;
   return { lit: [s * g[0]!, s * g[1]!, s * g[2]!], self: 1 - s + Math.max(0, glow) };
 };

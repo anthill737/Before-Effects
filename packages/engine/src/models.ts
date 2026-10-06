@@ -118,7 +118,11 @@ export const sampleModelMotion = async (bytes: Uint8Array, nodeName: string, fps
   const gltf = await new GLTFLoader().parseAsync(buf, "");
   const root = gltf.scene;
   const node = root.getObjectByName(nodeName);
-  if (!node) throw new Error(`there's no “${nodeName}” in that model`);
+  if (!node) {
+    const names: string[] = [];
+    root.traverse((x) => x.name && names.push(x.name));
+    throw new Error(`there's no “${nodeName}” in that model (its parts: ${names.slice(0, 30).join(", ")})`);
+  }
   if (!gltf.animations.length) throw new Error("that model has no animation");
   const mixer = new THREE.AnimationMixer(root);
   let seconds = 0;
