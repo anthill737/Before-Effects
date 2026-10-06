@@ -1,5 +1,6 @@
 /**
- * Package the studio as a standalone Windows app in <repo>/build/app ("Before Effects.exe").
+ * Package the studio as a standalone Windows app in <repo>/build/app ("Before Effects.exe"), or in
+ * BE_PACKAGE_DIR when set (a separate test build).
  * Run via: pnpm --filter @be/studio package   (the root launcher runs this automatically).
  *
  * The bundles in out/ import only Electron and Node built-ins, except house detection, which runs
@@ -18,7 +19,8 @@ const studio = resolve(import.meta.dirname, "..");
 const root = resolve(studio, "../..");
 const buildDir = join(root, "build");
 const stage = join(buildDir, ".stage");
-const appDir = join(buildDir, "app");
+// BE_PACKAGE_DIR: package somewhere else (a test build beside the installed app), leaving build/app alone.
+const appDir = process.env.BE_PACKAGE_DIR ? resolve(process.env.BE_PACKAGE_DIR) : join(buildDir, "app");
 const pkg = JSON.parse(readFileSync(join(studio, "package.json"), "utf8"));
 const electronVersion = JSON.parse(readFileSync(join(studio, "node_modules", "electron", "package.json"), "utf8")).version;
 const version = pkg.version === "0.0.0" ? "0.1.0" : pkg.version;
@@ -122,7 +124,14 @@ try {
 } catch (e) {
   throw new Error(`Couldn't replace the previous build (${String(e.message ?? e)}). Close Before Effects and try again.`);
 }
-renameSync(packaged, appDir);
+try {
+  renameSync(packaged, appDir);
+} catch (e) {
+  // Another drive (BE_PACKAGE_DIR): copy instead.
+  if (e.code !== "EXDEV") throw e;
+  cpSync(packaged, appDir, { recursive: true });
+  rmSync(packaged, { recursive: true, force: true });
+}
 rmSync(stage, { recursive: true, force: true });
 
 // Find FFmpeg the same way the app does: PATH first, then winget's links folder.
