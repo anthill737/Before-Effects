@@ -193,6 +193,26 @@ export class MediaHost implements MediaProvider {
     }
   }
 
+  /**
+   * An asset's file changed (relinked): drop its picture and decoded frames so they're read again
+   * from the new file (otherwise the old one showed until the app was restarted).
+   */
+  forget(assetId: string): void {
+    const drop = (map: Map<string, Entry>, key: string) => {
+      const e = map.get(key);
+      if (!e) return;
+      this.renderer.gpu.defer(e.tex);
+      map.delete(key);
+      this.bytes -= e.bytes;
+    };
+    drop(this.images, assetId);
+    for (const k of [...this.frames.keys()]) if (k.startsWith(`${assetId}|`)) drop(this.frames, k);
+    for (const k of [...this.widths.keys()]) if (k.startsWith(`${assetId}|`)) this.widths.delete(k);
+    this.loading.delete(`img:${assetId}`);
+    this.failed.delete(assetId);
+    this.notify();
+  }
+
   private loadImage(assetId: string, path: string): Promise<void> {
     const key = `img:${assetId}`;
     let p = this.loading.get(key);
@@ -201,15 +221,16 @@ export class MediaHost implements MediaProvider {
       try {
         const bytes = await window.be.files.readFile(path);
         const bmp = await createImageBitmap(new Blob([bytes as BlobPart]), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
-        this.store(this.images, assetId, this.renderer.importPixels(bmp));
+        // Relinked meanwhile: this was the old file.
+        if (this.loading.get(key) === p) this.store(this.images, assetId, this.renderer.importPixels(bmp));
         bmp.close();
         this.notify();
       } catch (e) {
-        this.failed.add(assetId);
+        if (this.loading.get(key) === p) this.failed.add(assetId);
         window.be.app.log(`media: could not load image ${path}: ${String(e)}`);
         this.notify();
       } finally {
-        this.loading.delete(key);
+        if (this.loading.get(key) === p) this.loading.delete(key);
       }
     })();
     this.loading.set(key, p);

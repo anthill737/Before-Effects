@@ -35,8 +35,21 @@ export const getRenderer = (): Promise<FrameRenderer> => {
     r.setMedia(media);
     r.setSimStore(simStore()).onFrameReady = notifySimFrame;
     media.project = useStudio.getState().project;
-    useStudio.subscribe((s) => {
+    // Pictures, frames and models are kept by asset; one whose file changed (relinked) is read again.
+    const files = new Map<string, string>();
+    const track = (p: Project | null) => {
+      for (const a of Object.values(p?.assets ?? {})) {
+        const was = files.get(a.id);
+        files.set(a.id, a.path);
+        if (was === undefined || was === a.path) continue;
+        media?.forget(a.id);
+        r.scenes.forgetAsset(a.id);
+      }
+    };
+    track(media.project);
+    useStudio.subscribe((s, prev) => {
       if (media) media.project = s.project;
+      if (s.project !== prev.project) track(s.project);
     });
     return r;
   });

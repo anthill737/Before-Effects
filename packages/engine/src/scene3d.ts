@@ -288,12 +288,40 @@ export class SceneHost implements ExternalSourceRenderer {
     return host;
   }
 
+  /** Bumped per asset when its file changes, so a load of the old file that's still running is dropped. */
+  private readonly assetEpochs = new Map<string, number>();
+  private epochOf = (assetId: string): number => this.assetEpochs.get(assetId) ?? 0;
+
+  /**
+   * An asset's file changed (relinked): its picture or model is read again when next drawn, and the
+   * scenes built with it are rebuilt (otherwise the old file showed until the app was restarted).
+   */
+  forgetAsset(assetId: string): void {
+    const had = this.photos.has(assetId) || this.photoLoading.has(assetId) || this.models.has(assetId) || this.modelLoading.has(assetId);
+    this.assetEpochs.set(assetId, this.epochOf(assetId) + 1);
+    this.photos.get(assetId)?.dispose();
+    this.photos.delete(assetId);
+    this.photoLoading.delete(assetId);
+    this.models.delete(assetId);
+    this.modelLoading.delete(assetId);
+    this.modelErrors.delete(assetId);
+    if (!had) return;
+    for (const b of this.built.values()) {
+      for (const e of b.entries.values()) this.dropEntry(b, e);
+      b.entries.clear();
+      b.backdropKey = "";
+    }
+    this.onChange?.();
+  }
+
   private photo(assetId: string | undefined): THREE.Texture | null | undefined {
     if (!assetId) return null;
     if (this.photos.has(assetId)) return this.photos.get(assetId);
     if (!this.photoLoading.has(assetId) && this.imageSource) {
+      const epoch = this.epochOf(assetId);
       const p = this.imageSource(assetId)
         .then((bmp) => {
+          if (epoch !== this.epochOf(assetId)) return;
           if (!bmp) {
             this.photos.set(assetId, null);
             return;
@@ -305,9 +333,9 @@ export class SceneHost implements ExternalSourceRenderer {
           t.needsUpdate = true;
           this.photos.set(assetId, t);
         })
-        .catch(() => void this.photos.set(assetId, null))
+        .catch(() => void (epoch === this.epochOf(assetId) && this.photos.set(assetId, null)))
         .finally(() => {
-          this.photoLoading.delete(assetId);
+          if (epoch === this.epochOf(assetId)) this.photoLoading.delete(assetId);
           this.onChange?.();
         });
       this.photoLoading.set(assetId, p);
@@ -319,15 +347,18 @@ export class SceneHost implements ExternalSourceRenderer {
   private model(assetId: string): GLTF | null | undefined {
     if (this.models.has(assetId)) return this.models.get(assetId);
     if (!this.modelLoading.has(assetId) && this.modelSource) {
+      const epoch = this.epochOf(assetId);
       const p = this.modelSource(assetId)
         .then(async (bytes) => {
           if (!bytes) throw new Error("the file is missing or unreadable");
           const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
           const gltf = await new GLTFLoader().parseAsync(buf, "");
+          if (epoch !== this.epochOf(assetId)) return;
           this.models.set(assetId, gltf);
           this.modelErrors.delete(assetId);
         })
         .catch((e: unknown) => {
+          if (epoch !== this.epochOf(assetId)) return;
           const msg = String((e as Error)?.message ?? e);
           const why = /draco|meshopt|ktx2|basis/i.test(msg)
             ? "it uses compression this app can't read yet (Draco, Meshopt or KTX2): export it again without compression"
@@ -339,7 +370,7 @@ export class SceneHost implements ExternalSourceRenderer {
           this.onModelError?.(assetId, why);
         })
         .finally(() => {
-          this.modelLoading.delete(assetId);
+          if (epoch === this.epochOf(assetId)) this.modelLoading.delete(assetId);
           this.onChange?.();
         });
       this.modelLoading.set(assetId, p);
