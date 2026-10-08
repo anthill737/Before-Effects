@@ -171,6 +171,13 @@ export interface Fracture3D {
   readonly impactRadius?: number;
   /** Impact: slowest hit that breaks it, m/s (default 3). */
   readonly impactSpeed?: number;
+  /**
+   * Seconds into the layer by which the fallen pieces have come to rest. Pieces slowing to a stop are
+   * damped (the scraping friction rubble has) so they settle instead of rocking on the ground or on
+   * each other, and from this time each piece that has stopped stays exactly where it lies. Absent or
+   * null: the pieces move freely throughout.
+   */
+  readonly settleAt?: number | null;
 }
 
 /**
@@ -1035,6 +1042,8 @@ export interface PhysicsBody {
   /** Fragment of a surface that breaks where it's hit (no `release`): which surface, and how. With a
    *  `path`, it follows that until it's hit. */
   readonly impact?: { readonly group: number; readonly radius: number; readonly speed: number };
+  /** Fragment: damped as it slows to a stop, and from this frame, once stopped, it stays where it lies (Fracture3D.settleAt). */
+  readonly settle?: number;
   /** Where its pose is recorded in the prepared motion (−1 = not recorded). */
   readonly poseIndex: number;
 }
@@ -1302,6 +1311,7 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
             velocity: [(r1 - 0.5) * fr.push * 0.5, (r2 - 0.3) * fr.push * 0.3, fr.push * (0.2 + 1.6 * h) * (0.7 + 0.6 * r3)],
             spin: [(r2 - 0.5) * spin, (r3 - 0.5) * spin, (r1 - 0.5) * spin],
             ...(rebuildStart !== null ? { rebuild: { start: rebuildStart, frames: rebuildFrames, delay: Math.round(((rank.get(i) ?? 0) / Math.max(1, pieces.length)) * rebuildFrames * 0.6) } } : {}),
+            ...(fr.settleAt !== undefined && fr.settleAt !== null ? { settle: Math.max(0, Math.round(fr.settleAt * fps)) } : {}),
             poseIndex: movers++,
           });
         });

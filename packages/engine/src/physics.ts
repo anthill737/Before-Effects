@@ -19,6 +19,11 @@
  * pieces within the impact radius are freed just before contact, so the hit carries them the way it
  * was going (and loses speed doing it). Bodies that let go later ("released") follow their
  * animation until then and leave with the speed and spin they had.
+ *
+ * Thin pieces resting on the ground or on each other can rock and creep forever (nothing in the
+ * contact model drains that last bit of motion, so they never sleep). Pieces of a surface with a
+ * settle time are damped while they move slowly (the scraping friction real rubble has), and from
+ * that time each one that has stopped is fixed where it lies.
  */
 import RAPIER from "@dimforge/rapier3d-deterministic-compat";
 import type { PhysicsBody, Quat, ResolvedPhysics, Vec3 } from "@be/core";
@@ -36,6 +41,8 @@ interface Run {
   byHandle: Map<number, number>;
   /** Impact fragments let go so far. */
   freed: Set<number>;
+  /** Fragments fixed where they came to rest (settle). */
+  locked: Set<number>;
   readonly data: Float32Array;
   /** Frames recorded so far. */
   done: number;
@@ -46,6 +53,11 @@ interface Run {
   /** Reading previously prepared motion from the store. */
   loading: Promise<void>;
 }
+
+/** Settling pieces: slower than this (m/s, rad/s) counts as stopping; damping (linear, angular) while they do. */
+const SETTLE_SPEED = 0.6;
+const SETTLE_SPIN = 6;
+const SETTLE_DAMPING = [0.8, 3] as const;
 
 const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
 
@@ -134,7 +146,7 @@ export class PhysicsEngine {
       return existing;
     }
     const data = new Float32Array(Math.max(1, p.frames * p.movers * 7));
-    const r: Run = { physics: p, world: null, bodies: [], byHandle: new Map(), freed: new Set(), data, done: 0, from: new Map(), busy: null, saved: false, loading: Promise.resolve() };
+    const r: Run = { physics: p, world: null, bodies: [], byHandle: new Map(), freed: new Set(), locked: new Set(), data, done: 0, from: new Map(), busy: null, saved: false, loading: Promise.resolve() };
     this.runs.set(p.key, r);
     // Already prepared (this session in another window, or a previous session)?
     r.loading = (async () => {
@@ -155,6 +167,7 @@ export class PhysicsEngine {
     world.timestep = 1 / (p.fps * p.substeps);
     r.byHandle = new Map();
     r.freed = new Set();
+    r.locked = new Set();
     r.bodies = p.bodies.map((b, i) => {
       const follows = b.kind === "kinematic" || b.kind === "released" || (b.kind === "fragment" && !!b.path);
       const desc = b.kind === "dynamic" ? RAPIER.RigidBodyDesc.dynamic() : follows ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.fixed();
@@ -188,6 +201,7 @@ export class PhysicsEngine {
           body.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
           body.setAngvel({ x: w[0], y: w[1], z: w[2] }, true);
         }
+        if (b.settle !== undefined) this.settle(r, i, b.settle, f);
         const rb = b.rebuild;
         if (rb && f >= rb.start) {
           if (f === rb.start || !r.from.has(i)) {
@@ -220,6 +234,23 @@ export class PhysicsEngine {
       }
     });
     this.impacts(r, f);
+  }
+
+  /** A loose piece slowing to a stop is damped; from its settle frame, once stopped, it's fixed where it lies. */
+  private settle(r: Run, i: number, from: number, f: number): void {
+    const b = r.physics.bodies[i]!;
+    const body = r.bodies[i]!;
+    if (r.locked.has(i) || body.bodyType() !== RAPIER.RigidBodyType.Dynamic || (b.rebuild && f >= b.rebuild.start)) return;
+    const v = body.linvel();
+    const w = body.angvel();
+    const slow = Math.hypot(v.x, v.y, v.z) < SETTLE_SPEED && Math.hypot(w.x, w.y, w.z) < SETTLE_SPIN;
+    if (f >= from && (slow || body.isSleeping())) {
+      body.setBodyType(RAPIER.RigidBodyType.Fixed, false);
+      r.locked.add(i);
+      return;
+    }
+    body.setLinearDamping(slow ? SETTLE_DAMPING[0] : 0);
+    body.setAngularDamping(slow ? SETTLE_DAMPING[1] : 0);
   }
 
   /**

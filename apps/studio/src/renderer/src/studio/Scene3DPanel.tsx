@@ -820,6 +820,12 @@ const ObjectEditor = ({ layer, scene, o }: { layer: Layer; scene: Scene3D; o: Ob
                   </Field>
                 </>
               )}
+              <Toggle label="Pieces come to rest" value={fr.settleAt !== undefined && fr.settleAt !== null} onChange={(v) => setFr({ settleAt: v ? Math.min(lenS, fr.collapseAt + 3) : null }, v ? "Let the pieces come to rest" : "Let the pieces move freely", "settle-on")} />
+              {fr.settleAt !== undefined && fr.settleAt !== null && (
+                <Field label="At rest by" help="Seconds into this layer. Pieces slowing to a stop are damped so they settle instead of rocking on the ground or on each other; from this time each piece that has stopped stays exactly where it lies.">
+                  <Slider label="At rest by (seconds)" value={fr.settleAt} min={fr.collapseAt + 0.1} max={Math.max(fr.collapseAt + 0.2, lenS)} step={1 / 30} unit="s" onChange={(v) => setFr({ settleAt: v }, "Change when the pieces come to rest", "settle")} />
+                </Field>
+              )}
               <Field label="Lets go over" help="0: all at once. Longer: the top gives way first and the rest follows down the wall (crumbling).">
                 <Slider label="Lets go over" value={fr.stagger ?? 0} min={0} max={5} step={0.1} unit="s" onChange={(v) => setFr({ stagger: v }, "Change how it lets go", "stagger")} />
               </Field>

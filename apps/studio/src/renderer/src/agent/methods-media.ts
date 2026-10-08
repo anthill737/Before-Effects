@@ -487,6 +487,7 @@ method({
         trigger: z.enum(["time", "impact"]).describe("time: breaks at collapseAt; impact: stays whole until something moving hits it, then breaks only around the hit, the way the hit was going"),
         impactRadius: z.number().min(0.05).max(20).describe("impact: metres around the hit that break out (default 0.8)"),
         impactSpeed: z.number().min(0).max(100).describe("impact: slowest hit that breaks it, m/s (default 3)"),
+        settleAt: z.number().min(0).nullable().describe("seconds into the layer by which the fallen pieces have come to rest: pieces slowing to a stop are damped so they settle instead of rocking, and from then on each stopped piece stays exactly where it lies; null: they move freely throughout"),
       })
       .partial()
       .nullable()
@@ -609,6 +610,7 @@ method({
       if (!isPieced(o.geometry)) throw new AgentError("invalid_params", "Only building areas given thickness, and panels, can break apart.");
       const f: Fracture3D = { ...(o.fracture ?? { pieceSize: 70, seed: 1, collapseAt: 1, rebuildAt: 5, rebuildSeconds: 2, push: 0.6, spin: 0.25 }), ...p.fracture };
       if (f.rebuildAt !== null && f.rebuildAt <= f.collapseAt) throw new AgentError("invalid_params", "rebuildAt must be after collapseAt (or null to stay down).");
+      if (f.settleAt !== undefined && f.settleAt !== null && f.settleAt <= f.collapseAt) throw new AgentError("invalid_params", "settleAt must be after collapseAt (or null: the pieces move freely throughout).");
       changes.fracture = f;
       if (!o.physics || o.physics.body !== "dynamic") changes.physics = { ...(o.physics ?? { mass: 2000, friction: 0.7, bounce: 0.15 }), body: "dynamic" };
     }
