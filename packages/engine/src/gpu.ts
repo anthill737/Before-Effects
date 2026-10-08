@@ -305,6 +305,12 @@ export const BLEND_SCREEN: GPUBlendState = {
   color: { srcFactor: "one", dstFactor: "one-minus-src", operation: "add" },
   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
 };
+/** Light falling on what's beneath: beneath × (1 + source) (the source premultiplied, so its opacity scales the light). */
+export const BLEND_ILLUMINATE: GPUBlendState = {
+  color: { srcFactor: "dst", dstFactor: "one", operation: "add" },
+  alpha: { srcFactor: "zero", dstFactor: "one", operation: "add" },
+};
+
 export const BLEND_MULTIPLY: GPUBlendState = {
   color: { srcFactor: "dst", dstFactor: "one-minus-src-alpha", operation: "add" },
   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },

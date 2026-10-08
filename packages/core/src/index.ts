@@ -26,6 +26,7 @@ export * from "./areas.ts";
 export * from "./recipes-area.ts";
 export * from "./scenes.ts";
 export * from "./world3d.ts";
+export * from "./houseLights.ts";
 export * from "./keyframes.ts";
 export * from "./contentKinds.ts";
 export * from "./frameSignature.ts";

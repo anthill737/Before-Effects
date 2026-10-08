@@ -25,6 +25,7 @@ import { refRegions, regionHoles } from "./areas.ts";
 import type { Id, Project, RegionRef, RGBA, Vec2, Vec3 } from "./model.ts";
 import { defineOp, OpError } from "./ops.ts";
 import { flattenPath } from "./pathmath.ts";
+import { type HouseLight, houseLightPlace } from "./houseLights.ts";
 import { particleEmitter } from "./particles3d.ts";
 import { rand01 } from "./rng.ts";
 import { simHash, stableJson } from "./simulation.ts";
@@ -384,6 +385,14 @@ export interface Scene3D {
    * The canvas fills its view. Absent: the show camera.
    */
   readonly camera?: SceneCamera;
+  /** Lit by the venue's house lights (its candles and torches: Venue.lights)? Default: yes. */
+  readonly houseLights?: boolean;
+  /**
+   * How strongly this scene catches the house lights (× their brightness; default 1). For a scene whose
+   * own lights balance its pictures differently from the house's (an older scene lit by a key and fill
+   * with partial shading): set so its pieces at rest match the candlelit picture around them.
+   */
+  readonly houseLightStrength?: number;
 }
 
 export type SceneCamera =
@@ -1009,6 +1018,10 @@ export interface ResolvedObject {
   readonly motionFrom?: number;
   /** Particles: where they're born. */
   readonly emitter?: import("./particles3d.ts").ParticleEmitter;
+  /** One of the venue's house lights (its brightness and flicker follow show time, not the layer's). */
+  readonly house?: HouseLight;
+  /** × the house light's brightness in this scene (Scene3D.houseLightStrength). */
+  readonly houseScale?: number;
 }
 
 export type PhysicsShape =
@@ -1375,6 +1388,28 @@ export const resolveScene3D = (project: Project, scene: Scene3D, opts: { venueId
       continue;
     }
     objects.push({ object: o, pieces, poseIndex, ...m });
+  }
+  // The venue's house lights (candles, torches), placed on this scene's camera line through each flame.
+  if (scene.houseLights !== false && venue?.lights?.length) {
+    const cam = sceneCameraAt(project, scene, 0);
+    const show = showCamera(canvas, camDist);
+    for (const L of venue.lights) {
+      let eye: Vec3;
+      let through: Vec3;
+      if (cam) {
+        const f = canvas.height / 2 / Math.tan((cam.fovY * Math.PI) / 360);
+        const d = rotateByQuat([(L.at[0] - canvas.width / 2) / f, -(L.at[1] - canvas.height / 2) / f, -1], cam.q);
+        eye = cam.eye;
+        through = [eye[0] + d[0], eye[1] + d[1], eye[2] + d[2]];
+      } else {
+        const c = canvasToWorld([L.at[0], L.at[1]], canvas);
+        eye = show.eye;
+        through = [c[0], c[1], 0];
+      }
+      const position = houseLightPlace(eye, through, L.depth);
+      const object = lightObject(`house-light:${L.id}`, L.name, { type: "point", color: L.color, intensity: staticProp(0), castShadow: L.castShadow, softness: L.softness, range: L.range, falloff: L.falloff, balance: false }, position);
+      objects.push({ object, pieces: [], poseIndex: -1, house: L, houseScale: scene.houseLightStrength ?? 1 });
+    }
   }
   const anyMoving = bodies.some((b) => b.kind === "dynamic" || b.kind === "fragment" || b.kind === "released");
   const physics: ResolvedPhysics | null = anyMoving
@@ -1815,7 +1850,7 @@ export const scene3dAdd = defineOp({
 export const scene3dUpdate = defineOp({
   type: "scene3d.update",
   title: "Change 3D scene",
-  description: "Rename a 3D scene or change its gravity (m/s², x right, y up, z toward the audience), show-camera distance (null: follow the building's viewpoint) or its own camera (a model's camera, or one set by hand; null: the show camera).",
+  description: "Rename a 3D scene or change its gravity (m/s², x right, y up, z toward the audience), show-camera distance (null: follow the building's viewpoint), its own camera (a model's camera, or one set by hand; null: the show camera), or whether the house's lights (its candles and torches) light it.",
   args: z.object({
     sceneId: z.string(),
     changes: z.object({
@@ -1829,11 +1864,21 @@ export const scene3dUpdate = defineOp({
         ])
         .nullable()
         .optional(),
+      houseLights: z.boolean().optional(),
+      houseLightStrength: z.number().min(0).max(100).optional(),
     }),
   }),
   apply: (d, a) => {
     const s = sceneOf(d as never, a.sceneId) as unknown as { -readonly [K in keyof Scene3D]: Scene3D[K] };
     if (a.changes.name !== undefined) s.name = a.changes.name;
+    if (a.changes.houseLights !== undefined) {
+      if (a.changes.houseLights) delete s.houseLights;
+      else s.houseLights = false;
+    }
+    if (a.changes.houseLightStrength !== undefined) {
+      if (a.changes.houseLightStrength === 1) delete s.houseLightStrength;
+      else s.houseLightStrength = a.changes.houseLightStrength;
+    }
     if (a.changes.gravity) s.gravity = a.changes.gravity;
     if (a.changes.cameraDistance === null) delete s.cameraDistance;
     else if (a.changes.cameraDistance !== undefined) s.cameraDistance = a.changes.cameraDistance;

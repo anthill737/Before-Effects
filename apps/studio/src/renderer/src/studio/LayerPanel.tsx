@@ -103,6 +103,7 @@ export const BLEND_CHOICES = [
   { value: "saturation", label: "Its saturation only" },
   { value: "color", label: "Its colour only (hue and saturation)" },
   { value: "luminosity", label: "Its brightness only" },
+  { value: "illuminate", label: "Light falling on what's below (illuminate)" },
 ] as const;
 
 /** How a layer shows through another (its track matte). */

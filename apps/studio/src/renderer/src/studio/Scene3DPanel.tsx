@@ -221,8 +221,9 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
     const a = (angle * Math.PI) / 180;
     useStudio.getState().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes: { gravity: [Math.sin(a) * strength, -Math.cos(a) * strength, toward] } } }, { label: "Change gravity", coalesceKey: `${scene.id}:gravity` });
   };
-  const updateScene = (changes: { name?: string; cameraDistance?: number | null }, label: string, key: string) =>
+  const updateScene = (changes: { name?: string; cameraDistance?: number | null; houseLights?: boolean; houseLightStrength?: number }, label: string, key: string) =>
     useStudio.getState().apply({ type: "scene3d.update", args: { sceneId: scene.id, changes } }, { label, coalesceKey: `${scene.id}:${key}` });
+  const hasHouseLights = useStudio((st) => (activeVenue(st)?.lights?.length ?? 0) > 0);
   const contained = layer.masks.some((m) => m.id === "contain");
   const area = sceneArea(scene);
   return (
@@ -242,6 +243,12 @@ export const Scene3DPanel = ({ layer }: { layer: Layer }) => {
         <LayerMasks layer={layer} />
         <CameraField scene={scene} layer={layer} />
         {!scene.camera && <ViewpointField scene={scene} onScene={(v, label) => updateScene({ cameraDistance: v }, label, "camera")} />}
+        {hasHouseLights && (
+          <Field label="House lights" help="The house's candles and torches (House setup) light this scene's pieces and the house's solids cast their shadows. Strength: for a scene whose own lights show the picture differently, match its pieces to the candlelit picture around them.">
+            <Toggle label="Lit by the house's lights" value={scene.houseLights !== false} onChange={(v) => updateScene({ houseLights: v }, v ? "Light with the house's lights" : "Not lit by the house's lights", "house-lights")} />
+            {scene.houseLights !== false && <Slider label="Strength" value={scene.houseLightStrength ?? 1} min={0} max={4} step={0.05} onChange={(v) => updateScene({ houseLightStrength: v }, "Change how strongly the house's lights light this scene", "house-light-strength")} />}
+          </Field>
+        )}
       </Section>
       {area && (
         <Field

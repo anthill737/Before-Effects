@@ -261,6 +261,8 @@ method({
     gravityVector: vec3.optional(),
     cameraDistance: z.number().min(0.2).max(20).nullable().optional(),
     buildingCameraDistance: z.number().min(0.2).max(20).optional(),
+    houseLights: z.boolean().optional().describe("lit by the house's lights (its candles and torches, house.setLights)? default yes"),
+    houseLightStrength: z.number().min(0).max(100).optional().describe("how strongly this scene catches the house lights (x their brightness, default 1): match an older scene's pieces to the candlelit picture"),
     name: z.string().optional(),
     camera: z
       .union([
@@ -293,6 +295,8 @@ method({
     }
     if (p.gravityVector) changes.gravity = p.gravityVector;
     if (p.cameraDistance !== undefined) changes.cameraDistance = p.cameraDistance;
+    if (p.houseLights !== undefined) changes.houseLights = p.houseLights;
+    if (p.houseLightStrength !== undefined) changes.houseLightStrength = p.houseLightStrength;
     if (p.name) changes.name = p.name;
     if (p.buildingCameraDistance !== undefined) {
       const v = activeVenue(st());

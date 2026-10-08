@@ -45,9 +45,9 @@ describe("track mattes", () => {
 });
 
 describe("blend modes", () => {
-  it("draws every After Effects blend mode", () => {
+  it("draws every After Effects blend mode, and light falling on what's beneath (illuminate)", () => {
     expect([...RENDERED_BLEND_MODES].sort()).toEqual(
-      ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity"].sort(),
+      ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "illuminate"].sort(),
     );
   });
 });

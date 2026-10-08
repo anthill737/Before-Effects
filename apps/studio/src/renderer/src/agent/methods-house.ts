@@ -1,5 +1,5 @@
 /** Agent methods for automatic house setup and reshaping areas (split, join). */
-import { ASSUMED_DEPTH, type Object3D, type PartMotion, type PartTiming } from "@be/core";
+import { ASSUMED_DEPTH, FLICKS_PER_SECOND, HOUSE_LIGHT_DEFAULTS, type HouseLight, houseLightLevel, type Object3D, type PartMotion, type PartTiming, staticProp } from "@be/core";
 import { z } from "zod";
 import { mergeAreas, splitArea } from "../space/areaEdit.ts";
 import { acceptProposals, addProposals, cancelDetection, discardProposals, proposedAreas, runDetection, useHouseSetup } from "../space/houseSetup.ts";
@@ -214,5 +214,108 @@ method({
     if (!o) throw new AgentError("not_found", `“${p.area}” doesn't move in this scene.`);
     ctx.edit(() => removePart(o.id));
     return { removed: o.name };
+  },
+});
+
+// ---- house lights (candles, torches) ----------------------------------------------------------
+
+const keyframeSchema = z.object({
+  t: z.number().min(0).describe("seconds of show time"),
+  v: z.number().min(0).max(100),
+  to: z.enum(["hold", "linear"]).optional().describe("how it goes on to the next key: held (a switch, the default) or a straight ramp (a fade, a candle being lit)"),
+});
+const houseLightSchema = z.object({
+  id: z.string().min(1).max(80).optional().describe("keeps a light's identity across edits; new id = a new light"),
+  name: z.string().min(1).max(200),
+  at: z.tuple([z.number(), z.number()]).describe("where its flame shows on the canvas (pixels)"),
+  depth: z.number().min(-20).max(20).describe("metres in front of the building's front (negative: set back into it, e.g. a recessed window sill)"),
+  color: z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.number().min(0).max(1)]).optional().describe("sRGB; default a warm flame"),
+  intensity: z.number().min(0).max(100).optional().describe("steady brightness (point-light units) when no keyframes are given"),
+  keyframes: z.array(keyframeSchema).optional().describe("brightness over show time: 0 while it's out (scene changes), held between keys unless a key ramps to the next"),
+  range: z.number().min(0).max(100).optional().describe("metres beyond which it lights nothing (0: no limit; default 6)"),
+  falloff: z.number().min(0).max(4).optional().describe("how it weakens with distance (2 as real light)"),
+  castShadow: z.boolean().optional().describe("the house's solids (walls, columns, roof edges) cast shadows from it (default yes)"),
+  softness: z.number().min(0).max(1).optional(),
+  flicker: z
+    .object({ amount: z.number().min(0).max(1), speed: z.number().min(0).max(60), seed: z.number().int(), octaves: z.number().int().min(1).max(6).default(2) })
+    .partial()
+    .optional()
+    .describe("flicker = brightness × (1 + wiggle(speed, amount, octaves, seed)) at show time; a flame layer's opacity wiggle(speed, a, octaves, seed) at opacity o flickers with it when amount = a/o"),
+  curve: z
+    .object({ start: z.number().describe("show time (s) of the first sample: where the footage's layer starts"), fps: z.number().min(1).max(240), values: z.array(z.number().min(0).max(10)).min(2).max(20000) })
+    .optional()
+    .describe("instead of the wiggle: a measured brightness curve (factors around 1), repeating — e.g. sampled from candles filmed in a looping video, so the light follows the flames seen in it"),
+});
+
+const lightInfo = (L: HouseLight) => ({
+  id: L.id,
+  name: L.name,
+  at: L.at,
+  depth: L.depth,
+  color: L.color.slice(0, 3),
+  keyframes: L.intensity.keyframes?.length ? L.intensity.keyframes.map((k) => ({ t: k.t / FLICKS_PER_SECOND, v: k.v, ...(k.out === "linear" ? { to: "linear" as const } : {}) })) : null,
+  intensity: L.intensity.keyframes?.length ? null : L.intensity.value,
+  range: L.range,
+  falloff: L.falloff,
+  castShadow: L.castShadow,
+  softness: L.softness,
+  flicker: L.flicker,
+  curve: L.curve ? { start: L.curve.start, fps: L.curve.fps, samples: L.curve.values.length } : null,
+});
+
+method({
+  name: "house.lights",
+  summary: "The house's lights: the flames on the building (candles, torches) that light every 3D scene of the show and the candlelight layer, with their place, colour, brightness over the show, range, shadows and flicker.",
+  params: z.object({}),
+  run: () => ({ lights: (venue().lights ?? []).map(lightInfo) }),
+});
+
+method({
+  name: "house.setLights",
+  summary:
+    "Set the house's lights (replaces the list; one undo step): each a flame on the building — where it shows on the canvas and how far in front of the building's front — with a warm colour, its brightness over show time (keyframes; 0 while out), range, falloff, shadows from the house's solids and its own steady flicker (show time, deterministic: the same in preview, export and any outside renderer using the formula). Every 3D scene of the venue is lit by them unless the scene opts out (scene3d.update houseLights false).",
+  params: z.object({ lights: z.array(houseLightSchema).max(64) }),
+  mutates: true,
+  run: (p, ctx) => {
+    const v = venue();
+    const used = new Set<string>();
+    const lights: HouseLight[] = p.lights.map((l, i) => {
+      let id = l.id ?? `hl_${i + 1}`;
+      while (used.has(id)) id = `${id}_`;
+      used.add(id);
+      const kf = l.keyframes?.length
+        ? [...l.keyframes]
+            .sort((a, b) => a.t - b.t)
+            .map((k, j, all) => ({ id: `${id}_k${j}`, t: Math.round(k.t * FLICKS_PER_SECOND), v: k.v, in: all[j - 1]?.to === "linear" ? ("linear" as const) : ("hold" as const), out: k.to === "linear" ? ("linear" as const) : ("hold" as const) }))
+        : undefined;
+      const fl = { ...HOUSE_LIGHT_DEFAULTS.flicker, ...(l.flicker ?? {}) };
+      return {
+        id,
+        name: l.name,
+        at: [l.at[0], l.at[1]] as const,
+        depth: l.depth,
+        color: l.color ? ([l.color[0], l.color[1], l.color[2], 1] as const) : HOUSE_LIGHT_DEFAULTS.color,
+        intensity: kf ? { value: kf[0]!.v, keyframes: kf } : staticProp(l.intensity ?? 1),
+        range: l.range ?? HOUSE_LIGHT_DEFAULTS.range,
+        falloff: l.falloff ?? HOUSE_LIGHT_DEFAULTS.falloff,
+        castShadow: l.castShadow ?? HOUSE_LIGHT_DEFAULTS.castShadow,
+        softness: l.softness ?? HOUSE_LIGHT_DEFAULTS.softness,
+        flicker: { amount: fl.amount, speed: fl.speed, seed: fl.seed, octaves: fl.octaves },
+        ...(l.curve ? { curve: { start: l.curve.start, fps: l.curve.fps, values: l.curve.values } } : {}),
+      };
+    });
+    ctx.edit(() => useStudio.getState().apply({ type: "venue.update", args: { venueId: v.id, changes: { lights } } }, { label: lights.length ? "Set the house's lights" : "Remove the house's lights" }));
+    return { lights: lights.map(lightInfo) };
+  },
+});
+
+method({
+  name: "house.lightLevel",
+  summary: "A house light's brightness (keyframes × flicker) at show times, for checking it against a flame or an outside render (Blender) that uses the same formula.",
+  params: z.object({ light: z.string(), times: z.array(z.number().min(0)).min(1).max(4000) }),
+  run: (p) => {
+    const L = (venue().lights ?? []).find((l) => l.id === p.light || l.name === p.light);
+    if (!L) throw new AgentError("not_found", `No house light “${p.light}”.`);
+    return { light: L.id, levels: p.times.map((t) => houseLightLevel(L, Math.round(t * FLICKS_PER_SECOND))) };
   },
 });

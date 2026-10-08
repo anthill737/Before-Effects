@@ -213,7 +213,7 @@ const layerChanges = z
     is3D: z.boolean(),
     blendMode: z.enum([
       "normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn",
-      "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity",
+      "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "illuminate",
     ]),
     startTime: z.number().int(),
     inPoint: z.number().int(),
@@ -560,7 +560,7 @@ export const venueAdd = defineOp({
 export const venueUpdate = defineOp({
   type: "venue.update",
   title: "Change the space",
-  description: "Rename the venue, change its canvas size, its reference image, or how its photo sits in the canvas (fit/fill, scale %, offset px, crop fractions).",
+  description: "Rename the venue, change its canvas size, its reference image, how its photo sits in the canvas (fit/fill, scale %, offset px, crop fractions), or its house lights (the flames on the building, shared by every 3D scene).",
   args: z.object({
     venueId: id,
     changes: z
@@ -579,6 +579,7 @@ export const venueUpdate = defineOp({
             crop: z.object({ left: z.number().min(0).max(0.45), right: z.number().min(0).max(0.45), top: z.number().min(0).max(0.45), bottom: z.number().min(0).max(0.45) }),
           }),
         }),
+        lights: z.array(obj<import("./houseLights.ts").HouseLight>("house light")),
       })
       .partial(),
   }),

@@ -757,7 +757,7 @@ method({
 
 const LAYER_PROPS: Record<string, string> = { opacity: "transform.opacity", position: "transform.position", scale: "transform.scale", rotation: "transform.rotation", anchor: "transform.anchor", volume: "audio.volume", pan: "audio.pan" };
 
-const BLEND_MODES = ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity"] as const;
+const BLEND_MODES = ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "illuminate"] as const;
 const layerOf = (sid: string, ref: string) => {
   const c = project().compositions[sid]!;
   const l = c.layers[ref] ?? Object.values(c.layers).find((x) => x.name.toLowerCase() === ref.toLowerCase());

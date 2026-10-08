@@ -158,7 +158,9 @@ export interface Asset {
 /**
  * Blend modes the compositor draws (all of them). Normal, Add, Screen and Multiply mix light as it
  * is (linear); the others use the usual formulas on the picture as displayed, as After Effects and
- * Photoshop do. Keep in sync with engine/compositor.ts.
+ * Photoshop do. Illuminate is light falling on what's beneath: it's brightened by the layer as by a
+ * light (beneath × (1 + layer)), dark stays dark — a light-only render of the house lit by its candles,
+ * over whatever picture is on the house. Keep in sync with engine/compositor.ts.
  */
 export const RENDERED_BLEND_MODES = [
   "normal",
@@ -178,6 +180,7 @@ export const RENDERED_BLEND_MODES = [
   "saturation",
   "color",
   "luminosity",
+  "illuminate",
 ] as const;
 
 export type BlendMode =
@@ -197,7 +200,8 @@ export type BlendMode =
   | "hue"
   | "saturation"
   | "color"
-  | "luminosity";
+  | "luminosity"
+  | "illuminate";
 
 export interface Transform {
   readonly anchor: AnimProp<Vec3>;
@@ -478,6 +482,8 @@ export interface Venue {
   readonly projectors: Readonly<Record<Id, Projector>>;
   /** Edge blending where projectors overlap (see projection.ts); absent = on, smooth. */
   readonly blend?: import("./projection.ts").VenueBlend;
+  /** The flames on the building (candles, torches): lights shared by every 3D scene of the venue (houseLights.ts). */
+  readonly lights?: readonly import("./houseLights.ts").HouseLight[];
 }
 
 /**

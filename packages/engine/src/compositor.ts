@@ -19,7 +19,7 @@ import {
   type Vec2,
 } from "@be/core";
 import { type EffectContext, gaussianBlur, getEffect } from "./effects.ts";
-import { BLEND_ADD, BLEND_MULTIPLY, BLEND_OVER, BLEND_SCREEN, type Gpu, WORK_FORMAT } from "./gpu.ts";
+import { BLEND_ADD, BLEND_ILLUMINATE, BLEND_MULTIPLY, BLEND_OVER, BLEND_SCREEN, type Gpu, WORK_FORMAT } from "./gpu.ts";
 import { CoverageRasterizer, type RasterTarget } from "./raster.ts";
 import { APPLY_MASK, COLORIZE, LAYER_BLEND, LAYER_COMPOSITE, MASK_COMBINE } from "./shaders.ts";
 import type { SimEngine } from "./sim/engine.ts";
@@ -161,6 +161,8 @@ const hardwareBlend = (mode: EvaluatedLayer["blendMode"]): GPUBlendState | null 
       return BLEND_SCREEN;
     case "multiply":
       return BLEND_MULTIPLY;
+    case "illuminate":
+      return BLEND_ILLUMINATE;
     default:
       return null;
   }
@@ -185,6 +187,7 @@ const BLEND_INDEX: Record<EvaluatedLayer["blendMode"], number> = {
   add: 14,
   screen: 15,
   multiply: 16,
+  illuminate: 17,
 };
 
 type MatteMode = "alpha" | "alpha-inverted" | "luma" | "luma-inverted";

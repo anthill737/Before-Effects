@@ -5,6 +5,7 @@
 import { KIND_LABEL } from "../studio/actions.ts";
 import { activeVenue, useStudio } from "../studio/store.ts";
 import { useTrace } from "./traceStore.ts";
+import { HouseLightsPanel } from "./HouseLightsPanel.tsx";
 import { acceptProposals, cancelDetection, discardProposals, findAreasAutomatically, proposedAreas, useHouseSetup } from "./houseSetup.ts";
 
 const FindAreas = () => {
@@ -137,5 +138,6 @@ export const HouseSetupPanel = () => (
   <>
     <FindAreas />
     <ProposalReview />
+    <HouseLightsPanel />
   </>
 );

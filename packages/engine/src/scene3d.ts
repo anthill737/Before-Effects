@@ -43,6 +43,7 @@ import {
   placePoint,
   showCamera,
   type Vec3,
+  houseLightLevel,
 } from "@be/core";
 import * as THREE from "three/webgpu";
 import { attribute, materialColor, materialEmissive, positionWorld, step, texture, uniform, vec2, vec4 } from "three/tsl";
@@ -736,7 +737,7 @@ export class SceneHost implements ExternalSourceRenderer {
       const L = o.light;
       const c = srgb(L.color);
       const g = L.type === "ambient" ? srgb(L.color.map((x) => x * 0.3)) : null;
-      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: evalProp(L.intensity, t), position: objectPose(r.scene, o, t).place([0, 0, 0]), target: L.target, angle: L.angle, softness: L.softness, ...(L.range ? { range: L.range } : {}), ...(L.falloff !== undefined ? { falloff: L.falloff } : {}), balance: balancesPicture(L) });
+      lightsNow.push({ type: L.type, color: [c.r, c.g, c.b], ...(g ? { ground: [g.r, g.g, g.b] as const } : {}), intensity: ro.house ? houseLightLevel(ro.house, src.compTime ?? t) * (ro.houseScale ?? 1) : evalProp(L.intensity, t), position: objectPose(r.scene, o, t).place([0, 0, 0]), target: L.target, angle: L.angle, softness: L.softness, ...(L.range ? { range: L.range } : {}), ...(L.falloff !== undefined ? { falloff: L.falloff } : {}), balance: balancesPicture(L) });
     }
     for (const ro of r.objects) {
       const e = b.entries.get(ro.object.id)!;
@@ -748,7 +749,8 @@ export class SceneHost implements ExternalSourceRenderer {
       const q = pose.q;
       if (e.light && o.light) {
         const L: Light3D = o.light;
-        const k = evalProp(L.intensity, t);
+        // A house light (a candle, a torch) flickers by show time, the same in every scene showing it.
+        const k = ro.house ? houseLightLevel(ro.house, src.compTime ?? t) * (ro.houseScale ?? 1) : evalProp(L.intensity, t);
         e.light.intensity = L.type === "spot" || L.type === "point" ? k * 50 : k;
         // A soft fill (hemisphere light) takes its "up" direction from its position: keep it straight up.
         if (L.type === "ambient") e.light.position.set(0, 1, 0);

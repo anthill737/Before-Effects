@@ -450,6 +450,7 @@ fn blended(s: vec4f, b: vec4f, mode: u32) -> vec4f {
   if (mode == 14u) { return vec4f(s.rgb + b.rgb, a); }                          // add (as hardware)
   if (mode == 15u) { return vec4f(s.rgb + b.rgb * (vec3f(1.0) - s.rgb), a); }   // screen (as hardware)
   if (mode == 16u) { return vec4f(s.rgb * b.rgb + b.rgb * (1.0 - s.a), a); }    // multiply (as hardware)
+  if (mode == 17u) { return vec4f(b.rgb + b.rgb * s.rgb, b.a); }                 // illuminate (as hardware)
   if (s.a <= 0.0) { return b; }
   let cs = s.rgb / s.a;
   if (mode == 0u || b.a <= 0.0) { return vec4f(s.rgb + b.rgb * (1.0 - s.a), a); }

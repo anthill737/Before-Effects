@@ -135,9 +135,10 @@ const expected = (mode: BlendMode, B: C3, S: C3): C3 => {
     case "saturation": return setLum(setSat(B, sat(S)), lum(B));
     case "color": return setLum(S, lum(B));
     case "luminosity": return setLum(B, lum(S));
+    case "illuminate": return lin((b, x) => b + b * x);
   }
 };
-const MODES: BlendMode[] = ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity"];
+const MODES: BlendMode[] = ["normal", "add", "screen", "multiply", "overlay", "soft-light", "hard-light", "color-dodge", "color-burn", "darken", "lighten", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "illuminate"];
 
 let skip = "";
 const skipped = () => ({ ok: true, note: `SKIPPED: ${skip}` });
